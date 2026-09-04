@@ -77,7 +77,7 @@ per-skill Codex symlinks. It does not change the Codex native skills in
 The canonical status line specification is `~/.agents/statusline/spec.json`.
 The field order is:
 
-    <model + reasoning effort> | <project> | <git branch> | PR #<n> | ctx <n>% left (<tokens> used) | 5h <n>% left | week <n>% left
+    <model + reasoning effort> | <git branch> | PR #<n> | ctx <n>% left (<tokens> used) | 5h <n>% left | week <n>% left
 
 Each client omits a field when the client does not supply the value.
 Run `~/.agents/statusline/install.sh` to apply the specification again. The

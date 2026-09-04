@@ -4,7 +4,7 @@
 in the same order. A client drops a field when the client does not supply the
 value.
 
-    <model + reasoning effort> | <project> | <git branch> | PR #<n>
+    <model + reasoning effort> | <git branch> | PR #<n>
       | ctx <n>% left (<tokens> used) | 5h <n>% left | week <n>% left
 
 ## Apply it

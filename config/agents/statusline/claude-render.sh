@@ -3,7 +3,7 @@
 # Specification: ~/.agents/statusline/spec.json
 #
 # Order:
-#   <model + reasoning effort> | <project> | <git branch> | PR #<n>
+#   <model + reasoning effort> | <git branch> | PR #<n>
 #   | ctx <n>% left (<tokens> used) | 5h <n>% left | week <n>% left
 #
 # Every value comes from the JSON payload on stdin, except the git branch,
@@ -42,7 +42,6 @@ eval "$(printf '%s' "$payload" | jq -r '
   ( .model.display_name // "" ) as $m
   | ( .effort.level // "" ) as $e
   | ( (if $m == "" then "" else $m end) + (if $e == "" then "" else " " + $e end) ) as $model
-  | ( .workspace.project_dir // .workspace.current_dir // "" ) as $proj
   | ( .workspace.current_dir // .cwd // "" ) as $dir
   | ( .worktree.branch // "" ) as $branch
   | ( if .pr.number == null then "" else (.pr.number|tostring) end ) as $pr
@@ -53,7 +52,6 @@ eval "$(printf '%s' "$payload" | jq -r '
   | ( if .rate_limits.seven_day.used_percentage == null then ""
       else ((100 - .rate_limits.seven_day.used_percentage) | pct) end ) as $wk
   | "SL_MODEL=" + ($model|q)
-  + " SL_PROJ=" + ($proj|q)
   + " SL_DIR=" + ($dir|q)
   + " SL_BRANCH=" + ($branch|q)
   + " SL_PR=" + ($pr|q)
@@ -63,12 +61,6 @@ eval "$(printf '%s' "$payload" | jq -r '
   + " SL_WK=" + ($wk|q)
 ' 2>/dev/null)" 2>/dev/null || exit 0
 
-# project name = last path segment
-case "$SL_PROJ" in
-  ''|'/') SL_PROJ='' ;;
-  *) SL_PROJ=${SL_PROJ%/}; SL_PROJ=${SL_PROJ##*/} ;;
-esac
-
 # branch: payload first, then a local git call (no network)
 if [ -z "$SL_BRANCH" ] && [ -n "$SL_DIR" ] && command -v git >/dev/null 2>&1; then
   SL_BRANCH=$(git -C "$SL_DIR" --no-optional-locks rev-parse --abbrev-ref HEAD 2>/dev/null) || SL_BRANCH=''
@@ -77,14 +69,13 @@ fi
 
 # --- colors ------------------------------------------------------------------
 if [ -n "${NO_COLOR:-}" ]; then
-  C_RESET=''; C_DIM=''; C_MODEL=''; C_PROJ=''; C_BRANCH=''; C_PR=''
+  C_RESET=''; C_DIM=''; C_MODEL=''; C_BRANCH=''; C_PR=''
   C_GOOD=''; C_WARN=''; C_BAD=''; C_LABEL=''
 else
   ESC=$(printf '\033')
   C_RESET="${ESC}[0m"
   C_DIM="${ESC}[2m"
   C_MODEL="${ESC}[1;36m"   # bold cyan
-  C_PROJ="${ESC}[94m"      # bright blue
   C_BRANCH="${ESC}[35m"    # magenta
   C_PR="${ESC}[33m"        # yellow
   C_GOOD="${ESC}[32m"      # green
@@ -107,7 +98,6 @@ out=''
 add() { [ -n "$1" ] || return 0; if [ -z "$out" ]; then out="$1"; else out="$out ${C_DIM}|${C_RESET} $1"; fi; }
 
 [ -n "$SL_MODEL" ]  && add "${C_MODEL}${SL_MODEL}${C_RESET}"
-[ -n "$SL_PROJ" ]   && add "${C_PROJ}${SL_PROJ}${C_RESET}"
 [ -n "$SL_BRANCH" ] && add "${C_BRANCH}${SL_BRANCH}${C_RESET}"
 [ -n "$SL_PR" ]     && add "${C_PR}PR #${SL_PR}${C_RESET}"
 

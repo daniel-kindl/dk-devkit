@@ -42,6 +42,16 @@ elif [ -f "$CLAUDE_SETTINGS" ]; then
   python3 - "$CLAUDE_SETTINGS" "$SPEC_DIR/claude-render.sh" <<'PY'
 import json, sys, os
 path, renderer = sys.argv[1], sys.argv[2]
+# Write the renderer path as $HOME/... when the settings file and the renderer
+# are both in this home. The shell that runs the status line expands $HOME, so
+# the same settings.json works in a container home and on the host. Keep the
+# absolute path when either file is outside this home, because $HOME would then
+# expand to the wrong directory.
+home = os.path.expanduser("~").rstrip("/")
+def in_home(q):
+    return q == home or q.startswith(home + "/")
+if in_home(renderer) and in_home(os.path.abspath(path)):
+    renderer = "$HOME" + renderer[len(home):]
 with open(path) as f:
     settings = json.load(f)
 want = {"type": "command", "command": f'"{renderer}"', "padding": 0}
@@ -71,11 +81,10 @@ import os, re, sys
 path = sys.argv[1]
 block = (
     "# Shared status line. Specification: ~/.agents/statusline/spec.json\n"
-    "# Order: model+effort | project | branch | PR | ctx left | tokens used | 5h left | week left\n"
+    "# Order: model+effort | branch | PR | ctx left | tokens used | 5h left | week left\n"
     "[tui]\n"
     'status_line = [\n'
     '  "model-with-reasoning",\n'
-    '  "project-name",\n'
     '  "git-branch",\n'
     '  "pull-request-number",\n'
     '  "context-remaining",\n'

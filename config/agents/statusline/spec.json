@@ -14,16 +14,6 @@
       }
     },
     {
-      "id": "project",
-      "render": "<project name>",
-      "claude": {
-        "source": "basename(workspace.project_dir), fallback basename(workspace.current_dir)"
-      },
-      "codex": {
-        "item": "project-name"
-      }
-    },
-    {
       "id": "branch",
       "render": "<git branch>",
       "claude": {
@@ -100,7 +90,6 @@
     "claude": {
       "mechanism": "ANSI escape codes emitted by the renderer. NO_COLOR turns them off.",
       "model": "bold cyan",
-      "project": "bright blue",
       "branch": "magenta",
       "pr": "yellow",
       "labels": "dim",
