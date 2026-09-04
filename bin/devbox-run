@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Compatibility wrapper: superseded by 'devbox run'.
+set -euo pipefail
+router=${DEVBOX_BIN:-$HOME/.local/bin/devbox}
+[[ -x $router ]] || { printf 'devbox-run: router not found: %s\n' "$router" >&2; exit 1; }
+exec "$router" run -- "$@"

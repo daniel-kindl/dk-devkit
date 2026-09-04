@@ -1,0 +1,10 @@
+# Distribution packages required inside the web-dev container.
+#
+# These are already declared in distrobox/web-dev.ini as additional_packages,
+# so a container created from that manifest gets them at creation time.
+# bootstrap/web-dev.sh re-checks them so that an EXISTING container, created
+# before a package was added here, converges without being recreated.
+
+git
+jq
+gh

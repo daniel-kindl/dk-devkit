@@ -1,0 +1,13 @@
+# Global repository -> environment assignments: <repo root><TAB><environment>
+# Managed by 'devbox assign' / 'devbox unassign'. Git worktrees inherit their
+# primary checkout automatically and must NOT be listed here.
+#
+# This file ships EMPTY on purpose. Assignments are absolute host paths, so they
+# are machine state, not configuration. bootstrap/host.sh installs this template
+# only when ~/.config/devbox-router/repos.tsv does not exist yet; it never
+# overwrites live assignments.
+#
+# Most repositories need no entry at all: inference.tsv resolves them from the
+# files at the repository root. Add an explicit assignment with
+#     devbox assign <environment> <repo>
+# only when inference is wrong or ambiguous.

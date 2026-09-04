@@ -1,0 +1,48 @@
+# Agent instructions for the workstation repository
+
+This repository defines a Bazzite development workstation. It is infrastructure
+configuration, not an application.
+
+The global policy in `config/agents/AGENTS.md` also applies here. That file is
+the canonical shared agent policy, and `~/.agents/AGENTS.md` is a symlink to it.
+Edit it only through this repository.
+
+## Rules for changes in this repository
+
+1. **Never commit a credential.** Run `bin/scan-secrets` before every commit.
+   The scan must report zero findings. If the result is unclear, stop and ask.
+   `docs/secrets.md` lists what stays out and why.
+
+2. **Separate declarative state from runtime state.** Track scripts, manifests,
+   templates, policies, environment definitions and verification logic. Do not
+   track tokens, session state, caches, histories, logs, installed toolchains,
+   or absolute paths that only exist on one machine.
+
+3. **Keep every installer idempotent.** Check the current state first, then
+   change only what does not match. Prefer this to a destructive replacement.
+   Preserve configuration that this repository does not own.
+
+4. **Respect the host/container boundary.**
+   - The Bazzite host gets Homebrew CLI tools, Flatpak applications, Orca, the
+     `devbox` router and the agent shims.
+   - A Distrobox container gets the language toolchain and the agent CLIs.
+   - Never add a Node or npm toolchain to the host.
+   - Never copy a private SSH key into a container or into this repository.
+
+5. **Do not weaken an existing boundary.** The isolated container HOME, the
+   forwarded ssh-agent socket, the read-only host key material and the router
+   recursion guard are all deliberate.
+
+6. **Verify before you claim.** `./verify.sh` must pass. When you change the
+   router, `bin/devbox-verify` must also pass.
+
+7. **Do not special-case a repository.** The router already resolves an
+   environment from `.devbox`, from the git-common-dir, from `repos.tsv`, and
+   from the inference rules. Add a generic rule, not an exception.
+
+## Prose
+
+Use ASD-STE100 as the baseline, in STE-flavored mode, for the documentation,
+the code comments, the commit messages and the pull request descriptions. Keep
+one term for one concept. Keep sentences short. Do not add a fact that the
+source does not contain.

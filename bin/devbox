@@ -1,0 +1,1033 @@
+#!/usr/bin/env bash
+#
+# devbox - route commands into per-project Distrobox development environments.
+#
+# Runs on the Bazzite host. Resolves which development environment owns the
+# current Git repository (worktrees inherit from their primary checkout via
+# git-common-dir), translates the host working directory into the container,
+# and executes the requested command there.
+#
+# Configuration lives in ~/.config/devbox-router/ - see `devbox help`.
+
+set -euo pipefail
+
+PROGRAM=devbox
+VERSION=1.1.0
+
+CONFIG_HOME=${DEVBOX_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/devbox-router}
+ENV_DIR=$CONFIG_HOME/environments.d
+REPOS_FILE=$CONFIG_HOME/repos.tsv
+INFERENCE_FILE=$CONFIG_HOME/inference.tsv
+SETTINGS_FILE=$CONFIG_HOME/settings.env
+
+# Exit codes (stable, scripts may depend on them).
+#   2  usage error
+#   3  not inside a Git repository
+#   4  no environment could be resolved
+#   5  environment is not configured / configuration is invalid
+#   6  Distrobox container missing or unusable
+#   7  automatic inference was ambiguous
+#   8  refused (recursion guard, or would silently change an assignment)
+# 127  command not found inside the container
+
+# ---------------------------------------------------------------- utilities --
+
+fail() {
+    local code=$1 line
+    shift
+    printf '%s: %s\n' "$PROGRAM" "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+    exit "$code"
+}
+
+warn() {
+    local line
+    printf '%s: %s\n' "$PROGRAM" "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+}
+
+trim() {
+    local s=$1
+    s=${s#"${s%%[![:space:]]*}"}
+    s=${s%"${s##*[![:space:]]}"}
+    printf '%s' "$s"
+}
+
+# Canonical absolute path. Does not require the path to exist, but resolves
+# every symlink that does (this is what collapses /home/dkindl -> /var/home/dkindl).
+canon() {
+    realpath -m -- "$1"
+}
+
+expand_tilde() {
+    local v=$1
+    case $v in
+        '~') v=$HOME ;;
+        '~/'*) v=$HOME/${v#'~/'} ;;
+    esac
+    printf '%s' "$v"
+}
+
+pretty() {
+    local p=$1 h
+    for h in "$HOME" "$(canon "$HOME")"; do
+        if [[ $p == "$h" ]]; then printf '~'; return; fi
+        if [[ $p == "$h"/* ]]; then printf '~/%s' "${p#"$h"/}"; return; fi
+    done
+    printf '%s' "$p"
+}
+
+is_valid_name() {
+    [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+in_container() {
+    [[ -f /run/.containerenv || -f /.dockerenv || -n ${DEVBOX_ACTIVE_ENV:-} ]]
+}
+
+guard_not_in_container() {
+    in_container || return 0
+    fail 8 "refusing to route from inside a container (recursion guard)" \
+        "This is the host router; it must run on the Bazzite host." \
+        "Inside a development environment, invoke the real tool directly." \
+        "Active environment: ${DEVBOX_ACTIVE_ENV:-unknown}"
+}
+
+# ------------------------------------------------------------------ settings --
+
+SET_DEFAULT_ENV=""
+SET_ORCA=1
+
+load_settings() {
+    local line key value
+    SET_DEFAULT_ENV=""
+    SET_ORCA=1
+    [[ -f $SETTINGS_FILE ]] || return 0
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        line=$(trim "$line")
+        [[ -z $line || ${line:0:1} == '#' ]] && continue
+        [[ $line == *=* ]] || fail 5 "malformed line in $(pretty "$SETTINGS_FILE"): $line"
+        key=$(trim "${line%%=*}")
+        value=$(unquote "$(trim "${line#*=}")")
+        case $key in
+            default_environment) SET_DEFAULT_ENV=$value ;;
+            orca_integration) SET_ORCA=$value ;;
+            *) fail 5 "unknown key '$key' in $(pretty "$SETTINGS_FILE")" ;;
+        esac
+    done < "$SETTINGS_FILE"
+}
+
+unquote() {
+    local v=$1
+    if (( ${#v} >= 2 )); then
+        if [[ ${v:0:1} == '"' && ${v: -1} == '"' ]] || [[ ${v:0:1} == "'" && ${v: -1} == "'" ]]; then
+            v=${v:1:${#v}-2}
+        fi
+    fi
+    printf '%s' "$v"
+}
+
+is_true() {
+    case ${1,,} in 1|true|yes|on) return 0 ;; *) return 1 ;; esac
+}
+
+# -------------------------------------------------------------- environments --
+
+E_NAME=""; E_BOX=""; E_WS_HOST=""; E_WS_GUEST=""; E_LOGIN=""; E_INIT=""; E_HOME=""; E_DESC=""
+
+load_environment() {
+    local name=$1 file line key value
+    is_valid_name "$name" || fail 5 "invalid environment name: '$name'" \
+        "Environment names must match [A-Za-z0-9][A-Za-z0-9._-]*"
+    file=$ENV_DIR/$name.env
+    [[ -f $file ]] || fail 5 "environment '$name' is not configured" \
+        "Expected: $(pretty "$file")" \
+        "Configured environments: $(list_env_names | tr '\n' ' ')" \
+        "Create one with: devbox new-env $name"
+
+    E_NAME=$name; E_BOX=$name; E_WS_HOST=""; E_WS_GUEST="/workspace"
+    E_LOGIN=1; E_INIT=""; E_HOME=""; E_DESC=""
+
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        line=$(trim "$line")
+        [[ -z $line || ${line:0:1} == '#' ]] && continue
+        [[ $line == *=* ]] || fail 5 "malformed line in $(pretty "$file"): $line"
+        key=$(trim "${line%%=*}")
+        value=$(unquote "$(trim "${line#*=}")")
+        case $key in
+            box)             E_BOX=$value ;;
+            workspace_host)  E_WS_HOST=$(expand_tilde "$value") ;;
+            workspace_guest) E_WS_GUEST=$value ;;
+            login_shell)     E_LOGIN=$value ;;
+            init_file)       E_INIT=$(expand_tilde "$value") ;;
+            home)            E_HOME=$(expand_tilde "$value") ;;
+            description)     E_DESC=$value ;;
+            *) fail 5 "unknown key '$key' in $(pretty "$file")" \
+                   "Valid keys: box workspace_host workspace_guest login_shell init_file home description" ;;
+        esac
+    done < "$file"
+
+    is_valid_name "$E_BOX" || fail 5 "invalid box name '$E_BOX' in $(pretty "$file")"
+    [[ -z $E_WS_GUEST || ${E_WS_GUEST:0:1} == / ]] || \
+        fail 5 "workspace_guest must be an absolute path in $(pretty "$file")"
+    if [[ -n $E_INIT && ! -r $E_INIT ]]; then
+        fail 5 "init_file is not readable: $(pretty "$E_INIT")" "Referenced by $(pretty "$file")"
+    fi
+}
+
+list_env_names() {
+    local f n
+    [[ -d $ENV_DIR ]] || return 0
+    for f in "$ENV_DIR"/*.env; do
+        [[ -e $f ]] || continue
+        n=${f##*/}; n=${n%.env}
+        is_valid_name "$n" || continue
+        printf '%s\n' "$n"
+    done
+}
+
+# ----------------------------------------------------------- repo resolution --
+
+R_ROOT=""; R_COMMON=""
+
+repo_info() {
+    local dir=$1 common bare
+    R_ROOT=""; R_COMMON=""
+    [[ -d $dir ]] || return 1
+    common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+    [[ -n $common ]] || return 1
+    R_COMMON=$(canon "$common")
+    bare=$(git -C "$dir" rev-parse --is-bare-repository 2>/dev/null || printf 'false')
+    if [[ $bare == true ]]; then
+        R_ROOT=$R_COMMON
+    else
+        R_ROOT=$(canon "$(dirname -- "$R_COMMON")")
+    fi
+}
+
+# First non-empty, non-comment line of a declaration file.
+read_decl() {
+    local f=$1 line
+    [[ -f $f ]] || return 1
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        line=$(trim "$line")
+        [[ -z $line || ${line:0:1} == '#' ]] && continue
+        printf '%s\n' "$line"
+        return 0
+    done < "$f"
+    return 1
+}
+
+lookup_repo_map() {
+    local target=$1 line root env
+    [[ -f $REPOS_FILE ]] || return 1
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        [[ -z $(trim "$line") || ${line:0:1} == '#' ]] && continue
+        [[ $line == *$'\t'* ]] || continue
+        root=$(trim "${line%%$'\t'*}")
+        env=$(trim "${line#*$'\t'}")
+        [[ -n $root && -n $env ]] || continue
+        [[ $(canon "$(expand_tilde "$root")") == "$target" ]] || continue
+        printf '%s\n' "$env"
+        return 0
+    done < "$REPOS_FILE"
+    return 1
+}
+
+builtin_rules() {
+    cat <<'RULES'
+web-dev	package.json
+web-dev	pnpm-workspace.yaml
+web-dev	.nvmrc
+web-dev	yarn.lock
+web-dev	package-lock.json
+web-dev	bun.lockb
+dotnet-dev	*.sln
+dotnet-dev	*.slnx
+dotnet-dev	*.csproj
+dotnet-dev	*.fsproj
+dotnet-dev	global.json
+rust-dev	Cargo.toml
+android-dev	settings.gradle
+android-dev	settings.gradle.kts
+android-dev	gradlew
+android-dev	local.properties
+RULES
+}
+
+rules_source() {
+    if [[ -f $INFERENCE_FILE ]]; then cat -- "$INFERENCE_FILE"; else builtin_rules; fi
+}
+
+# Does $2 (a filename or glob, relative to repo root $1) match anything?
+matches_pattern() {
+    local root=$1 pat=$2
+    if [[ $pat != *[*?[]* ]]; then
+        [[ -e $root/$pat ]]
+        return
+    fi
+    (
+        shopt -s nullglob dotglob
+        cd -- "$root" 2>/dev/null || exit 1
+        # Deliberate pathname expansion of the configured pattern; never eval.
+        set -- $pat
+        (( $# > 0 ))
+    )
+}
+
+# On success prints "<env>\t<reason>"; exit 1 = no match, exit 2 = ambiguous
+# (prints the matching environments, space separated).
+infer_env() {
+    local root=$1 line env pat m
+    local -a envs=() reasons=()
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        [[ -z $(trim "$line") || ${line:0:1} == '#' ]] && continue
+        [[ $line == *$'\t'* ]] || continue
+        env=$(trim "${line%%$'\t'*}")
+        pat=$(trim "${line#*$'\t'}")
+        [[ -n $env && -n $pat ]] || continue
+        is_valid_name "$env" || continue
+        matches_pattern "$root" "$pat" || continue
+        local seen=0 i
+        for (( i = 0; i < ${#envs[@]}; i++ )); do
+            if [[ ${envs[i]} == "$env" ]]; then
+                seen=1
+                [[ ${reasons[i]} == *" $pat"* ]] || reasons[i]="${reasons[i]} $pat"
+                break
+            fi
+        done
+        if (( ! seen )); then
+            envs+=("$env")
+            reasons+=("$pat")
+        fi
+    done < <(rules_source)
+
+    case ${#envs[@]} in
+        0) return 1 ;;
+        1) printf '%s\t%s\n' "${envs[0]}" "matched: ${reasons[0]}"; return 0 ;;
+        *) printf '%s\n' "${envs[*]}"; return 2 ;;
+    esac
+}
+
+RES_ENV=""; RES_SOURCE=""; RES_DETAIL=""
+
+# 0 = resolved, 3 = not a repo, 4 = unresolved, 7 = ambiguous
+resolve_for_dir() {
+    local dir=$1 value out rc
+    RES_ENV=""; RES_SOURCE=""; RES_DETAIL=""
+
+    if [[ -n ${DEVBOX_ENV:-} ]]; then
+        RES_ENV=$DEVBOX_ENV; RES_SOURCE=override; RES_DETAIL="DEVBOX_ENV environment variable"
+        return 0
+    fi
+
+    repo_info "$dir" || return 3
+
+    if value=$(read_decl "$R_ROOT/.devbox"); then
+        RES_ENV=$value; RES_SOURCE=repo-file; RES_DETAIL="$R_ROOT/.devbox"
+        return 0
+    fi
+    if value=$(read_decl "$R_COMMON/devbox-env"); then
+        RES_ENV=$value; RES_SOURCE=clone-local; RES_DETAIL="$R_COMMON/devbox-env"
+        return 0
+    fi
+    if value=$(lookup_repo_map "$R_ROOT"); then
+        RES_ENV=$value; RES_SOURCE=global; RES_DETAIL="$REPOS_FILE"
+        return 0
+    fi
+
+    rc=0
+    out=$(infer_env "$R_ROOT") || rc=$?
+    case $rc in
+        0) RES_ENV=${out%%$'\t'*}; RES_SOURCE=inferred; RES_DETAIL=${out#*$'\t'}; return 0 ;;
+        2) RES_DETAIL=$out; return 7 ;;
+        *) return 4 ;;
+    esac
+}
+
+# Resolve, or exit with an actionable message. $1 = dir, $2 = allow default env (0/1)
+require_resolution() {
+    local dir=$1 allow_default=$2 rc=0
+    resolve_for_dir "$dir" || rc=$?
+    case $rc in
+        0) ;;
+        3)
+            if (( allow_default )) && [[ -n $SET_DEFAULT_ENV ]]; then
+                RES_ENV=$SET_DEFAULT_ENV; RES_SOURCE=default; RES_DETAIL="default_environment in $(pretty "$SETTINGS_FILE")"
+            else
+                fail 3 "not inside a Git repository: $dir" \
+                    "Use 'devbox exec <environment> -- <command>' to target one explicitly."
+            fi
+            ;;
+        7)
+            fail 7 "automatic inference is ambiguous for $R_ROOT" \
+                "Candidate environments: $RES_DETAIL" \
+                "Assign one explicitly:  devbox assign <environment> $R_ROOT"
+            ;;
+        *)
+            fail 4 "no development environment for repository: $R_ROOT" \
+                "Nothing matched: .devbox file, .git/devbox-env, $(pretty "$REPOS_FILE"), inference rules." \
+                "Assign one with:  devbox assign <environment> $R_ROOT" \
+                "Configured environments: $(list_env_names | tr '\n' ' ')"
+            ;;
+    esac
+
+    is_valid_name "$RES_ENV" || fail 5 "invalid environment name '$RES_ENV'" \
+        "Declared by: $RES_SOURCE ($RES_DETAIL)" \
+        "Environment names must match [A-Za-z0-9][A-Za-z0-9._-]*"
+
+    if ! [[ -f $ENV_DIR/$RES_ENV.env ]]; then
+        fail 5 "resolved environment '$RES_ENV' is not configured" \
+            "Resolved from: $RES_SOURCE ($RES_DETAIL)" \
+            "Configured environments: $(list_env_names | tr '\n' ' ')" \
+            "Create it with:  devbox new-env $RES_ENV"
+    fi
+    load_environment "$RES_ENV"
+}
+
+# ------------------------------------------------------------ path mapping ---
+
+# Host directory -> path inside the container.
+guest_path() {
+    local hp ws
+    hp=$(canon "$1")
+    if [[ -n $E_WS_HOST ]]; then
+        ws=$(canon "$E_WS_HOST")
+        if [[ $hp == "$ws" ]]; then printf '%s\n' "$E_WS_GUEST"; return; fi
+        if [[ $hp == "$ws"/* ]]; then printf '%s\n' "$E_WS_GUEST/${hp#"$ws"/}"; return; fi
+    fi
+    # Every Distrobox mounts the host root at /run/host, so this always resolves.
+    printf '%s\n' "/run/host$hp"
+}
+
+# ---------------------------------------------------------------- container --
+
+container_cli() {
+    if command -v podman >/dev/null 2>&1; then printf 'podman'
+    elif command -v docker >/dev/null 2>&1; then printf 'docker'
+    else printf ''
+    fi
+}
+
+box_exists() {
+    local cli
+    cli=$(container_cli)
+    if [[ -n $cli ]]; then
+        "$cli" container exists "$1" 2>/dev/null && return 0
+        [[ $cli == docker ]] && "$cli" inspect "$1" >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    distrobox list 2>/dev/null | awk -F'|' -v n="$1" 'NR>1 { gsub(/^[ \t]+|[ \t]+$/, "", $2); if ($2 == n) found = 1 } END { exit !found }'
+}
+
+box_status() {
+    local cli
+    cli=$(container_cli)
+    [[ -n $cli ]] || { printf 'unknown'; return; }
+    "$cli" inspect "$1" --format '{{.State.Status}}' 2>/dev/null || printf 'unknown'
+}
+
+box_home() {
+    local cli home
+    if [[ -n $E_HOME ]]; then printf '%s\n' "$E_HOME"; return 0; fi
+    cli=$(container_cli)
+    [[ -n $cli ]] || return 1
+    home=$("$cli" inspect "$E_BOX" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+        | awk -F= '$1 == "HOME" { sub(/^HOME=/, "", $0); h = $0 } END { if (h != "") print h }') || return 1
+    [[ -n $home ]] || return 1
+    printf '%s\n' "$home"
+}
+
+require_box() {
+    command -v distrobox >/dev/null 2>&1 || \
+        fail 6 "distrobox is not installed on the host" "Environment '$E_NAME' needs it to run."
+    box_exists "$E_BOX" || fail 6 "Distrobox container '$E_BOX' does not exist" \
+        "Required by environment '$E_NAME' ($(pretty "$ENV_DIR/$E_NAME.env"))." \
+        "Existing containers: $(distrobox list 2>/dev/null | awk -F'|' 'NR>1 { gsub(/^[ \t]+|[ \t]+$/, "", $2); printf "%s ", $2 }')" \
+        "Create it with:  distrobox create --name $E_BOX --image <image> --home <home> --volume <host>:<guest>:rw"
+}
+
+# Executed by bash inside the container. Single-quoted here: nothing from the
+# host is interpolated into it, everything is passed as positional arguments.
+INNER='
+set -euo pipefail
+
+strip_list="$1"; shift
+init_file="$1"; shift
+target_dir="$1"; shift
+
+if [[ -n "$strip_list" ]]; then
+    IFS=: read -r -a __strip <<< "$strip_list"
+    IFS=: read -r -a __path <<< "${PATH:-}"
+    __keep=()
+    for __p in ${__path[@]+"${__path[@]}"}; do
+        __drop=0
+        for __s in ${__strip[@]+"${__strip[@]}"}; do
+            if [[ -n "$__s" && "$__p" == "$__s" ]]; then __drop=1; break; fi
+        done
+        if (( ! __drop )); then __keep+=("$__p"); fi
+    done
+    if (( ${#__keep[@]} > 0 )); then
+        PATH="$(IFS=:; printf "%s" "${__keep[*]}")"
+    else
+        PATH=/usr/local/bin:/usr/bin:/bin
+    fi
+    export PATH
+    unset __strip __path __keep __p __s __drop
+fi
+
+if [[ -n "$init_file" ]]; then
+    if [[ -r "$init_file" ]]; then
+        . "$init_file"
+    else
+        printf "devbox: environment init file is not readable inside the container: %s\n" "$init_file" >&2
+        exit 5
+    fi
+fi
+
+if ! cd -- "$target_dir" 2>/dev/null; then
+    printf "devbox: cannot enter directory inside the container: %s\n" "$target_dir" >&2
+    exit 6
+fi
+
+if ! command -v "$1" >/dev/null 2>&1; then
+    printf "devbox: command not found inside this environment: %s\n" "$1" >&2
+    exit 127
+fi
+
+exec "$@"
+'
+
+# $1 = host cwd, rest = argv
+run_in_env() {
+    local host_cwd=$1
+    shift
+    (( $# > 0 )) || fail 2 "no command given"
+
+    local gcwd init_guest shell_flag strip
+    gcwd=$(guest_path "$host_cwd")
+    init_guest=""
+    [[ -n $E_INIT ]] && init_guest=$(guest_path "$E_INIT")
+    shell_flag=-c
+    is_true "$E_LOGIN" && shell_flag=-lc
+
+    # Distrobox forwards the host PATH verbatim, which would put the host agent
+    # shims ahead of the real binaries inside the box. Remove that directory.
+    strip="$HOME/.local/bin:$(canon "$HOME/.local/bin")"
+
+    if is_true "${DEVBOX_DRY_RUN:-0}"; then
+        printf 'env=%s\n' "$E_NAME"
+        printf 'source=%s\n' "$RES_SOURCE"
+        printf 'detail=%s\n' "$RES_DETAIL"
+        printf 'box=%s\n' "$E_BOX"
+        printf 'host_cwd=%s\n' "$(canon "$host_cwd")"
+        printf 'guest_cwd=%s\n' "$gcwd"
+        printf 'login_shell=%s\n' "$( is_true "$E_LOGIN" && printf 1 || printf 0 )"
+        printf 'init_file=%s\n' "$init_guest"
+        local i=0 a
+        for a in "$@"; do printf 'argv[%d]=%s\n' "$i" "$a"; i=$(( i + 1 )); done
+        return 0
+    fi
+
+    require_box
+
+    export DEVBOX_ACTIVE_ENV=$E_NAME
+    export DEVBOX_ACTIVE_BOX=$E_BOX
+    exec distrobox enter --name "$E_BOX" -- \
+        bash "$shell_flag" "$INNER" "$PROGRAM" "$strip" "$init_guest" "$gcwd" "$@"
+}
+
+# --------------------------------------------------------- Orca integration --
+
+# Orca installs its Claude Code hooks into the *host* ~/.claude/settings.json,
+# but Claude runs with the container HOME, so those hooks would be inert.
+# Mirror the Orca-managed keys into the container config, without clobbering
+# hooks the user configured inside the box themselves.
+orca_sync_claude() {
+    local host_claude=$HOME/.claude/settings.json
+    local bhome bsettings marker tmp
+
+    is_true "$SET_ORCA" || return 0
+    is_true "${DEVBOX_NO_ORCA_SYNC:-0}" && return 0
+    [[ -n ${ORCA_PANE_KEY:-}${ORCA_AGENT_HOOK_ENDPOINT:-}${ORCA_USER_DATA_PATH:-} ]] || return 0
+    [[ -f $host_claude ]] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+
+    bhome=$(box_home) || return 0
+    [[ -d $bhome ]] || return 0
+
+    # Orca hook commands reference "$HOME/.orca/agent-hooks/..."; inside the box
+    # $HOME is the isolated Distrobox home, so link it to the host's copy.
+    if [[ -d $HOME/.orca && ! -e $bhome/.orca ]]; then
+        ln -s -- "$(canon "$HOME/.orca")" "$bhome/.orca" 2>/dev/null || true
+    fi
+
+    bsettings=$bhome/.claude/settings.json
+    marker=$bhome/.claude/.devbox-orca-managed.json
+    mkdir -p -- "$bhome/.claude" 2>/dev/null || return 0
+    [[ -f $bsettings ]] || printf '{}\n' > "$bsettings"
+    [[ -f $marker ]] || printf '{}\n' > "$marker"
+
+    tmp=$(mktemp -- "$bsettings.devbox.XXXXXX") || return 0
+    if jq -n \
+        --slurpfile host "$host_claude" \
+        --slurpfile box "$bsettings" \
+        --slurpfile managed "$marker" '
+        ($host[0] // {}) as $h | ($box[0] // {}) as $b | ($managed[0] // {}) as $m |
+        reduce ["hooks", "statusLine"][] as $k
+            ({ box: $b, managed: {} };
+             if ($h | has($k)) then
+                 if ((.box | has($k)) | not) or (.box[$k] == ($m[$k] // null))
+                 then .box[$k] = $h[$k] | .managed[$k] = $h[$k]
+                 else .managed[$k] = ($m[$k] // null) end
+             else . end)
+        ' > "$tmp" 2>/dev/null
+    then
+        jq -e '.box' < "$tmp" > "$bsettings.new" 2>/dev/null && mv -f -- "$bsettings.new" "$bsettings"
+        jq -e '.managed' < "$tmp" > "$marker.new" 2>/dev/null && mv -f -- "$marker.new" "$marker"
+    fi
+    rm -f -- "$tmp" "$bsettings.new" "$marker.new"
+}
+
+# ------------------------------------------------------------- config writes --
+
+write_atomic() {
+    local dest=$1 tmp
+    tmp=$(mktemp -- "$dest.XXXXXX")
+    cat > "$tmp"
+    chmod 0644 -- "$tmp"
+    mv -f -- "$tmp" "$dest"
+}
+
+# ----------------------------------------------------------------- commands --
+
+parse_target_dir() {
+    local dir=${1:-$PWD}
+    [[ -d $dir ]] || fail 2 "not a directory: $dir"
+    canon "$dir"
+}
+
+cmd_where() {
+    local dir porcelain=0
+    while (( $# )); do
+        case $1 in
+            --porcelain) porcelain=1; shift ;;
+            --) shift; break ;;
+            -*) fail 2 "unknown option: $1" ;;
+            *) break ;;
+        esac
+    done
+    dir=$(parse_target_dir "${1:-}")
+
+    local rc=0
+    resolve_for_dir "$dir" || rc=$?
+    if (( porcelain )); then
+        printf 'dir\t%s\n' "$dir"
+        printf 'repo_root\t%s\n' "${R_ROOT:-}"
+        printf 'git_common_dir\t%s\n' "${R_COMMON:-}"
+        printf 'status\t%s\n' "$rc"
+        printf 'env\t%s\n' "${RES_ENV:-}"
+        printf 'source\t%s\n' "${RES_SOURCE:-}"
+        printf 'detail\t%s\n' "${RES_DETAIL:-}"
+        if [[ -n ${RES_ENV:-} && -f $ENV_DIR/${RES_ENV}.env ]]; then
+            load_environment "$RES_ENV"
+            printf 'box\t%s\n' "$E_BOX"
+            printf 'guest_cwd\t%s\n' "$(guest_path "$dir")"
+        fi
+        return "$rc"
+    fi
+
+    require_resolution "$dir" 1
+    printf 'directory   %s\n' "$dir"
+    [[ -n $R_ROOT ]] && printf 'repository  %s\n' "$R_ROOT"
+    [[ -n $R_COMMON ]] && printf 'git-common  %s\n' "$R_COMMON"
+    printf 'environment %s\n' "$E_NAME"
+    printf 'source      %s (%s)\n' "$RES_SOURCE" "$RES_DETAIL"
+    printf 'container   %s [%s]\n' "$E_BOX" "$(box_exists "$E_BOX" && box_status "$E_BOX" || printf 'MISSING')"
+    printf 'guest cwd   %s\n' "$(guest_path "$dir")"
+}
+
+cmd_resolve() {
+    local dir
+    dir=$(parse_target_dir "${1:-}")
+    require_resolution "$dir" 1
+    printf '%s\n' "$E_NAME"
+}
+
+cmd_path() {
+    (( $# >= 1 )) || fail 2 "usage: devbox path <environment> [host-directory]"
+    load_environment "$1"
+    local dir=${2:-$PWD}
+    guest_path "$dir"
+}
+
+cmd_list() {
+    local n status
+    printf 'Environments (%s)\n' "$(pretty "$ENV_DIR")"
+    if [[ -z $(list_env_names) ]]; then
+        printf '  (none configured)\n'
+    else
+        while read -r n; do
+            load_environment "$n"
+            if box_exists "$E_BOX"; then status=$(box_status "$E_BOX"); else status=MISSING; fi
+            printf '  %-14s box=%-14s [%s]  %s -> %s\n' \
+                "$E_NAME" "$E_BOX" "$status" \
+                "$( [[ -n $E_WS_HOST ]] && pretty "$E_WS_HOST" || printf '(no workspace)' )" \
+                "$( [[ -n $E_WS_HOST ]] && printf '%s' "$E_WS_GUEST" || printf '/run/host/...' )"
+            [[ -n $E_DESC ]] && printf '  %-14s %s\n' '' "$E_DESC"
+        done < <(list_env_names)
+    fi
+
+    printf '\nRepository assignments (%s)\n' "$(pretty "$REPOS_FILE")"
+    if [[ -s $REPOS_FILE ]] && grep -qv '^[[:space:]]*\(#.*\)\?$' "$REPOS_FILE" 2>/dev/null; then
+        local line root env
+        while IFS= read -r line || [[ -n $line ]]; do
+            line=${line%$'\r'}
+            [[ -z $(trim "$line") || ${line:0:1} == '#' ]] && continue
+            [[ $line == *$'\t'* ]] || continue
+            root=$(trim "${line%%$'\t'*}")
+            env=$(trim "${line#*$'\t'}")
+            printf '  %-14s %s%s\n' "$env" "$root" \
+                "$( [[ -d $(canon "$(expand_tilde "$root")") ]] || printf '   (missing)' )"
+        done < "$REPOS_FILE"
+    else
+        printf '  (none)\n'
+    fi
+
+    load_settings
+    printf '\nDefault (management) environment: %s\n' "${SET_DEFAULT_ENV:-(unset)}"
+}
+
+cmd_assign() {
+    local force=0 env dir positional_only=0
+    local -a pos=()
+    while (( $# )); do
+        if (( positional_only )); then pos+=("$1"); shift; continue; fi
+        case $1 in
+            --force|-f) force=1; shift ;;
+            --) positional_only=1; shift ;;
+            -*) fail 2 "unknown option: $1" ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    (( ${#pos[@]} >= 1 )) || fail 2 "usage: devbox assign <environment> [directory] [--force]"
+    (( ${#pos[@]} <= 2 )) || fail 2 "usage: devbox assign <environment> [directory] [--force]"
+    env=${pos[0]}
+    dir=$(parse_target_dir "${pos[1]:-}")
+    load_environment "$env"
+
+    repo_info "$dir" || fail 3 "not inside a Git repository: $dir"
+
+    local existing
+    if existing=$(lookup_repo_map "$R_ROOT"); then
+        if [[ $existing == "$env" ]]; then
+            printf '%s: %s is already assigned to %s\n' "$PROGRAM" "$R_ROOT" "$env"
+            return 0
+        fi
+        (( force )) || fail 8 "$R_ROOT is already assigned to '$existing'" \
+            "Refusing to silently change it to '$env'." \
+            "Re-run with --force if that is intended."
+    fi
+
+    mkdir -p -- "$CONFIG_HOME"
+    {
+        if [[ -f $REPOS_FILE ]]; then
+            local line root
+            while IFS= read -r line || [[ -n $line ]]; do
+                line=${line%$'\r'}
+                if [[ -n $(trim "$line") && ${line:0:1} != '#' && $line == *$'\t'* ]]; then
+                    root=$(trim "${line%%$'\t'*}")
+                    [[ $(canon "$(expand_tilde "$root")") == "$R_ROOT" ]] && continue
+                fi
+                printf '%s\n' "$line"
+            done < "$REPOS_FILE"
+        fi
+        printf '%s\t%s\n' "$R_ROOT" "$env"
+    } | write_atomic "$REPOS_FILE"
+
+    printf '%s: assigned %s -> %s\n' "$PROGRAM" "$R_ROOT" "$env"
+
+    local shadow
+    if shadow=$(read_decl "$R_ROOT/.devbox"); then
+        warn "note: $R_ROOT/.devbox declares '$shadow' and takes precedence over this assignment"
+    elif shadow=$(read_decl "$R_COMMON/devbox-env"); then
+        warn "note: $R_COMMON/devbox-env declares '$shadow' and takes precedence over this assignment"
+    fi
+}
+
+cmd_unassign() {
+    local dir
+    [[ ${1:-} == -- ]] && shift
+    (( $# <= 1 )) || fail 2 "usage: devbox unassign [directory]"
+    dir=$(parse_target_dir "${1:-}")
+    repo_info "$dir" || fail 3 "not inside a Git repository: $dir"
+    [[ -f $REPOS_FILE ]] || { printf '%s: no assignments file\n' "$PROGRAM"; return 0; }
+
+    local found=0
+    {
+        local line root
+        while IFS= read -r line || [[ -n $line ]]; do
+            line=${line%$'\r'}
+            if [[ -n $(trim "$line") && ${line:0:1} != '#' && $line == *$'\t'* ]]; then
+                root=$(trim "${line%%$'\t'*}")
+                if [[ $(canon "$(expand_tilde "$root")") == "$R_ROOT" ]]; then found=1; continue; fi
+            fi
+            printf '%s\n' "$line"
+        done < "$REPOS_FILE"
+    } | write_atomic "$REPOS_FILE"
+
+    if (( found )); then
+        printf '%s: removed assignment for %s\n' "$PROGRAM" "$R_ROOT"
+    else
+        printf '%s: %s had no explicit assignment\n' "$PROGRAM" "$R_ROOT"
+    fi
+}
+
+cmd_check() {
+    local -a names=()
+    if (( $# )); then names=("$@"); else mapfile -t names < <(list_env_names); fi
+    (( ${#names[@]} )) || { printf '%s: no environments configured\n' "$PROGRAM"; return 0; }
+
+    local rc=0 n
+    for n in "${names[@]}"; do
+        load_environment "$n"
+        if box_exists "$E_BOX"; then
+            printf 'ok      %-14s container %s [%s]\n' "$n" "$E_BOX" "$(box_status "$E_BOX")"
+        else
+            printf 'MISSING %-14s container %s does not exist\n' "$n" "$E_BOX"
+            rc=6
+        fi
+    done
+    return "$rc"
+}
+
+cmd_doctor() {
+    local dir
+    dir=$(parse_target_dir "${1:-}")
+    load_settings
+
+    printf '== devbox %s ==\n' "$VERSION"
+    printf 'host home        %s (canonical %s)\n' "$HOME" "$(canon "$HOME")"
+    printf 'config           %s\n' "$CONFIG_HOME"
+    printf 'in container     %s\n' "$(in_container && printf 'YES (routing disabled)' || printf 'no')"
+    printf 'distrobox        %s\n' "$(command -v distrobox || printf 'MISSING')"
+    printf 'container cli    %s\n' "$(container_cli || printf 'MISSING')"
+    printf 'default env      %s\n' "${SET_DEFAULT_ENV:-(unset)}"
+    printf 'orca integration %s\n' "$( is_true "$SET_ORCA" && printf enabled || printf disabled )"
+    printf 'orca session     %s\n' "$( [[ -n ${ORCA_PANE_KEY:-} ]] && printf 'yes (pane %s)' "${ORCA_PANE_KEY}" || printf no )"
+    printf '\n'
+    cmd_check || true
+    printf '\n-- resolution for %s --\n' "$dir"
+    local rc=0
+    resolve_for_dir "$dir" || rc=$?
+    case $rc in
+        0) printf 'environment      %s\nsource           %s (%s)\n' "$RES_ENV" "$RES_SOURCE" "$RES_DETAIL" ;;
+        3) printf 'not a Git repository; agents would fall back to the default environment\n' ;;
+        7) printf 'AMBIGUOUS inference; candidates: %s\n' "$RES_DETAIL" ;;
+        *) printf 'UNRESOLVED: no declaration, assignment or inference matched\n' ;;
+    esac
+    [[ -n $R_ROOT ]] && printf 'repository       %s\ngit common dir   %s\n' "$R_ROOT" "$R_COMMON"
+
+    if (( rc == 0 )) && [[ -f $ENV_DIR/$RES_ENV.env ]]; then
+        load_environment "$RES_ENV"
+        printf 'container        %s [%s]\n' "$E_BOX" "$(box_exists "$E_BOX" && box_status "$E_BOX" || printf MISSING)"
+        printf 'guest cwd        %s\n' "$(guest_path "$dir")"
+        printf 'box home         %s\n' "$(box_home || printf '(unknown)')"
+        if box_exists "$E_BOX"; then
+            printf '\n-- tools inside %s --\n' "$E_BOX"
+            DEVBOX_ACTIVE_ENV=$E_NAME distrobox enter -T --name "$E_BOX" -- bash -lc '
+                for t in node pnpm claude codex git; do
+                    printf "%-8s %s\n" "$t" "$(command -v "$t" || echo "-")"
+                done' 2>/dev/null || printf '(could not enter container)\n'
+        fi
+    fi
+}
+
+cmd_exec() {
+    local env cwd=$PWD
+    (( $# >= 1 )) || fail 2 "usage: devbox exec <environment> [--cwd DIR] [--] <command> [args...]"
+    env=$1; shift
+    while (( $# )); do
+        case $1 in
+            --cwd) (( $# >= 2 )) || fail 2 "--cwd needs a value"; cwd=$2; shift 2 ;;
+            --cwd=*) cwd=${1#--cwd=}; shift ;;
+            --) shift; break ;;
+            -*) fail 2 "unknown option: $1" ;;
+            *) break ;;
+        esac
+    done
+    (( $# >= 1 )) || fail 2 "no command given"
+    guard_not_in_container
+    load_settings
+    load_environment "$env"
+    RES_SOURCE=explicit; RES_DETAIL="devbox exec"
+    [[ -d $cwd ]] || fail 2 "not a directory: $cwd"
+    run_in_env "$cwd" "$@"
+}
+
+cmd_run() {
+    local cwd=$PWD
+    while (( $# )); do
+        case $1 in
+            --cwd) (( $# >= 2 )) || fail 2 "--cwd needs a value"; cwd=$2; shift 2 ;;
+            --cwd=*) cwd=${1#--cwd=}; shift ;;
+            --) shift; break ;;
+            -*) break ;;
+            *) break ;;
+        esac
+    done
+    (( $# >= 1 )) || fail 2 "usage: devbox run [--cwd DIR] [--] <command> [args...]"
+    guard_not_in_container
+    load_settings
+    [[ -d $cwd ]] || fail 2 "not a directory: $cwd"
+    require_resolution "$(canon "$cwd")" 0
+    run_in_env "$cwd" "$@"
+}
+
+cmd_agent() {
+    (( $# >= 1 )) || fail 2 "usage: devbox agent <tool> [args...]"
+    local tool=$1; shift
+    guard_not_in_container
+    load_settings
+    require_resolution "$(canon "$PWD")" 1
+    if [[ $tool == claude ]] && ! is_true "${DEVBOX_DRY_RUN:-0}"; then
+        orca_sync_claude
+    fi
+    run_in_env "$PWD" "$tool" "$@"
+}
+
+cmd_new_env() {
+    (( $# >= 1 )) || fail 2 "usage: devbox new-env <name> [--box NAME] [--workspace HOST:GUEST]"
+    local name=$1; shift
+    is_valid_name "$name" || fail 2 "invalid environment name: $name"
+    local box=$name ws_host="" ws_guest=/workspace
+    while (( $# )); do
+        case $1 in
+            --box) box=$2; shift 2 ;;
+            --workspace) ws_host=${2%%:*}; ws_guest=${2#*:}; shift 2 ;;
+            *) fail 2 "unknown option: $1" ;;
+        esac
+    done
+    mkdir -p -- "$ENV_DIR"
+    local file=$ENV_DIR/$name.env
+    [[ -e $file ]] && fail 8 "environment already exists: $(pretty "$file")"
+    {
+        printf '# %s development environment\n' "$name"
+        printf 'box = %s\n' "$box"
+        [[ -n $ws_host ]] && printf 'workspace_host = %s\nworkspace_guest = %s\n' "$ws_host" "$ws_guest"
+        printf '# login_shell = 1        # source the box login shell (picks up nvm/sdkman/etc.)\n'
+        printf '# init_file = ~/.config/devbox-router/environments.d/%s.init.sh\n' "$name"
+        printf '# description = ...\n'
+    } > "$file"
+    printf '%s: created %s\n' "$PROGRAM" "$(pretty "$file")"
+}
+
+cmd_new_shim() {
+    (( $# == 1 )) || fail 2 "usage: devbox new-shim <tool>"
+    local tool=$1 dest
+    is_valid_name "$tool" || fail 2 "invalid tool name: $tool"
+    dest=$HOME/.local/bin/$tool
+    [[ -e $dest ]] && fail 8 "refusing to overwrite existing file: $(pretty "$dest")"
+    cat > "$dest" <<SHIM
+#!/usr/bin/env bash
+#
+# Host shim for '$tool'. Generated by 'devbox new-shim'. The real binary lives
+# only inside the development environment container.
+set -euo pipefail
+
+router=\${DEVBOX_BIN:-\$HOME/.local/bin/devbox}
+
+if [[ -f /run/.containerenv || -f /.dockerenv || -n \${DEVBOX_ACTIVE_ENV:-} ]]; then
+    printf '$tool: this is the host routing shim; it must not run inside a container.\\n' >&2
+    printf '  Active environment: %s\\n' "\${DEVBOX_ACTIVE_ENV:-unknown}" >&2
+    exit 8
+fi
+
+if [[ ! -x \$router ]]; then
+    printf '$tool: devbox router not found or not executable: %s\\n' "\$router" >&2
+    exit 1
+fi
+
+exec "\$router" agent $tool "\$@"
+SHIM
+    chmod 0755 -- "$dest"
+    printf '%s: created %s\n' "$PROGRAM" "$(pretty "$dest")"
+}
+
+cmd_verify() {
+    local v=$HOME/.local/bin/devbox-verify
+    [[ -x $v ]] || fail 2 "verification script not found: $(pretty "$v")"
+    exec "$v" "$@"
+}
+
+usage() {
+    cat <<USAGE
+$PROGRAM $VERSION - route commands into per-project Distrobox environments
+
+Usage:
+  devbox where [DIR] [--porcelain]   show the resolved environment for DIR
+  devbox resolve [DIR]               print just the environment name
+  devbox path ENV [DIR]              print the in-container path for a host dir
+  devbox list                        list environments and repository assignments
+  devbox assign ENV [DIR] [--force]  assign a repository to an environment
+  devbox unassign [DIR]              remove an explicit assignment
+  devbox check [ENV...]              verify the Distrobox containers exist
+  devbox doctor [DIR]                full routing diagnostics
+  devbox new-env NAME [--box N] [--workspace HOST:GUEST]
+  devbox new-shim TOOL               create a host shim for another agent CLI
+  devbox exec ENV [--cwd DIR] -- CMD...   run CMD in a named environment
+  devbox run [--cwd DIR] -- CMD...        run CMD in the environment owning CWD
+  devbox agent TOOL [ARGS...]        agent shim entry point (claude, codex, ...)
+  devbox verify                      run the routing verification suite
+
+Resolution precedence (first match wins):
+  1. \$DEVBOX_ENV                       explicit override
+  2. <repo>/.devbox                    committed, repo-local declaration
+  3. <git-common-dir>/devbox-env       per-clone, uncommitted declaration
+  4. $(pretty "$REPOS_FILE")   global assignment
+  5. inference from $(pretty "$INFERENCE_FILE")  (ambiguity fails)
+  6. otherwise: fail with guidance
+
+Git worktrees inherit their primary checkout automatically, because resolution
+keys off 'git rev-parse --path-format=absolute --git-common-dir'.
+
+Environment variables:
+  DEVBOX_ENV          force an environment
+  DEVBOX_DRY_RUN=1    print the routing plan instead of executing
+  DEVBOX_CONFIG_HOME  alternate configuration directory (testing)
+  DEVBOX_NO_ORCA_SYNC=1  skip the Orca settings mirror
+USAGE
+}
+
+main() {
+    (( $# )) || { usage; exit 2; }
+    local sub=$1; shift
+    case $sub in
+        where)      load_settings; cmd_where "$@" ;;
+        resolve)    load_settings; cmd_resolve "$@" ;;
+        path)       cmd_path "$@" ;;
+        list|ls)    cmd_list "$@" ;;
+        assign)     cmd_assign "$@" ;;
+        unassign)   cmd_unassign "$@" ;;
+        check)      cmd_check "$@" ;;
+        doctor)     cmd_doctor "$@" ;;
+        new-env)    cmd_new_env "$@" ;;
+        new-shim)   cmd_new_shim "$@" ;;
+        exec)       cmd_exec "$@" ;;
+        run)        cmd_run "$@" ;;
+        agent)      cmd_agent "$@" ;;
+        verify)     cmd_verify "$@" ;;
+        version|--version|-V) printf '%s %s\n' "$PROGRAM" "$VERSION" ;;
+        help|--help|-h) usage ;;
+        *) fail 2 "unknown subcommand: $sub" "Run 'devbox help'." ;;
+    esac
+}
+
+main "$@"

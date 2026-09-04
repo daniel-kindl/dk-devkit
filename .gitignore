@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# workstation - deny by default for anything that can hold a secret, and for
+# anything that is machine state or runtime state.
+# See docs/secrets.md and docs/not-tracked.md.
+#
+# Patterns are deliberately narrow enough to keep the repository's own files
+# (docs/secrets.md, bin/scan-secrets, manifests/skills.tsv) tracked.
+# ---------------------------------------------------------------------------
+
+# --- private keys and certificates ---
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+*.gpg
+*.asc
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# --- credential and authentication files ---
+.credentials.json
+credentials.json
+auth.json
+hosts.yml
+.netrc
+netrc
+.secrets
+secrets.json
+*.secret
+*.token
+.token
+token.json
+*.password
+.password-store/
+keyring*
+*.kdbx
+.gnupg/
+.pki/
+
+# --- agent client runtime state ---
+.claude.json
+.claude/
+.codex/
+.copilot/
+.orca/
+session-env/
+sessions/
+shell-snapshots/
+paste-cache/
+history.jsonl
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+installation_id
+models_cache.json
+.skill-lock.json
+known_marketplaces.json
+.devbox-orca-managed.json
+
+# --- generated and machine-specific state ---
+backups/
+generated/
+*.generated
+*.local
+repos.tsv
+third-party-skills.tsv
+
+# --- caches, logs, transient files ---
+.cache/
+cache/
+*.log
+*.tmp
+*.swp
+tmp/
+.tmp/
+*.pid
+*.sock
+*.socket
+
+# --- toolchain payloads, never vendored ---
+node_modules/
+.pnpm-store/
+.nvm/
+.vscode-server/
+.vscode-remote/
+AppImages/
+*.appimage
+*.AppImage
+
+# --- third-party skill payloads and repository worktrees ---
+/skills/
+.worktrees/
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db

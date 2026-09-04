@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# sync-agent-skills - refresh per-skill Codex symlinks from the canonical store.
+#
+# Canonical third-party skill store: ~/.agents/skills
+#   Claude discovers it through the directory symlink ~/.claude/skills -> ~/.agents/skills
+#   Codex needs one symlink per skill under ~/.codex/skills
+#
+# The script is idempotent. It never touches ~/.codex/skills/.system (Codex
+# native skills) and never deletes a real directory.
+set -euo pipefail
+
+STORE="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
+CLAUDE_LINK="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+CODEX_DIR="${CODEX_SKILLS_DIR:-$HOME/.codex/skills}"
+
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+log() { printf '%s\n' "$*"; }
+run() { if [ "$DRY_RUN" = 1 ]; then log "would: $*"; else "$@"; fi; }
+
+[ -d "$STORE" ] || { log "error: skill store not found: $STORE"; exit 1; }
+
+# 1. Claude: one directory symlink for the whole store.
+if [ -L "$CLAUDE_LINK" ]; then
+  current=$(readlink -f "$CLAUDE_LINK" || true)
+  if [ "$current" != "$(readlink -f "$STORE")" ]; then
+    log "warn: $CLAUDE_LINK points at $current, not $STORE (left unchanged)"
+  else
+    log "ok:   $CLAUDE_LINK -> $STORE"
+  fi
+elif [ -e "$CLAUDE_LINK" ]; then
+  log "warn: $CLAUDE_LINK exists and is not a symlink (left unchanged)"
+else
+  run mkdir -p "$(dirname "$CLAUDE_LINK")"
+  run ln -s "$STORE" "$CLAUDE_LINK"
+  log "link: $CLAUDE_LINK -> $STORE"
+fi
+
+# 2. Codex: one symlink per skill. .system stays untouched.
+run mkdir -p "$CODEX_DIR"
+added=0 kept=0 removed=0
+for skill_dir in "$STORE"/*/; do
+  [ -d "$skill_dir" ] || continue
+  name=$(basename "$skill_dir")
+  case "$name" in .*) continue ;; esac
+  target="$CODEX_DIR/$name"
+  if [ -L "$target" ]; then
+    if [ "$(readlink -f "$target" || true)" = "$(readlink -f "$skill_dir")" ]; then
+      kept=$((kept + 1)); continue
+    fi
+    run rm -f "$target"
+  elif [ -e "$target" ]; then
+    log "warn: $target is a real path, not a symlink (left unchanged)"
+    continue
+  fi
+  run ln -s "${skill_dir%/}" "$target"
+  log "link: $target -> ${skill_dir%/}"
+  added=$((added + 1))
+done
+
+# 3. Prune symlinks whose store entry is gone. Real dirs and .system survive.
+for target in "$CODEX_DIR"/*; do
+  [ -L "$target" ] || continue
+  name=$(basename "$target")
+  [ -d "$STORE/$name" ] && continue
+  run rm -f "$target"
+  log "prune: $target (no longer in $STORE)"
+  removed=$((removed + 1))
+done
+
+if [ -d "$CODEX_DIR/.system" ]; then
+  log "ok:   $CODEX_DIR/.system preserved ($(find "$CODEX_DIR/.system" -mindepth 1 -maxdepth 1 -type d | wc -l) native skills)"
+fi
+log "done: $added linked, $kept already current, $removed pruned"

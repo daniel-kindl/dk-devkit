@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Compatibility wrapper: superseded by 'devbox exec web-dev'.
+# Kept so older scripts / muscle memory keep working; the <box>-run pattern
+# has been replaced by declarative environments in ~/.config/devbox-router.
+set -euo pipefail
+router=${DEVBOX_BIN:-$HOME/.local/bin/devbox}
+[[ -x $router ]] || { printf 'web-dev-run: router not found: %s\n' "$router" >&2; exit 1; }
+exec "$router" exec web-dev -- "$@"

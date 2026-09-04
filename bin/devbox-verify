@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+#
+# devbox-verify - deterministic verification of the Orca -> agent -> Distrobox
+# routing setup. Safe to re-run: it only ever writes inside a scratch directory
+# and a throwaway copy of the router configuration.
+#
+#   devbox-verify           run everything
+#   devbox-verify --fast    skip the tests that actually launch claude/codex
+
+set -uo pipefail
+
+DEVBOX=${DEVBOX_BIN:-$HOME/.local/bin/devbox}
+SHIM_DIR=$HOME/.local/bin
+REAL_CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/devbox-router
+PROJECTS=$HOME/projects
+PRIMARY_REPO=$PROJECTS/dkkb
+FAST=0
+[[ ${1:-} == --fast ]] && FAST=1
+
+PASSED=0; FAILED=0; SKIPPED=0
+canon() { realpath -m -- "$1"; }
+
+t_pass() { printf '  PASS  %s\n' "$1"; PASSED=$(( PASSED + 1 )); }
+t_fail() {
+    local name=$1; shift
+    printf '  FAIL  %s\n' "$name"
+    local l; for l in "$@"; do printf '          %s\n' "$l"; done
+    FAILED=$(( FAILED + 1 ))
+}
+t_skip() { printf '  SKIP  %s  (%s)\n' "$1" "$2"; SKIPPED=$(( SKIPPED + 1 )); }
+
+expect_eq() {
+    local name=$1 want=$2 got=$3
+    [[ $want == "$got" ]] && { t_pass "$name"; return 0; }
+    t_fail "$name" "expected: [$want]" "actual:   [$got]"
+    return 1
+}
+expect_contains() {
+    local name=$1 needle=$2 hay=$3
+    [[ $hay == *"$needle"* ]] && { t_pass "$name"; return 0; }
+    t_fail "$name" "expected to contain: [$needle]" "actual: ${hay//$'\n'/ | }"
+    return 1
+}
+expect_rc() {
+    local name=$1 want=$2 got=$3 out=${4:-}
+    [[ $want == "$got" ]] && { t_pass "$name"; return 0; }
+    t_fail "$name" "expected exit $want, got $got" "output: ${out//$'\n'/ | }"
+    return 1
+}
+section() { printf '\n%s\n' "$1"; }
+
+# ------------------------------------------------------------------ scratch --
+
+SCRATCH=$PROJECTS/.devbox-verify.tmp
+CFG=""
+cleanup() {
+    [[ -n ${SCRATCH:-} && -d $SCRATCH ]] || return 0
+    chmod -R u+w -- "$SCRATCH" 2>/dev/null || true
+    rm -rf -- "$SCRATCH"
+}
+trap cleanup EXIT INT TERM
+
+[[ -x $DEVBOX ]] || { printf 'devbox-verify: router not found: %s\n' "$DEVBOX" >&2; exit 1; }
+[[ -d $PROJECTS ]] || { printf 'devbox-verify: %s does not exist\n' "$PROJECTS" >&2; exit 1; }
+
+rm -rf -- "$SCRATCH"
+mkdir -p -- "$SCRATCH"
+CFG=$SCRATCH/config
+cp -a -- "$REAL_CONFIG" "$CFG"
+rm -rf -- "$CFG/backups"
+
+# Throwaway environments used by the isolated tests.
+cat > "$CFG/environments.d/verify-alt.env" <<'EOF'
+description = throwaway environment for devbox-verify
+box = web-dev
+workspace_host = ~/projects
+workspace_guest = /workspace
+EOF
+cat > "$CFG/environments.d/verify-missing.env" <<'EOF'
+description = points at a container that does not exist
+box = devbox-verify-absent-container
+EOF
+
+mkrepo() {
+    local dir=$1; shift
+    mkdir -p -- "$dir"
+    git -C "$dir" init -q -b main
+    git -C "$dir" config user.email verify@localhost
+    git -C "$dir" config user.name  devbox-verify
+    local f
+    for f in "$@"; do printf '{}\n' > "$dir/$f"; done
+    git -C "$dir" add -A >/dev/null 2>&1
+    git -C "$dir" commit -q --allow-empty -m init >/dev/null 2>&1
+}
+
+dbx()      { "$DEVBOX" "$@"; }
+dbx_cfg()  { DEVBOX_CONFIG_HOME=$CFG "$DEVBOX" "$@"; }
+
+printf '== devbox routing verification ==\n'
+printf 'router      %s\n' "$DEVBOX"
+printf 'config      %s\n' "$REAL_CONFIG"
+printf 'scratch     %s\n' "$SCRATCH"
+
+# ------------------------------------------------ A: primary checkout ------
+
+section 'A. primary checkout resolves to web-dev'
+if [[ -d $PRIMARY_REPO/.git ]]; then
+    out=$(cd "$PRIMARY_REPO" && dbx resolve 2>&1); rc=$?
+    expect_rc 'A1 devbox resolve exits 0' 0 "$rc" "$out" && expect_eq 'A2 environment is web-dev' web-dev "$out"
+    out=$(cd "$PRIMARY_REPO" && dbx where --porcelain 2>&1)
+    expect_contains 'A3 source is the global assignment' $'source\tglobal' "$out"
+else
+    t_skip 'A primary checkout' "$PRIMARY_REPO is not a Git repository"
+fi
+
+# ------------------------------------------------ B/L: Orca worktree -------
+
+section 'B/L. Orca worktree inherits its primary checkout (git-common-dir)'
+WT=""
+if [[ -d $PROJECTS/.worktrees/dkkb ]]; then
+    while IFS= read -r d; do [[ -e $d/.git ]] && { WT=$d; break; }; done \
+        < <(find "$PROJECTS/.worktrees/dkkb" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+fi
+if [[ -n $WT ]]; then
+    out=$(cd "$WT" && dbx resolve 2>&1); rc=$?
+    expect_rc 'B1 worktree resolves' 0 "$rc" "$out" && expect_eq 'B2 worktree -> web-dev' web-dev "$out"
+    out=$(dbx where --porcelain "$WT" 2>&1)
+    expect_contains 'L1 repo_root is the primary checkout' $'repo_root\t'"$(canon "$PRIMARY_REPO")" "$out"
+    expect_contains 'L2 git_common_dir is the primary .git' $'git_common_dir\t'"$(canon "$PRIMARY_REPO")/.git" "$out"
+    expect_contains 'B3 no separate mapping needed (source=global)' $'source\tglobal' "$out"
+else
+    t_skip 'B/L Orca worktree' 'no Orca worktree of dkkb present'
+fi
+
+# synthetic worktree: proves inheritance without depending on Orca
+mkrepo "$SCRATCH/owner" package.json
+git -C "$SCRATCH/owner" worktree add -q -b verify-wt "$SCRATCH/wt" >/dev/null 2>&1
+dbx_cfg assign verify-alt "$SCRATCH/owner" >/dev/null 2>&1
+out=$(dbx_cfg where --porcelain "$SCRATCH/wt" 2>&1)
+expect_contains 'L3 synthetic worktree inherits owner assignment' $'env\tverify-alt' "$out"
+expect_contains 'L4 synthetic worktree repo_root is the owner' $'repo_root\t'"$(canon "$SCRATCH/owner")" "$out"
+
+# ------------------------------------------------ C: path translation ------
+
+section 'C. host path -> container path translation'
+expect_eq 'C1 ~/projects root'        '/workspace'          "$(dbx path web-dev "$PROJECTS")"
+expect_eq 'C2 repo under ~/projects'  '/workspace/dkkb'     "$(dbx path web-dev "$PROJECTS/dkkb")"
+expect_eq 'C3 path with spaces'       '/workspace/a b/c d'  "$(dbx path web-dev "$PROJECTS/a b/c d")"
+expect_eq 'C4 /home spelling'         '/workspace/dkkb'     "$(dbx path web-dev /home/dkindl/projects/dkkb)"
+expect_eq 'C5 /var/home spelling'     '/workspace/dkkb'     "$(dbx path web-dev /var/home/dkindl/projects/dkkb)"
+expect_eq 'C6 outside workspace'      "/run/host$(canon "$HOME")/.config" "$(dbx path web-dev "$HOME/.config")"
+
+# ------------------------------------------------ D: toolchain -------------
+
+section 'D. Node and pnpm resolve from web-dev in a dkkb worktree'
+DIR=${WT:-$PRIMARY_REPO}
+if [[ -d $DIR ]]; then
+    out=$(cd "$DIR" && dbx run -- bash -lc 'printf "%s|%s|%s" "$(node -v)" "$(pnpm -v)" "$(pwd)"' 2>&1); rc=$?
+    if (( rc == 0 )); then
+        expect_contains 'D1 Node comes from the box'  'v22.'          "$out"
+        expect_contains 'D2 pnpm is available'        '|11.'          "$out"
+        expect_contains 'D3 cwd was translated'       '|/workspace/'  "$out"
+    else
+        t_fail 'D devbox run in worktree' "exit $rc" "$out"
+    fi
+    out=$(cd "$DIR" && dbx run -- bash -lc 'command -v node' 2>&1)
+    expect_contains 'D4 node binary lives in the box home' 'distrobox-homes/web-dev' "$out"
+else
+    t_skip 'D toolchain' 'no dkkb checkout'
+fi
+
+# ------------------------------------------------ E/F: agent shims ---------
+
+section 'E/F. claude and codex resolve to the web-dev binaries'
+if [[ -d $DIR ]]; then
+    out=$(cd "$DIR" && dbx run -- bash -lc 'command -v claude' 2>&1)
+    expect_contains 'E1 claude binary in the box home' 'distrobox-homes/web-dev' "$out"
+    out=$(cd "$DIR" && dbx run -- bash -lc 'command -v codex' 2>&1)
+    expect_contains 'F1 codex binary in the box home'  'distrobox-homes/web-dev' "$out"
+
+    out=$(cd "$DIR" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/claude" --version 2>&1)
+    expect_contains 'E2 host claude shim routes to web-dev' $'env=web-dev' "$out"
+    expect_contains 'E3 host claude shim passes argv'       $'argv[0]=claude' "$out"
+    expect_contains 'E4 host claude shim translates cwd'    'guest_cwd=/workspace/' "$out"
+    out=$(cd "$DIR" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/codex" exec 'a b' 2>&1)
+    expect_contains 'F2 host codex shim routes to web-dev'  $'env=web-dev' "$out"
+    expect_contains 'F3 host codex shim preserves spaces'   $'argv[2]=a b' "$out"
+
+    if (( FAST )); then
+        t_skip 'E5/F4 real agent launch' '--fast'
+    else
+        out=$("$SHIM_DIR/claude" --version 2>&1 </dev/null); rc=$?
+        expect_rc 'E5 claude --version through the host shim' 0 "$rc" "$out"
+        out=$("$SHIM_DIR/codex" --version 2>&1 </dev/null); rc=$?
+        expect_rc 'F4 codex --version through the host shim' 0 "$rc" "$out"
+    fi
+else
+    t_skip 'E/F agent shims' 'no dkkb checkout'
+fi
+
+# ------------------------------------------------ G: outside a repo --------
+
+section 'G. agents outside a Git repository use the management environment'
+OUTSIDE=$SCRATCH/not-a-repo
+mkdir -p -- "$OUTSIDE"
+out=$(cd "$OUTSIDE" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/claude" 2>&1); rc=$?
+expect_rc 'G1 claude shim succeeds outside a repo' 0 "$rc" "$out"
+expect_contains 'G2 falls back to web-dev'    $'env=web-dev' "$out"
+expect_contains 'G3 source is the default'    $'source=default' "$out"
+out=$(cd "$OUTSIDE" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/codex" 2>&1)
+expect_contains 'G4 codex shim falls back too' $'env=web-dev' "$out"
+out=$(cd "$OUTSIDE" && dbx run -- true 2>&1); rc=$?
+expect_rc 'G5 devbox run still refuses outside a repo' 3 "$rc" "$out"
+
+# ------------------------------------------------ H: unknown repo ----------
+
+section 'H. unconfigured repository fails deterministically'
+mkrepo "$SCRATCH/unknown" README.md
+out=$(cd "$SCRATCH/unknown" && dbx_cfg run -- true 2>&1); rc=$?
+expect_rc 'H1 exits 4 (unresolved)' 4 "$rc" "$out"
+expect_contains 'H2 error names the repository' "$(canon "$SCRATCH/unknown")" "$out"
+expect_contains 'H3 error suggests devbox assign' 'devbox assign' "$out"
+
+mkrepo "$SCRATCH/rustish" Cargo.toml
+out=$(cd "$SCRATCH/rustish" && dbx_cfg run -- true 2>&1); rc=$?
+expect_rc 'H4 inferred-but-unconfigured env exits 5' 5 "$rc" "$out"
+expect_contains 'H5 error names the inferred environment' 'rust-dev' "$out"
+
+mkrepo "$SCRATCH/mixed" package.json Cargo.toml
+out=$(cd "$SCRATCH/mixed" && dbx_cfg run -- true 2>&1); rc=$?
+expect_rc 'H6 ambiguous repo exits 7' 7 "$rc" "$out"
+expect_contains 'H7 ambiguity lists candidates' 'web-dev' "$out"
+
+# ------------------------------------------------ I: missing container -----
+
+section 'I. missing Distrobox produces a clear error'
+out=$(dbx_cfg exec verify-missing -- true 2>&1); rc=$?
+expect_rc 'I1 exits 6' 6 "$rc" "$out"
+expect_contains 'I2 names the missing container' 'devbox-verify-absent-container' "$out"
+expect_contains 'I3 suggests distrobox create' 'distrobox create' "$out"
+out=$(dbx_cfg check verify-missing 2>&1); rc=$?
+expect_rc 'I4 devbox check reports it' 6 "$rc" "$out"
+out=$(dbx_cfg exec no-such-environment -- true 2>&1); rc=$?
+expect_rc 'I5 unknown environment exits 5' 5 "$rc" "$out"
+
+# ------------------------------------------------ J: spaces + argv ---------
+
+section 'J. paths with spaces and exact argv preservation'
+SPACED="$SCRATCH/re po/my project"
+mkrepo "$SPACED" package.json
+dbx_cfg assign web-dev "$SPACED" >/dev/null 2>&1
+out=$(cd "$SPACED" && dbx_cfg run -- bash -lc 'pwd' 2>&1); rc=$?
+expect_rc 'J1 runs from a path with spaces' 0 "$rc" "$out"
+expect_eq  'J2 guest cwd keeps the spaces' \
+    "/workspace/.devbox-verify.tmp/re po/my project" "$out"
+out=$(cd "$SPACED" && dbx_cfg run -- printf '[%s]' 'a b' "c'd" 'e"f' 'g$h' 'i*j' 'k;l' '$(id)' '`id`' '' 2>&1)
+expect_eq 'J3 argv survives verbatim' "[a b][c'd][e\"f][g\$h][i*j][k;l][\$(id)][\`id\`][]" "$out"
+out=$(cd "$SPACED" && dbx_cfg run -- bash -c 'printf "%s" "$1"' _ "$(printf 'x\ny')" 2>&1)
+expect_eq 'J4 newlines survive' "$(printf 'x\ny')" "$out"
+
+# ------------------------------------------------ K: precedence ------------
+
+section 'K. explicit configuration cannot be overridden by inference'
+mkrepo "$SCRATCH/nodeish" package.json pnpm-workspace.yaml
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg where --porcelain 2>&1)
+expect_contains 'K1 inference finds web-dev when unassigned' $'source\tinferred' "$out"
+dbx_cfg assign verify-alt "$SCRATCH/nodeish" >/dev/null 2>&1
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg where --porcelain 2>&1)
+expect_contains 'K2 explicit assignment wins over inference' $'env\tverify-alt' "$out"
+expect_contains 'K3 source is the global assignment'         $'source\tglobal' "$out"
+out=$(dbx_cfg assign web-dev "$SCRATCH/nodeish" 2>&1); rc=$?
+expect_rc 'K4 reassignment without --force is refused' 8 "$rc" "$out"
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg resolve 2>&1)
+expect_eq 'K5 refused reassignment changed nothing' verify-alt "$out"
+out=$(dbx_cfg assign web-dev "$SCRATCH/nodeish" --force 2>&1); rc=$?
+expect_rc 'K6 --force reassigns' 0 "$rc" "$out"
+expect_eq 'K7 assignment now web-dev' web-dev "$(cd "$SCRATCH/nodeish" && dbx_cfg resolve 2>&1)"
+
+printf 'verify-alt\n' > "$SCRATCH/nodeish/.devbox"
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg where --porcelain 2>&1)
+expect_contains 'K8 repo-local .devbox outranks the global assignment' $'source\trepo-file' "$out"
+rm -f -- "$SCRATCH/nodeish/.devbox"
+printf 'verify-alt\n' > "$SCRATCH/nodeish/.git/devbox-env"
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg where --porcelain 2>&1)
+expect_contains 'K9 per-clone devbox-env outranks the global assignment' $'source\tclone-local' "$out"
+rm -f -- "$SCRATCH/nodeish/.git/devbox-env"
+out=$(cd "$SCRATCH/nodeish" && DEVBOX_ENV=verify-alt dbx_cfg where --porcelain 2>&1)
+expect_contains 'K10 DEVBOX_ENV outranks everything' $'source\toverride' "$out"
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg unassign 2>&1); rc=$?
+expect_rc 'K11 unassign succeeds' 0 "$rc" "$out"
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg where --porcelain 2>&1)
+expect_contains 'K12 falls back to inference after unassign' $'source\tinferred' "$out"
+
+# ------------------------------------------------ M: recursion guard -------
+
+section 'M. recursion and PATH hygiene'
+out=$(DEVBOX_ACTIVE_ENV=web-dev "$DEVBOX" run -- true 2>&1); rc=$?
+expect_rc 'M1 router refuses to run inside an environment' 8 "$rc" "$out"
+out=$(DEVBOX_ACTIVE_ENV=web-dev "$SHIM_DIR/claude" --version 2>&1); rc=$?
+expect_rc 'M2 claude shim refuses inside an environment' 8 "$rc" "$out"
+out=$(DEVBOX_ACTIVE_ENV=web-dev "$SHIM_DIR/codex" --version 2>&1); rc=$?
+expect_rc 'M3 codex shim refuses inside an environment' 8 "$rc" "$out"
+out=$(dbx exec web-dev -- bash -lc 'case ":$PATH:" in *":'"$SHIM_DIR"':"*) echo LEAK ;; *) echo CLEAN ;; esac' 2>&1)
+expect_eq 'M4 host shim dir is stripped from the container PATH' CLEAN "$out"
+out=$(dbx exec web-dev -- bash -lc 'printf %s "${DEVBOX_ACTIVE_ENV:-unset}"' 2>&1)
+expect_eq 'M5 container is marked as an active environment' web-dev "$out"
+out=$(dbx exec web-dev -- definitely-not-a-real-command 2>&1); rc=$?
+expect_rc 'M6 missing in-container command exits 127' 127 "$rc" "$out"
+
+# ------------------------------------------------ N: compat wrappers -------
+
+section 'N. compatibility wrappers and management commands'
+if [[ -d $DIR ]]; then
+    out=$(cd "$DIR" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/devbox-run" true 2>&1)
+    expect_contains 'N1 devbox-run still routes' $'env=web-dev' "$out"
+fi
+out=$("$SHIM_DIR/web-dev-run" bash -lc 'pwd' 2>&1 </dev/null); rc=$?
+expect_rc 'N2 web-dev-run still works' 0 "$rc" "$out"
+out=$(dbx check 2>&1); rc=$?
+expect_rc 'N3 devbox check passes for real environments' 0 "$rc" "$out"
+out=$(dbx list 2>&1)
+expect_contains 'N4 devbox list shows web-dev' 'web-dev' "$out"
+out=$(dbx doctor "$PRIMARY_REPO" 2>&1); rc=$?
+expect_rc 'N5 devbox doctor runs' 0 "$rc" "$out"
+expect_contains 'N6 doctor reports in-box tools' 'distrobox-homes/web-dev' "$out"
+
+# ------------------------------------------------------------------ summary --
+
+printf '\n== summary ==\n'
+printf 'passed  %d\nfailed  %d\nskipped %d\n' "$PASSED" "$FAILED" "$SKIPPED"
+(( FAILED == 0 )) || exit 1

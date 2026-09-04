@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Orca bridge for the web-dev container.
+#
+# Orca runs on the Bazzite HOST. On Linux the host executable is named
+# 'orca-ide' so that it does not collide with the GNOME Orca screen reader.
+# Inside the container both 'orca' and 'orca-ide' point at this script, which
+# hands the call back to the host.
+set -euo pipefail
+
+host_home=${DISTROBOX_HOST_HOME:-/home/$USER}
+
+exec distrobox-host-exec "$host_home/.local/bin/orca-ide" "$@"

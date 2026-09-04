@@ -1,0 +1,21 @@
+# Automatic environment inference: <environment><TAB><file or glob at repo root>
+#
+# Only used when a repository has no explicit declaration or assignment.
+# If patterns for MORE THAN ONE environment match, routing fails on purpose
+# rather than picking arbitrarily. Patterns must not contain whitespace.
+web-dev	package.json
+web-dev	pnpm-workspace.yaml
+web-dev	.nvmrc
+web-dev	yarn.lock
+web-dev	package-lock.json
+web-dev	bun.lockb
+dotnet-dev	*.sln
+dotnet-dev	*.slnx
+dotnet-dev	*.csproj
+dotnet-dev	*.fsproj
+dotnet-dev	global.json
+rust-dev	Cargo.toml
+android-dev	settings.gradle
+android-dev	settings.gradle.kts
+android-dev	gradlew
+android-dev	local.properties

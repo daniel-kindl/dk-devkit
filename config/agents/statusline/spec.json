@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "description": "Canonical status line specification shared by Claude Code and Codex CLI. Each client renders the same fields in the same order. A client omits a field when the client does not supply the value.",
+  "separator": " | ",
+  "fields": [
+    {
+      "id": "model",
+      "render": "<model name> <reasoning effort>",
+      "claude": {
+        "source": "model.display_name, effort.level"
+      },
+      "codex": {
+        "item": "model-with-reasoning"
+      }
+    },
+    {
+      "id": "project",
+      "render": "<project name>",
+      "claude": {
+        "source": "basename(workspace.project_dir), fallback basename(workspace.current_dir)"
+      },
+      "codex": {
+        "item": "project-name"
+      }
+    },
+    {
+      "id": "branch",
+      "render": "<git branch>",
+      "claude": {
+        "source": "worktree.branch, fallback local `git rev-parse --abbrev-ref HEAD`"
+      },
+      "codex": {
+        "item": "git-branch"
+      }
+    },
+    {
+      "id": "pr",
+      "render": "PR #<n>",
+      "claude": {
+        "source": "pr.number"
+      },
+      "codex": {
+        "item": "pull-request-number"
+      }
+    },
+    {
+      "id": "context",
+      "render": "ctx <n>% left (<tokens> used)",
+      "claude": {
+        "source": "context_window.remaining_percentage, context_window.total_input_tokens + context_window.total_output_tokens"
+      },
+      "codex": {
+        "item": [
+          "context-remaining",
+          "used-tokens"
+        ],
+        "note": "Codex renders the token count as its own segment. Codex omits it when the count is zero."
+      }
+    },
+    {
+      "id": "five_hour",
+      "render": "5h <n>% left",
+      "claude": {
+        "source": "100 - rate_limits.five_hour.used_percentage"
+      },
+      "codex": {
+        "item": "five-hour-limit"
+      }
+    },
+    {
+      "id": "week",
+      "render": "week <n>% left",
+      "claude": {
+        "source": "100 - rate_limits.seven_day.used_percentage"
+      },
+      "codex": {
+        "item": "weekly-limit"
+      }
+    }
+  ],
+  "rules": [
+    "No repository name, branch name, PR number, model name, or usage value is hard-coded.",
+    "No field makes a network call. Every value comes from the client payload or from a local git command.",
+    "A field that has no value is dropped together with its separator."
+  ],
+  "clients": {
+    "claude": {
+      "mechanism": "settings.json statusLine command",
+      "renderer": "~/.agents/statusline/claude-render.sh",
+      "notes": "The renderer also forwards the payload to the Orca status line hook so that the Orca integration keeps working."
+    },
+    "codex": {
+      "mechanism": "config.toml [tui] status_line item list",
+      "renderer": "native",
+      "notes": "Codex does not run an arbitrary script for the status line. It renders a fixed item list, so the item ids above are used in the same order. The separator and the field labels are fixed by Codex."
+    }
+  },
+  "colors": {
+    "enabled": true,
+    "claude": {
+      "mechanism": "ANSI escape codes emitted by the renderer. NO_COLOR turns them off.",
+      "model": "bold cyan",
+      "project": "bright blue",
+      "branch": "magenta",
+      "pr": "yellow",
+      "labels": "dim",
+      "gauges": "green above 40% left, yellow at 16-40% left, red at 15% left or below"
+    },
+    "codex": {
+      "mechanism": "config.toml [tui] status_line_use_colors = true",
+      "note": "Codex takes the colors from the active /theme. Per-field colors are not configurable."
+    }
+  }
+}

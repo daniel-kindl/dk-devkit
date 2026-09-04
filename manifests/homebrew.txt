@@ -1,0 +1,26 @@
+# Homebrew packages that are intentionally managed on the Bazzite host.
+#
+# Format:  <type> <name>
+#   tap      a Homebrew tap to add
+#   trust    a tap that must be trusted before a cask from it can be installed
+#   formula  a CLI formula
+#   cask     a desktop/CLI cask
+#
+# Only top-level intent is listed. Dependencies (openssl@3, pcre2, libgit2, ...)
+# are resolved by Homebrew and are deliberately absent.
+#
+# Bazzite owns the base system. Nothing that ships in the Bazzite image belongs
+# here: git and jq, for example, are already in the base image.
+
+tap      ublue-os/tap
+tap      valkyrie00/bbrew
+trust    ublue-os/tap
+
+formula  bat
+formula  fd
+formula  gh
+formula  ripgrep
+formula  yq
+formula  valkyrie00/bbrew/bbrew
+
+cask     visual-studio-code-linux

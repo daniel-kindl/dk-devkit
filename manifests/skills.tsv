@@ -1,0 +1,61 @@
+# Third-party agent skills. This is the source of truth for bin/install-skills.
+#
+# Columns (tab separated):
+#   name    directory name under ~/.agents/skills
+#   source  GitHub repository "<owner>/<repo>"
+#   ref     branch, tag or commit to check out ("main", "master", or a SHA to pin)
+#   path    directory inside the repository that holds SKILL.md ("." = repo root)
+#
+# Skill CONTENT is deliberately not vendored here. bin/install-skills fetches
+# each repository at the given ref and copies only the skill directory into
+# ~/.agents/skills/<name>, then runs bin/sync-agent-skills to refresh the
+# per-skill Codex symlinks.
+#
+# Pin a row by replacing its ref with a commit SHA. bin/install-skills records
+# the resolved SHA of every install in ~/.agents/third-party-skills.tsv, which
+# is generated state and is not tracked.
+#
+# name	source	ref	path
+asd-ste100	danyuchn/asd-ste100-skill	master	.
+ask-matt	mattpocock/skills	main	skills/engineering/ask-matt
+claude-handoff	mattpocock/skills	main	skills/in-progress/claude-handoff
+codebase-design	mattpocock/skills	main	skills/engineering/codebase-design
+code-review	mattpocock/skills	main	skills/engineering/code-review
+computer-use	stablyai/orca	main	skills/computer-use
+diagnosing-bugs	mattpocock/skills	main	skills/engineering/diagnosing-bugs
+domain-modeling	mattpocock/skills	main	skills/engineering/domain-modeling
+find-skills	vercel-labs/skills	main	skills/find-skills
+git-guardrails-claude-code	mattpocock/skills	main	skills/misc/git-guardrails-claude-code
+grilling	mattpocock/skills	main	skills/productivity/grilling
+grill-me	mattpocock/skills	main	skills/productivity/grill-me
+grill-with-docs	mattpocock/skills	main	skills/engineering/grill-with-docs
+handoff	mattpocock/skills	main	skills/productivity/handoff
+humanizer	blader/humanizer	main	.
+implement	mattpocock/skills	main	skills/engineering/implement
+implement-spec	mattpocock/skills	main	skills/in-progress/implement-spec
+improve-codebase-architecture	mattpocock/skills	main	skills/engineering/improve-codebase-architecture
+loop-me	mattpocock/skills	main	skills/in-progress/loop-me
+migrate-to-shoehorn	mattpocock/skills	main	skills/misc/migrate-to-shoehorn
+orca-cli	stablyai/orca	main	skills/orca-cli
+orchestration	stablyai/orca	main	skills/orchestration
+prototype	mattpocock/skills	main	skills/engineering/prototype
+research	mattpocock/skills	main	skills/engineering/research
+resolving-merge-conflicts	mattpocock/skills	main	skills/engineering/resolving-merge-conflicts
+retro	mattpocock/skills	main	skills/in-progress/retro
+scaffold-exercises	mattpocock/skills	main	skills/misc/scaffold-exercises
+setup-matt-pocock-skills	mattpocock/skills	main	skills/engineering/setup-matt-pocock-skills
+setup-pre-commit	mattpocock/skills	main	skills/misc/setup-pre-commit
+setup-ts-deep-modules	mattpocock/skills	main	skills/in-progress/setup-ts-deep-modules
+tdd	mattpocock/skills	main	skills/engineering/tdd
+teach	mattpocock/skills	main	skills/productivity/teach
+to-questionnaire	mattpocock/skills	main	skills/productivity/to-questionnaire
+to-spec	mattpocock/skills	main	skills/engineering/to-spec
+to-tickets	mattpocock/skills	main	skills/engineering/to-tickets
+triage	mattpocock/skills	main	skills/engineering/triage
+wait-what	mattpocock/skills	main	skills/productivity/wait-what
+wayfinder	mattpocock/skills	main	skills/engineering/wayfinder
+wizard	mattpocock/skills	main	skills/engineering/wizard
+writing-beats	mattpocock/skills	main	skills/in-progress/writing-beats
+writing-for-agents	mattpocock/skills	main	skills/productivity/writing-for-agents
+writing-fragments	mattpocock/skills	main	skills/in-progress/writing-fragments
+writing-shape	mattpocock/skills	main	skills/in-progress/writing-shape

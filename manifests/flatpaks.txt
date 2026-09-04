@@ -1,0 +1,22 @@
+# Flatpak applications that are intentionally managed on the Bazzite host.
+# One application ID per line. All come from the flathub remote.
+#
+# Bazzite preinstalls its own Flatpaks. This list is the set that this
+# workstation adds on purpose, so a fresh install gets the same applications.
+
+ch.protonmail.protonmail-bridge
+com.bitwarden.desktop
+com.brave.Browser
+com.github.Matoking.protontricks
+com.github.tchx84.Flatseal
+com.vysp3r.ProtonPlus
+io.github.DenysMb.Kontainer
+io.github.flattool.Warehouse
+it.mijorus.gearlever
+org.gnome.Firmware
+org.kde.gwenview
+org.kde.kcalc
+org.kde.okular
+org.localsend.localsend_app
+org.mozilla.thunderbird
+org.videolan.VLC
