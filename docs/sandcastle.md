@@ -609,11 +609,46 @@ is a larger exposure than an independent review is worth.
 | `--check CMD` | a deterministic check. A newline in the argument is refused, not split into two checks |
 | `--max-fix-rounds N` | how many times the sandbox may re-run the implementer against its own failing checks, inside one sandbox. `AGENTBOX_MAX_FIX_ROUNDS` sets the default. A run with no `--check` sets it to 0, because there is no evidence to feed back |
 | `--continue` | work on an existing `agent/` branch, based on its own tip |
+| `--agent-output MODE` | `terminal` (the default) renders Sandcastle's interactive terminal UI on stdout. `progress` writes the agent log to a file inside the disposable clone, forwards what the agent said as plain lines, and publishes the progress channel below. A caller that CAPTURES stdout wants `progress`: an interactive UI in a pipe is control codes, not evidence, and it carries no iteration number |
 | `INT` and `TERM` | remove the control plane, remove this run's sandboxes, remove the credential file, release the lock |
 | `agentbox clean` | sweeps stray containers, stale locks, and every run directory no live lock names |
 
 `--max-iterations` bounds the number of agent turns; `--timeout` bounds how
 long they may take in total.
+
+### The progress channel
+
+A caller needs to know which phase a run is in, and it must not learn that by
+reading prose. Every lifecycle transition is published as one line on stdout:
+
+```text
+===AGENTBOX_EVENT=== {"event":"implement.start","agent":"claude","maxIterations":4}
+===AGENTBOX_EVENT=== {"event":"agent.progress","phase":"implement","iteration":2,"maxIterations":4}
+===AGENTBOX_EVENT=== {"event":"check.start","command":"pnpm check","index":1,"total":1}
+===AGENTBOX_EVENT=== {"event":"review.skipped","reason":"no codex credential"}
+===AGENTBOX_EVENT=== {"event":"import.done","commits":2,"tip":"..."}
+```
+
+The prefix is exact and the payload is a JSON document, so a reader matches a
+prefix and parses a document. It never matches a pattern against prose.
+
+That distinction is the point. The events are emitted by `orchestrate.mjs` and
+by `bin/agentbox`, at points those files reach, and they carry only what those
+files know. A model that printed the same prefix in the middle of a sentence
+produces no event, because a line must START with the prefix. Progress can
+therefore never be steered by what a model chooses to say about itself.
+
+`orchestrate.mjs` publishes the phases inside the runner: the sandbox, the
+isolation probes, the implementer, its iterations, each check, each repair
+round, the reviewer, and the clone integrity result. `bin/agentbox` publishes
+the host half: the repository comparison and the import. `agent.progress`
+carries the real iteration number, which only exists in log-to-file mode, which
+is why `--agent-output progress` selects that mode.
+
+The channel is additive. It changes nothing an existing reader depends on:
+`===AGENTBOX_SUMMARY_JSON===` and every exit code are what they were.
+`bin/agentqueue` renders these events as its compact stage view; see
+[agentqueue.md](agentqueue.md).
 
 ### The control plane does not read the terminal
 
@@ -704,6 +739,13 @@ agentbox pipeline \
   --check 'npm run typecheck' \
   --max-fix-rounds 2 \
   --timeout 1800
+
+agentbox pipeline \
+  --repo ~/projects/example \
+  --branch agent/example \
+  --prompt-file ./prompt.md \
+  --check 'npm test' \
+  --agent-output progress          # structured events, for a caller that captures stdout
 
 agentbox pipeline \
   --repo ~/projects/example \

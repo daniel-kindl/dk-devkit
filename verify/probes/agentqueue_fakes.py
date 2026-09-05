@@ -294,7 +294,10 @@ class FakeRunner:
     """A scripted agentbox.
 
     ``script`` holds one entry per call. Each entry may set the exit code, the
-    summary, and the branch tip the run leaves behind.
+    summary, the branch tip the run leaves behind, the structured progress
+    events the run publishes, and the raw lines it prints. The last two make
+    the presentation layer testable without a model, a container or a clock:
+    a fake event stream proves the display exactly as a real one would.
     """
 
     def __init__(self, git: FakeGit, script=None):
@@ -302,15 +305,22 @@ class FakeRunner:
         self.script = list(script or [])
         self.calls: List[dict] = []
         self.dry_run = False
+        self.agent_output = "progress"
 
     def run(self, repo, branch, prompt_file, base_ref, continuation=False,
-            log_name="agentbox"):
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
         step = self.script.pop(0) if self.script else {}
         self.calls.append(
             {"branch": branch, "continuation": continuation,
              "prompt": _read(prompt_file),
-             "log_name": log_name}
+             "log_name": log_name, "log_dir": log_dir}
         )
+        for item in step.get("events", []):
+            if on_event is not None:
+                on_event(item)
+        for line in step.get("raw", []):
+            if on_raw is not None:
+                on_raw(line)
         code = step.get("exit", 0)
         output = step.get("output", "")
         summary = step.get("summary")
@@ -335,6 +345,7 @@ class FakeRunner:
             summary=summary,
             duration_seconds=1,
             command=["agentbox"],
+            log_path=os.path.join(log_dir or "/fake/logs", f"{log_name}.log"),
         )
 
 

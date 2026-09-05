@@ -42,8 +42,21 @@ must never get. Read [docs/agentqueue.md](docs/agentqueue.md).
 
 ```bash
 cd ~/projects/dkkb
-agentqueue plan  --repo .    # what it would do, changes nothing
-agentqueue drain --repo .    # do it
+agentqueue plan  --repo .              # what it would do, changes nothing
+agentqueue drain --repo .              # do it
+agentqueue drain --repo . --verbose    # more detail
+agentqueue drain --repo . --debug      # the raw agentbox stream
+agentqueue drain --repo . --quiet      # failures and the summary only
+```
+
+A drain prints a compact stage view: which issue, which stage, how long, and
+what happened. The full transcript of every run is kept under
+`~/.local/share/agentqueue/runs/`, so a quiet terminal costs no evidence.
+
+```text
+[1/2] #86 Implement entry-selection module
+  ✓ CLAIM            agent/issue-86-implement-entry-selection-module
+  ● IMPLEMENT        3m 42s · Claude · iteration 2/4
 ```
 
 You type that on the host. The coordinator runs inside `web-dev`, where `gh`

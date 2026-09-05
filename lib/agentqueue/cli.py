@@ -7,6 +7,17 @@
     agentqueue policy --repo PATH             the resolved policy and its source
     agentqueue init   --repo PATH             write a policy file to start from
 
+The output level of a drain, one at a time:
+
+    (none)      the compact stage view: one line per stage of one issue
+    --verbose   the stage view and the coordinator's own notes
+    --debug     everything, including the raw agentbox stream
+    --quiet     failures, human intervention and the final summary only
+    --json      one JSON object per event, for a machine
+
+The level changes what reaches the terminal and nothing else. Every line the
+display received is appended to the run log, so no level loses evidence.
+
 Exit codes, stable, scripts may depend on them:
 
     0   the queue drained, or it is empty, or what is left is legitimately
@@ -28,11 +39,11 @@ import sys
 import time
 from typing import List, Optional
 
-from . import VERSION, policy as policy_mod, report as report_mod
+from . import VERSION, policy as policy_mod, report as report_mod, ui as ui_mod
 from .coordinator import Coordinator
 from .ghapi import GitHub, GhTransport
 from .gitops import Git, GitError
-from .model import Outcome, Runnability
+from .model import Runnability
 from .runner import AgentboxRunner
 
 EXIT_OK = 0
@@ -41,11 +52,6 @@ EXIT_USAGE = 2
 EXIT_POLICY = 3
 EXIT_SECURITY = 4
 EXIT_NOT_READY = 5
-
-
-def _emit(line: str) -> None:
-    sys.stdout.write(line + "\n")
-    sys.stdout.flush()
 
 
 def _repo_root(path: str) -> str:
@@ -81,6 +87,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"agentqueue {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def output(p):
+        """The output level. One level at a time, and compact by default.
+
+        The levels differ only in what reaches the terminal. The run log holds
+        the whole transcript at every level, so a quiet run loses no evidence.
+        """
+        level = p.add_mutually_exclusive_group()
+        level.add_argument("--quiet", "-q", action="store_true",
+                           help="failures, human intervention and the summary only")
+        level.add_argument("--verbose", "-v", action="store_true",
+                           help="the stage view and the coordinator's own notes")
+        level.add_argument("--debug", action="store_true",
+                           help="everything, including the raw agentbox stream")
+        p.add_argument("--json", dest="json_out", action="store_true",
+                       help="one JSON object per event, for a machine")
+
     def common(p):
         p.add_argument("--repo", required=True, help="the repository to work on")
         p.add_argument("--config", help="an explicit policy file")
@@ -100,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="process one wave, then stop")
     drain.add_argument("--dry-run", action="store_true",
                        help="print the plan and change nothing")
+    output(drain)
 
     plan = sub.add_parser("plan", help="print the plan and change nothing")
     common(plan)
@@ -256,10 +279,95 @@ def cmd_init(args, install_root: str) -> int:
     return EXIT_OK
 
 
+def _output_level(args) -> str:
+    """One of the four levels, from the flags. Compact is the default."""
+    if getattr(args, "debug", False):
+        return "debug"
+    if getattr(args, "verbose", False):
+        return "verbose"
+    if getattr(args, "quiet", False):
+        return "quiet"
+    return "compact"
+
+
+class _NoRunLog:
+    """The transcript of a dry run. A dry run writes nothing, here included."""
+
+    path = ""
+
+    def write(self, line: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _RunLog:
+    """The whole transcript of one drain, at every output level.
+
+    Compact output is a display choice. The evidence is not: every line the
+    display received, including the ones it did not print, is appended here.
+    The file is readable by its owner only, and it lives beside the per-run
+    agentbox logs in the state directory the coordinator already owns.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self._handle = None
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            self._handle = os.fdopen(fd, "a", encoding="utf-8")
+        except OSError:
+            self._handle = None
+
+    def write(self, line: str) -> None:
+        if self._handle is None:
+            return
+        try:
+            self._handle.write(line.rstrip("\n") + "\n")
+            self._handle.flush()
+        except (OSError, ValueError):
+            self._handle = None
+
+    def close(self) -> None:
+        if self._handle is not None:
+            try:
+                self._handle.close()
+            except (OSError, ValueError):
+                pass
+            self._handle = None
+
+
+def _build_ui(args, pol, run_log):
+    """The renderer for this run.
+
+    A machine asks for --json and gets one object per event. A human gets the
+    stage view, and the stage view asks the stream whether it is a terminal.
+    ``AGENTQUEUE_ASCII=1`` forces the plain markers for a terminal that cannot
+    show the others.
+    """
+    if getattr(args, "json_out", False):
+        return ui_mod.JsonUi(sys.stdout, transcript=run_log.write)
+    ascii_only = os.environ.get("AGENTQUEUE_ASCII", "") == "1"
+    return ui_mod.StageUi(
+        sys.stdout,
+        level=_output_level(args),
+        unicode=False if ascii_only else None,
+        transcript=run_log.write,
+        multi=pol.maxParallel > 1,
+    )
+
+
 def cmd_drain(args, install_root: str, dry_run: bool) -> int:
     repo_root, git, owner, name, pol = _load(args, install_root)
     state_dir = _state_dir()
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    run_dir = os.path.join(state_dir, "runs", run_id)
+    run_log = _NoRunLog() if dry_run else _RunLog(
+        os.path.join(run_dir, "queue.log")
+    )
+    ui = _build_ui(args, pol, run_log)
 
     github = GitHub(owner, name, dry_run=dry_run)
     git.dry_run = dry_run
@@ -267,24 +375,35 @@ def cmd_drain(args, install_root: str, dry_run: bool) -> int:
     runner = AgentboxRunner(
         os.path.join(install_root, "bin", "agentbox"),
         pol,
-        os.path.join(state_dir, "runs", run_id),
+        run_dir,
         dry_run=dry_run,
-        emit=_emit,
+        emit=lambda line: ui.note(line, level="verbose"),
+        # --debug wants the child exactly as it is, terminal UI included.
+        # Every other level wants the structured progress channel.
+        agent_output="terminal" if _output_level(args) == "debug" else "progress",
     )
     coordinator = Coordinator(
         github, git, pol, runner, state_dir,
         os.path.join(install_root, "bin", "scan-secrets"),
-        emit=_emit, dry_run=dry_run, run_id=run_id,
+        emit=lambda line: ui.note(line, level="verbose"), dry_run=dry_run,
+        run_id=run_id, run_log=run_log.path,
         agent_identities=_agent_identities(install_root),
+        ui=ui,
     )
 
-    print(f"agentqueue {VERSION}")
-    print(f"  repository   {owner}/{name}  ({repo_root})")
-    print(f"  base         {pol.baseBranch}")
-    print(f"  label        {pol.issueLabel}")
-    print(f"  autoMerge    {pol.autoMerge}   mergeMethod {pol.mergeMethod}")
-    print(f"  maxParallel  {pol.maxParallel}   maxRetries {pol.maxRetries}")
-    print(f"  run id       {run_id}")
+    for line in (
+        f"agentqueue {VERSION}",
+        f"  repository   {owner}/{name}  ({repo_root})",
+        f"  base         {pol.baseBranch}",
+        f"  label        {pol.issueLabel}",
+        f"  autoMerge    {pol.autoMerge}   mergeMethod {pol.mergeMethod}",
+        f"  maxParallel  {pol.maxParallel}   maxRetries {pol.maxRetries}",
+        f"  run id       {run_id}",
+    ):
+        run_log.write(line)
+        if dry_run or _output_level(args) in ("verbose", "debug"):
+            if not getattr(args, "json_out", False):
+                print(line)
     if dry_run:
         print("  DRY RUN - nothing is changed, on GitHub or on disk\n")
         verdicts = coordinator.scan()
@@ -303,11 +422,16 @@ def cmd_drain(args, install_root: str, dry_run: bool) -> int:
               f"{len(github.mutations) + len(git.mutations)} (must be 0)")
         return EXIT_OK if not github.mutations and not git.mutations else EXIT_DEFECT
 
-    print()
     git.fetch()
-    report = coordinator.drain(once=args.once)
-    for line in report_mod.render_summary(report, pol):
-        print(line)
+    ui.start()
+    try:
+        report = coordinator.drain(once=args.once)
+    finally:
+        # The heartbeat thread and the active line go away first, so an
+        # interrupt leaves the terminal on a line of its own.
+        ui.close()
+    ui.summary(report, pol, extra_lines=report_mod.render_summary(report, pol))
+    run_log.close()
     if report.stopped_for_security:
         return EXIT_SECURITY
     return EXIT_OK

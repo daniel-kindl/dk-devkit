@@ -94,10 +94,14 @@ class CommittingRunner(fakes.FakeRunner):
         self.content = content
 
     def run(self, repo, branch, prompt_file, base_ref, continuation=False,
-            log_name="agentbox"):
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
         step = self.script.pop(0) if self.script else {}
         self.calls.append({"branch": branch, "continuation": continuation,
-                           "prompt": fakes._read(prompt_file), "log_name": log_name})
+                           "prompt": fakes._read(prompt_file), "log_name": log_name,
+                           "log_dir": log_dir})
+        for item in step.get("events", []):
+            if on_event is not None:
+                on_event(item)
         if step.get("exit", 0) != 0:
             from agentqueue.model import classify_agentbox_exit
             from agentqueue.runner import AgentRun

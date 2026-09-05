@@ -410,6 +410,10 @@ Options for `drain`:
 --no-auto-merge       stop at a green pull request
 --once                process one wave, then stop
 --dry-run             print the plan and change nothing
+--quiet, -q           failures, human intervention and the summary only
+--verbose, -v         the stage view and the coordinator's own notes
+--debug               everything, including the raw agentbox stream
+--json                one JSON object per event, for a machine
 ```
 
 ### The dry run
@@ -431,6 +435,236 @@ change durable state therefore fails loudly instead of changing it. The plan
 ends with the count of attempted mutations, and a count above zero is a
 coordinator defect. `verify.sh` module 8b proves statically that no write
 method skipped the guard.
+
+## What the terminal shows
+
+A drain runs for hours with nobody watching it. The default output is
+therefore a **compact stage view**: one line per stage of one issue, and
+nothing else.
+
+```text
+agentqueue 0.2.0
+daniel-kindl/dkkb · 2 runnable issues · sequential
+
+[1/2] #86 Implement entry-selection module
+  ✓ CLAIM            agent/issue-86-implement-entry-selection-module
+  ● IMPLEMENT        3m 42s · Claude · iteration 2/4
+```
+
+The line with `●` is the stage that is running now. When it finishes it
+becomes a line with `✓`, and the next stage takes its place:
+
+```text
+[1/2] #86 Implement entry-selection module
+  ✓ CLAIM            agent/issue-86-implement-entry-selection-module
+  ✓ IMPLEMENT        7m 18s · 1 commit
+  ✓ CHECK            24s · 1 check passed
+  - REVIEW           skipped · no Codex credential
+  ✓ IMPORT           1 commit
+  ✓ PUSH             agent/issue-86-implement-entry-selection-module
+  ✓ PR               #90
+  ● CI               1m 08s · pending: Quality
+```
+
+The run ends with one line per issue and the counts:
+
+```text
+agentqueue complete
+
+  ✓ #86 → PR #90 merged
+  ✓ #87 → PR #91 merged
+
+2 completed · 0 failed · 0 human intervention · 24m 24s
+```
+
+### The stages
+
+| Stage | What it means |
+| --- | --- |
+| `PLAN` | the backlog was read and the order was decided |
+| `CLAIM` | this coordinator owns the issue |
+| `IMPLEMENT` | an agent is working inside the sandbox |
+| `CHECK` | the deterministic checks are running inside the sandbox |
+| `REVIEW` | the independent reviewer is running |
+| `IMPORT` | the validated commits entered the real repository |
+| `PUSH` | the branch reached the remote |
+| `PR` | the pull request was opened or adopted |
+| `CI` | the GitHub checks of the pushed commit |
+| `MERGE` | the merge gates, and the merge |
+| `DONE` | the issue is finished, one way or another |
+
+Not every issue passes through every stage. An adopted branch runs no
+implementer. A repository with no Codex credential runs no reviewer. A policy
+with `autoMerge` off stops at `PR`. A stage that did not happen is **not
+printed**, and a stage that was deliberately not run is printed as skipped
+with the reason:
+
+```text
+  - REVIEW           skipped · no Codex credential
+```
+
+The queue never draws a stage it did not reach, and it never reports a
+reviewer that did not run.
+
+### The markers
+
+| Marker | Meaning |
+| --- | --- |
+| `●` | running now |
+| `✓` | finished, and it passed |
+| `-` | deliberately not run, with the reason |
+| `✗` | failed |
+| `!` | a human has to look at it |
+| `⚠` | a security or integrity failure; the queue stopped |
+
+Set `AGENTQUEUE_ASCII=1` for a terminal that cannot show these. The markers
+then become `>`, `+`, `-`, `x`, `!` and `*`.
+
+### No percentages
+
+A stage line carries **deterministic** progress and nothing else: the issue
+`1/2`, the agent iteration `2/4`, the repair round `1/2`, the number of
+commits, the state of the GitHub checks and the elapsed time. There is no
+percentage anywhere, because neither an agent turn nor a CI run has a
+predictable length, and a number that looks like a prediction and is not one
+is worse than no number.
+
+The progress comes from the coordinator's own state and from the structured
+events `agentbox` publishes. It never comes from reading what a model wrote.
+See "The progress channel" in `docs/sandcastle.md`.
+
+### The heartbeat
+
+`IMPLEMENT`, `CHECK`, `REVIEW` and `CI` can take several minutes. The running
+line refreshes so the terminal never looks hung.
+
+On an interactive terminal the active line is repainted about once a second,
+in place, so the clock advances without the screen scrolling. On a redirected
+stream a **new** line is appended once a minute:
+
+```text
+  ● IMPLEMENT        4m 00s · Claude · iteration 2/4
+  ● IMPLEMENT        5m 00s · Claude · iteration 2/4
+```
+
+A real transition does not wait for the heartbeat. A new iteration, a new
+check or a new CI state prints at once.
+
+### A terminal, a file and a pipe
+
+When stdout is an interactive terminal, the active line is repainted in place.
+When stdout is a file, a pipe or a CI log, it is not: every line is written
+once, in order, and **no terminal control sequence is ever written**. The two
+renderings carry the same lines. The interactive one only overwrites the line
+it is about to replace.
+
+Several issues at a time cannot share one active line. When `maxParallel` is
+above 1 the view becomes purely line-oriented and every line names its issue:
+
+```text
+  ✓ #86 IMPLEMENT        7m 18s · 1 commit
+  ✓ #87 CLAIM            agent/issue-87-...
+```
+
+### When something fails
+
+A failure is different from progress, so it is printed differently: what
+failed, a **bounded** tail of what it printed, where the whole output is, and
+what happens next.
+
+```text
+[1/2] #86
+  ✗ CHECK            pnpm check
+
+  Last output:
+    src/lib/entries.test.ts:42
+    Expected 3 entries, received 2
+    log: ~/.local/share/agentqueue/runs/20260905T101500Z-i86/implement.log
+
+  → retry 1/2
+```
+
+At most twelve lines are shown, and each one is bounded. The whole output is
+in the log the block names.
+
+When the retry budget runs out, or when a gate refuses, the issue ends with a
+line a human can act on:
+
+```text
+  ! NEEDS_HUMAN      agentbox exited 8
+```
+
+A **security or integrity** failure is not a failing test, and it does not look
+like one. It carries its own marker, it says what it is, and it stops the whole
+queue:
+
+```text
+  ⚠ SECURITY         the branch diff matches a credential pattern; nothing was pushed
+    a security or integrity failure, not a failing test
+
+agentqueue stopped
+
+  ⚠ THE QUEUE STOPPED: #86: the branch diff matches a credential pattern ...
+  This is a security or integrity failure, not a failing test. Read the run
+  log before starting another drain.
+```
+
+The exit code is 4, as it always was.
+
+### The four levels, and JSON
+
+```bash
+agentqueue drain --repo .             # compact stage output, the default
+agentqueue drain --repo . --verbose   # the stages and the coordinator's notes
+agentqueue drain --repo . --debug     # everything, raw agentbox stream included
+agentqueue drain --repo . --quiet     # failures and the final summary only
+agentqueue drain --repo . --json      # one JSON object per event
+```
+
+| Level | What reaches the terminal |
+| --- | --- |
+| default | the stage view, the failures and the summary |
+| `--verbose` | the above, the coordinator's notes, and the long summary |
+| `--debug` | the above and every line `agentbox` wrote |
+| `--quiet` | failures, human intervention and the summary |
+| `--json` | one JSON object per event, and nothing else |
+
+`--quiet` hides progress, never a failure. A failing check, a `NEEDS_HUMAN`
+outcome and a security stop are printed at every level.
+
+`--debug` also changes what it asks `agentbox` for. Every other level asks for
+`--agent-output progress`, which publishes structured events and a
+line-oriented agent stream. `--debug` asks for `--agent-output terminal`, which
+is Sandcastle's own interactive terminal UI, exactly as `bin/agentbox` prints
+it when a human runs it directly. That is the escape hatch for diagnosing
+`agentbox`, Sandcastle, Podman or an isolation probe.
+
+`plan`, `doctor`, `policy` and `init` are unchanged. They print what they
+always printed.
+
+### Where the evidence is
+
+Compact output is a display choice. Nothing is lost.
+
+```text
+~/.local/share/agentqueue/runs/<run-id>/queue.log        the whole transcript
+~/.local/share/agentqueue/runs/<run-id>-i<n>/            one directory per issue
+~/.local/share/agentqueue/runs/<run-id>-i<n>/implement.md   the prompt
+~/.local/share/agentqueue/runs/<run-id>-i<n>/implement.log  the agentbox stream
+~/.local/share/agentqueue/runs/<run-id>-i<n>/repair-1.log   each repair run
+```
+
+`queue.log` holds every line the display received, at every level, including
+the ones the level did not print. The per-issue `*.log` files hold the raw
+`agentbox` stream, written **as the child speaks**, so a run that was
+interrupted still leaves its evidence behind. Every one of these files is
+created mode 600.
+
+`AGENTQUEUE_STATE_DIR` moves the whole directory.
+
+A run log holds whatever `agentbox` printed. `agentbox` redacts its own output
+before it prints it, and the coordinator adds nothing: it never reads a token,
+and no credential value is ever an argument. See `docs/secrets.md`.
 
 ## Exit codes
 
@@ -531,6 +765,10 @@ directory.
 
 A security failure sets a stop flag. Runs that are already inside `agentbox`
 finish that call, and nothing is pushed or merged afterwards.
+
+Two issues at a time cannot share one active line, so the output changes shape:
+the compact view becomes purely line-oriented, every line names its issue, and
+the heartbeat is off. See "A terminal, a file and a pipe".
 
 ## Honest limits
 
