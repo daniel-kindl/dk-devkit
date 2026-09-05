@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+from importlib.machinery import SourceFileLoader
 import io
 import json
 import os
@@ -15,11 +16,12 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "bin" / "repo-labels"
-spec = importlib.util.spec_from_file_location("repo_labels", SCRIPT)
-assert spec and spec.loader
+loader = SourceFileLoader("repo_labels", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+assert spec
 repo_labels = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = repo_labels
-spec.loader.exec_module(repo_labels)
+loader.exec_module(repo_labels)
 
 
 def label(name, color="123abc", description="desc", group=""):
