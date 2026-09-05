@@ -70,6 +70,8 @@ repos.tsv
 third-party-skills.tsv
 
 # --- caches, logs, transient files ---
+__pycache__/
+*.pyc
 .cache/
 cache/
 *.log

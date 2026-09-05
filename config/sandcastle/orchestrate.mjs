@@ -10,9 +10,15 @@
 //   -> prove the real repository is not reachable from the sandbox
 //   -> run the implementer agent
 //   -> deterministic verification
+//   -> feed a failing check back to the SAME agent, up to maxFixRounds times
 //   -> optional independent reviewer
 //   -> deterministic verification
 //   -> destroy the sandbox
+//
+// The fix loop is the feedback half of the implementation phase. Sandcastle
+// keeps one sandbox across several run() calls, and commits accumulate on the
+// same branch, so a repair costs one more agent turn and nothing else. A
+// repair that needed a new clone would cost a whole run.
 //
 // What it never does, by construction:
 //   * touch the real repository. It is never told where that repository is,
@@ -74,7 +80,8 @@ if (!configFile) fail("AGENTBOX_CONFIG_FILE is not set");
  *   repo: string, branch: string, baseBranch: string, baseCommit: string,
  *   prompt: string, reviewPrompt?: string, agent: string, model: string,
  *   reviewAgent: "codex" | "claude" | "none", reviewModel: string,
- *   maxIterations: number, checks: string[], sandboxImage: string,
+ *   maxIterations: number, maxFixRounds?: number,
+ *   checks: string[], sandboxImage: string,
  *   mounts: {hostPath: string, sandboxPath: string, readonly?: boolean}[],
  *   assertIsolation: boolean, timeoutSeconds: number,
  *   credentials: {claude: boolean, codex: boolean}, credentialPath: string,
@@ -302,20 +309,67 @@ const assertIsolation = async (sandbox) => {
 
 // --------------------------------------------------------- deterministic checks --
 
+// A failing check keeps a bounded tail of its output. That tail is the whole
+// input of a repair: the agent is told what failed and what it printed, and
+// nothing else. The bound matters because a full test log is far longer than
+// a prompt should be.
+const TAIL_LINES = 40;
+const TAIL_BYTES = 4000;
+
+const tailOf = (result) => {
+  const text = `${result.stdout}\n${result.stderr}`.trim();
+  const lines = text.split("\n").slice(-TAIL_LINES).join("\n");
+  return lines.length > TAIL_BYTES ? lines.slice(-TAIL_BYTES) : lines;
+};
+
 const runChecks = async (sandbox, label) => {
   const results = [];
   for (const cmd of cfg.checks ?? []) {
     log(`${label}: ${cmd}`);
     const r = await sandbox.exec(cmd);
-    results.push({ command: cmd, exitCode: r.exitCode });
+    const entry = { command: cmd, exitCode: r.exitCode };
     if (r.exitCode !== 0) {
-      const tail = `${r.stdout}\n${r.stderr}`.trim().split("\n").slice(-30).join("\n");
-      log(`${label}: FAILED (exit ${r.exitCode})\n${tail}`);
+      entry.tail = tailOf(r);
+      log(`${label}: FAILED (exit ${r.exitCode})\n${entry.tail}`);
     } else {
       log(`${label}: ok`);
     }
+    results.push(entry);
   }
   return results;
+};
+
+const failuresIn = (results) => results.filter((r) => r.exitCode !== 0);
+
+/** The instruction for one repair turn. Strict, because no human reads it. */
+const fixPrompt = (failures, round, rounds) => {
+  const evidence = failures
+    .map((f) => `#### ${f.command}  (exit ${f.exitCode})\n\n\`\`\`\n${f.tail ?? ""}\n\`\`\``)
+    .join("\n\n");
+  return `# Task: repair the failing checks
+
+You implemented a change in this worktree. The repository checks then failed.
+This is repair round ${round} of ${rounds}.
+
+## What to do
+
+1. Read the evidence below.
+2. Find the cause of each failure. Fix the cause.
+3. Run the failing command again. Repeat until it passes.
+4. Commit the fix.
+
+## Limits
+
+Fix the failure. Change nothing else. Do not delete a test. Do not weaken a
+test. Do not mark a test as skipped to make the run green.
+
+Report the reason in your commit message if the failure has a cause outside
+your change.
+
+## Evidence
+
+${evidence}
+`;
 };
 
 // --------------------------------------------------------------------- main --
@@ -341,6 +395,9 @@ const summary = {
   mode: cfg.mode,
   implement: null,
   checksAfterImplement: [],
+  fixRounds: 0,
+  fixes: [],
+  checksAfterFix: [],
   review: null,
   checksAfterReview: [],
   isolation: [],
@@ -395,6 +452,47 @@ try {
 
   // -------------------------------------------------- deterministic checks --
   summary.checksAfterImplement = await runChecks(sandbox, "check after implement");
+
+  // ------------------------------------------------------------- fix loop --
+  //
+  // The feedback half of the implementation phase. A failing check goes back
+  // to the SAME agent, in the SAME sandbox, with the failing command and the
+  // tail of its output as the whole evidence. The loop stops when the checks
+  // pass or when the round budget runs out. Either way the branch is still
+  // validated and imported, and the summary says which happened.
+  const maxFixRounds = Math.max(0, cfg.maxFixRounds ?? 0);
+  let latestChecks = summary.checksAfterImplement;
+  while (summary.fixRounds < maxFixRounds && failuresIn(latestChecks).length > 0) {
+    const round = summary.fixRounds + 1;
+    const failures = failuresIn(latestChecks);
+    log(
+      `${failures.length} check(s) failed; repair round ${round} of ${maxFixRounds}`,
+    );
+    const fix = await sandbox.run({
+      name: `fix-${round}`,
+      agent: agentProvider(cfg.agent, cfg.model, cfg.effort),
+      prompt: fixPrompt(failures, round, maxFixRounds),
+      maxIterations: cfg.maxIterations ?? 1,
+      logging: { type: "stdout" },
+      signal: abort.signal,
+    });
+    summary.fixRounds = round;
+    summary.fixes.push({
+      round,
+      iterations: fix.iterations.length,
+      commits: fix.commits.map((c) => c.sha),
+      repaired: failures.map((f) => f.command),
+    });
+    latestChecks = await runChecks(sandbox, `check after fix ${round}`);
+    summary.checksAfterFix.push(...latestChecks);
+  }
+  if (summary.fixRounds > 0) {
+    log(
+      failuresIn(latestChecks).length === 0
+        ? `the checks pass after ${summary.fixRounds} repair round(s)`
+        : `the checks still fail after ${summary.fixRounds} repair round(s)`,
+    );
+  }
 
   // ---------------------------------------------------------------- review --
   if (wantsReview) {
@@ -482,9 +580,31 @@ try {
 // and imported either way, and the branch is left for a human. The reviewer is
 // deliberately still run, because its job includes fixing a defect the checks
 // found. The summary says whether the checks passed.
-const allChecks = [...summary.checksAfterImplement, ...summary.checksAfterReview];
-summary.checksPassed = allChecks.every((c) => c.exitCode === 0);
+// The LAST state of the checks decides, not every state they passed through.
+// A run that failed a check, repaired itself and then passed is a pass, and
+// reporting it as a failure would send the coordinator into a repair loop of
+// its own for work that is already correct.
+const finalChecks =
+  summary.checksAfterReview.length > 0
+    ? summary.checksAfterReview
+    : summary.checksAfterFix.length > 0
+      ? summary.checksAfterFix.slice(-(cfg.checks ?? []).length || undefined)
+      : summary.checksAfterImplement;
+const allChecks = finalChecks;
+summary.checksPassed =
+  allChecks.length === 0 ? null : allChecks.every((c) => c.exitCode === 0);
 const failedChecks = allChecks.filter((c) => c.exitCode !== 0);
+
+// The consumer of this summary is bin/agentqueue, and it needs exactly two
+// things: whether the checks pass now, and what to put in a repair prompt if
+// they do not. Both are published here, so the reader never has to guess
+// which of the per-phase arrays is the current one.
+summary.finalChecks = finalChecks;
+summary.failedChecks = failedChecks.map((c) => ({
+  command: c.command,
+  exitCode: c.exitCode,
+  tail: c.tail ?? "",
+}));
 
 log(`commits on ${cfg.branch}: ${summary.commits.length}`);
 if (allChecks.length === 0) {
@@ -494,7 +614,10 @@ if (allChecks.length === 0) {
       : "deterministic checks: configured, but the run stopped before they could run",
   );
 } else if (summary.checksPassed) {
-  log(`deterministic checks: all ${allChecks.length} passed`);
+  log(
+    `deterministic checks: all ${allChecks.length} passed` +
+      (summary.fixRounds > 0 ? ` (after ${summary.fixRounds} repair round(s))` : ""),
+  );
 } else {
   log(`deterministic checks: ${failedChecks.length} of ${allChecks.length} FAILED`);
   for (const c of failedChecks) log(`  failed: ${c.command} (exit ${c.exitCode})`);

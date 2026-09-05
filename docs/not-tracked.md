@@ -52,6 +52,17 @@ vendoring them would add weight and no fidelity.
 `bin/install-skills` writes, including the resolved commit of each source. It is
 generated state, so it is not tracked.
 
+## Backlog coordinator state
+
+`~/.local/share/agentqueue/`, which holds the generated prompts, the agentbox
+run logs and the per-issue locks, and
+`~/.config/agentqueue/repos/`, which holds a machine-local queue policy for a
+repository that cannot carry `.agentqueue.json` yet.
+
+None of it holds a credential. The prompts are generated from GitHub issues,
+and a new run regenerates them. A queue policy that a repository **can** carry
+belongs in that repository, as a tracked `.agentqueue.json`.
+
 ## Machine-specific router state
 
 `~/.config/devbox-router/repos.tsv`.

@@ -87,6 +87,26 @@ interactive shell often exports one for its own use, and delegating it to an
 unattended sandbox silently is not a choice the user made. Pass
 `--use-ambient-credentials` to ask for that on purpose.
 
+### The GitHub authority belongs to the coordinator
+
+`bin/agentqueue` pushes branches, opens pull requests and merges them. It needs
+GitHub authentication and it needs the SSH key, and it gets both the same way a
+human does:
+
+- GitHub API access through the `gh` sign-in, which keeps its token in the
+  system keyring
+- `git push` through the **forwarded host ssh-agent**, not through a copy of
+  the key
+
+It stores no credential of its own. It writes no token to disk, it never runs
+`gh auth token`, and it never reads `~/.config/agentbox/secrets.env`. Those
+three facts are checked statically by `verify.sh` module 8b.
+
+`agentqueue` gives a sandbox nothing. It hands `agentbox` a repository path, a
+branch name, a prompt file and a set of limits, and `agentbox` decides what
+reaches the container. The prompt it writes names no credential and no
+credential path.
+
 A sandbox also never receives the private SSH key or the ssh-agent socket, so it
 cannot push, open a pull request, or merge on GitHub. `agentbox selftest` proves
 this from inside a running sandbox, and the same probes run on every real run.

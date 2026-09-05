@@ -47,9 +47,19 @@ Edit it only through this repository.
    checks each of these, `agentbox selftest --adversarial` proves them on a
    live machine, and `docs/sandcastle.md` says why.
 
-8. **Do not special-case a repository.** The router already resolves an
+8. **Keep the GitHub authority on the trusted side.** `bin/agentqueue` holds
+   the `gh` sign-in, the ssh-agent and the right to push, open a pull request
+   and merge. `bin/agentbox` holds none of them, and a sandbox holds nothing
+   that authenticates to GitHub. Never give a sandbox a GitHub credential,
+   never read a token into `lib/agentqueue`, and never let the coordinator
+   write outside the `agent/` namespace. `verify.sh` module 8b checks each of
+   these, and `docs/agentqueue.md` says why.
+
+9. **Do not special-case a repository.** The router already resolves an
    environment from `.devbox`, from the git-common-dir, from `repos.tsv`, and
-   from the inference rules. Add a generic rule, not an exception.
+   from the inference rules. The queue policy resolves the same way, from
+   `<repo>/.agentqueue.json` and the built-in default. Add a generic rule, not
+   an exception.
 
 ## Prose
 
