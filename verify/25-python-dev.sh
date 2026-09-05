@@ -87,6 +87,12 @@ check 'python-dev shared agent policy is wired' -- \
 check 'python-dev shared skill store exists' -- \
     python_box_sh 'test -d "$HOME/.agents/skills"'
 
+# Both files are run directly, so a lost executable bit breaks the documented
+# bootstrap command and the Orca bridge.
+check 'bootstrap/python-dev.sh is executable' -- test -x "$REPO_ROOT/bootstrap/python-dev.sh"
+check 'python-dev Orca bridge is executable' -- \
+    python_box_sh 'test -x "$HOME/.local/bin/orca"'
+
 section '2g. python-dev SSH agent forwarding'
 
 sock=$(python_box_sh 'printf %s "${SSH_AUTH_SOCK:-}"' 2>/dev/null)
