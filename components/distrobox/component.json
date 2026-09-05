@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "distrobox",
+  "name": "Distrobox container runtime",
+  "kind": "runtime",
+  "group": "Development environments",
+  "summary": "The container runtime every development environment is built on. Bazzite and Fedora Silverblue ship it.",
+  "requires": [],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": true,
+  "install": null,
+  "doctor": ["components/distrobox/doctor.sh"],
+  "verify": null,
+  "manual": [],
+  "state": { "public": ["distrobox/"], "local": [] }
+}

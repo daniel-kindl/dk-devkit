@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "python-dev",
+  "name": "python-dev environment",
+  "kind": "environment",
+  "group": "Development environments",
+  "summary": "Fedora Distrobox with an isolated home and the Python/uv toolchain.",
+  "requires": ["distrobox", "devbox"],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": true,
+  "install": ["components/python-dev/install.sh"],
+  "doctor": null,
+  "verify": ["./verify.sh", "--only", "25"],
+  "manual": [],
+  "state": {
+    "public": ["distrobox/python-dev.ini", "manifests/python-dev-packages.txt", "manifests/python-dev.env"],
+    "local": ["~/.local/share/distrobox-homes/python-dev/"]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "agentq",
+  "name": "agentq backlog coordinator",
+  "kind": "tool",
+  "group": "Agent orchestration",
+  "summary": "Drives the GitHub issue backlog in the trusted layer and holds the only push and merge authority.",
+  "requires": ["agentbox", "devbox", "web-dev"],
+  "capabilities": ["linux", "host"],
+  "unattended": true,
+  "install": ["components/agentq/install.sh"],
+  "doctor": ["components/agentq/doctor.sh"],
+  "verify": ["./verify.sh", "--only", "85"],
+  "manual": [
+    "Authenticate GitHub inside the coordinator environment: gh auth login --git-protocol ssh."
+  ],
+  "state": {
+    "public": ["manifests/agentqueue.env", "config/agentqueue/"],
+    "local": ["~/.config/agentqueue/", "~/.local/share/agentqueue/"]
+  }
+}

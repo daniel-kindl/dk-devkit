@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "linux",
+      "summary": "a Linux kernel",
+      "probe": { "kind": "uname", "value": "Linux" }
+    },
+    {
+      "id": "host",
+      "summary": "the installer runs on the host, not inside a development container",
+      "probe": { "kind": "not-container" }
+    },
+    {
+      "id": "git",
+      "summary": "the git command",
+      "probe": { "kind": "command", "value": "git" }
+    },
+    {
+      "id": "gh",
+      "summary": "the GitHub CLI",
+      "probe": { "kind": "command", "value": "gh" }
+    },
+    {
+      "id": "python3",
+      "summary": "a Python 3 interpreter",
+      "probe": { "kind": "command", "value": "python3" }
+    },
+    {
+      "id": "container-runtime",
+      "summary": "an OCI container runtime",
+      "probe": {
+        "kind": "any",
+        "value": [
+          { "kind": "command", "value": "podman" },
+          { "kind": "command", "value": "docker" }
+        ]
+      }
+    },
+    {
+      "id": "distrobox",
+      "summary": "the distrobox command",
+      "probe": { "kind": "command", "value": "distrobox" }
+    },
+    {
+      "id": "flatpak",
+      "summary": "the flatpak command",
+      "probe": { "kind": "command", "value": "flatpak" }
+    },
+    {
+      "id": "homebrew",
+      "summary": "the Homebrew package manager",
+      "probe": {
+        "kind": "any",
+        "value": [
+          { "kind": "command", "value": "brew" },
+          { "kind": "executable", "value": "/home/linuxbrew/.linuxbrew/bin/brew" }
+        ]
+      }
+    }
+  ]
+}

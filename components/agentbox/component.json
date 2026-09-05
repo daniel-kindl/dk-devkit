@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "agentbox",
+  "name": "agentbox unattended agent sandbox",
+  "kind": "tool",
+  "group": "Agent orchestration",
+  "summary": "Runs an unattended coding agent against a disposable clone in an isolated container.",
+  "requires": [],
+  "capabilities": ["linux", "host", "container-runtime"],
+  "unattended": true,
+  "install": ["components/agentbox/install.sh"],
+  "doctor": ["bin/agentbox", "doctor"],
+  "verify": ["./verify.sh", "--only", "8"],
+  "manual": [
+    "Mint an unattended Claude token on the host with \"claude setup-token\", then put it in ~/.config/agentbox/secrets.env.",
+    "Build the agent sandbox images: agentbox build."
+  ],
+  "state": {
+    "public": ["manifests/sandcastle.env", "config/sandcastle/"],
+    "local": ["~/.config/agentbox/secrets.env", "~/.local/share/agentbox/"]
+  }
+}

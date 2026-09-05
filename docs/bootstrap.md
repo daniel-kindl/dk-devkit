@@ -3,6 +3,27 @@
 Two scripts. One runs on the Bazzite host, one runs inside the container.
 Neither one writes a credential.
 
+They install the whole machine. To install one part, use the component
+installer in [components.md](components.md):
+
+```bash
+./install.sh --components devbox
+```
+
+Both entry points converge the same state, because each step is one function in
+`bootstrap/lib/`, and both callers use it:
+
+| Library | Step |
+| --- | --- |
+| `lib/common.sh` | The shared idempotency, backup and dry-run helpers |
+| `lib/component.sh` | The preamble every component operation script uses |
+| `lib/host-packages.sh` | Homebrew formulae and casks, Flatpak applications |
+| `lib/devbox.sh` | The router, the agent host shims, the router configuration |
+| `lib/environments.sh` | Creation of one Distrobox development environment |
+| `lib/agent-home.sh` | The host agent policy, status line and preferences |
+| `lib/sandcastle.sh` | The `agentbox` CLI and its credential file location |
+| `lib/agentq.sh` | The `agentq` host shim and the container-side runtime |
+
 ## Shared behaviour
 
 Both scripts use `bootstrap/lib/common.sh`, which gives them the same
