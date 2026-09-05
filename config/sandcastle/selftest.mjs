@@ -140,9 +140,11 @@ try {
   // One ordinary commit, so the host side has a real result to validate and
   // import. Everything up to here proved what the sandbox cannot reach; this
   // proves the path that a real run takes.
-  // The identity is explicit. Sandcastle configures one inside the sandbox as
-  // part of run(), which drives an agent; createSandbox() and exec() do not,
-  // so a bare "git commit" here would fail with "unable to auto-detect email".
+  // The identity is explicit. bin/agentbox gives the clone one, and Sandcastle
+  // copies it into the sandbox as part of run(), which drives an agent;
+  // createSandbox() and exec() do not. Naming it here keeps this test from
+  // depending on either of those, and keeps its commit distinguishable from a
+  // commit an agent made.
   log("making one commit inside the sandbox");
   const commit = await sandbox.exec(
     "printf 'selftest\\n' > AGENTBOX_SELFTEST.txt && git add AGENTBOX_SELFTEST.txt && " +

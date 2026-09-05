@@ -58,6 +58,28 @@ WORKDIR /home/agent
 ENV HOME=/home/agent
 ENV PATH=/home/agent/.local/bin:$PATH
 
+# A package manager must never put its store inside the repository it installs
+# for.
+#
+# pnpm keeps its content-addressable store on the same filesystem as the
+# project, because it links packages into node_modules instead of copying them.
+# Sandcastle bind-mounts the git worktree into this container, so the worktree
+# is its own mount point and the default store in HOME is on another device.
+# pnpm's answer to that is to put the store at <mount point>/.pnpm-store, which
+# here is the repository root. The first real run left 18448 untracked files
+# there: every "git status" was dirty, Sandcastle preserved the worktree at
+# teardown instead of removing it, and one "git add -A" would have committed
+# the store.
+#
+# An explicit store-dir is used whatever device it names, so this removes the
+# fallback entirely. pnpm then copies instead of linking, which costs a little
+# time and nothing else. The file is pnpm's own global configuration, not
+# ~/.npmrc, so npm does not report an unknown setting on every call.
+RUN set -eux; \
+    mkdir -p /home/agent/.config/pnpm /home/agent/.pnpm-store; \
+    printf 'store-dir=/home/agent/.pnpm-store\n' > /home/agent/.config/pnpm/rc; \
+    test -s /home/agent/.config/pnpm/rc
+
 # The same native installers that manifests/toolchain.env pins for web-dev.
 # They self-update, so the image records what was verified, not a hard pin.
 # They run BEFORE the credential shim is on PATH, so an installer that probes
