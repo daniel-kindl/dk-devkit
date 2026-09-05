@@ -14,6 +14,7 @@
 #   * installs the devbox router configuration into ~/.config/devbox-router
 #   * creates the web-dev Distrobox from distrobox/web-dev.ini when it is absent
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
+#   * installs the agentbox CLI and prepares its credential file location
 #
 # What it never does:
 #   * install a Node or npm toolchain on the host
@@ -24,6 +25,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/sandcastle.sh
+. "$REPO_ROOT/bootstrap/lib/sandcastle.sh"
 
 SKIP_FLATPAK=0
 SKIP_BREW=0
@@ -193,6 +196,26 @@ else
         sed 's/^/  /'
 fi
 
+# --------------------------------------------------- Sandcastle (agentbox) --
+section 'Agent orchestration (agentbox)'
+install_agentbox "$REPO_ROOT"
+# An image build needs the network and takes minutes, so it stays an explicit
+# command. Report whether it has been done.
+if have podman; then
+    # The subshell keeps the manifest variables out of this script, and sits in
+    # a condition so that a missing image does not trip "set -e".
+    # shellcheck source=/dev/null
+    if ( . "$REPO_ROOT/manifests/sandcastle.env"
+         podman image exists "$RUNNER_IMAGE:$RUNNER_TAG" ) 2>/dev/null; then
+        ok 'the agentbox images are built'
+    else
+        info 'the agentbox images are not built yet'
+        manual 'Build the agent sandbox images: agentbox build'
+    fi
+else
+    warn 'podman is not available; agentbox cannot run'
+fi
+
 # ---------------------------------------------------------------------- Orca --
 section 'Orca'
 if [ -x "$HOME/.local/bin/orca-ide" ]; then
@@ -205,6 +228,7 @@ fi
 # ------------------------------------------------------------ manual reminders --
 manual 'Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519'
 manual 'Authenticate GitHub on the host: gh auth login --git-protocol ssh'
+manual 'Mint an unattended Claude token on the host with "claude setup-token", then put it in ~/.config/agentbox/secrets.env'
 manual 'Run bootstrap/web-dev.sh inside the container: devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh'
 
 summary

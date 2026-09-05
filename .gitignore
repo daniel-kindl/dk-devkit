@@ -94,6 +94,8 @@ AppImages/
 # --- third-party skill payloads and repository worktrees ---
 /skills/
 .worktrees/
+# Sandcastle's scratch area: agent worktrees, run logs and patches.
+.sandcastle/
 
 # --- OS noise ---
 .DS_Store

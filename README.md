@@ -27,6 +27,10 @@ repository, and runs the command there. The `claude` and `codex` commands on the
 host are shims that go through the router, so Orca launches an agent on the host
 and the agent runs in the correct container.
 
+Unattended agents are the other half. `agentbox` runs an agent with no human
+present, in a Podman container that is destroyed afterwards, on its own branch.
+It never pushes. Read [docs/sandcastle.md](docs/sandcastle.md).
+
 Read [docs/architecture.md](docs/architecture.md) for the full picture.
 
 ## Rebuild a machine
@@ -54,7 +58,11 @@ gh auth login --git-protocol ssh
 ~/.local/bin/devbox exec web-dev -- claude    # then /login
 ~/.local/bin/devbox exec web-dev -- codex login
 
-# 6. Check the result.
+# 6. Prepare unattended agent runs (optional).
+claude setup-token                        # then edit ~/.config/agentbox/secrets.env
+agentbox build
+
+# 7. Check the result.
 ~/projects/workstation/verify.sh
 ```
 
@@ -74,7 +82,9 @@ to see what a run would change.
 | `config/devbox-router/` | The router configuration and inference rules |
 | `config/claude/`, `config/codex/` | Non-secret client preferences |
 | `config/web-dev/` | Files that belong to the container: shell fragment, Orca bridge |
-| `bin/` | The router, its verification suite, and the workstation's own tools |
+| `bin/` | The router, `agentbox`, the verification suites and the other tools |
+| `containers/` | The Containerfiles for the agent control plane and its sandboxes |
+| `config/sandcastle/` | The orchestration programs that run inside the control plane |
 | `verify/` | The verification modules that `./verify.sh` runs |
 | `docs/` | Architecture, bootstrap, recovery, and the secret policy |
 | `.devbox` | The router declaration: this repository is edited in `web-dev` |

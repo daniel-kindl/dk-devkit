@@ -1,0 +1,53 @@
+# agent-runner - the Sandcastle control plane.
+#
+# This image is NOT a Distrobox. Distrobox creates every container with
+# --privileged, --security-opt label=disable and --user root:root, which the
+# unattended orchestrator must not have. See docs/sandcastle.md.
+#
+# The container holds no credential and no state. bin/agentbox starts it with
+# "podman run --rm", passes the run configuration in one environment variable,
+# and destroys it when the run ends.
+#
+# It talks to the HOST Podman through the rootless API socket. Every container
+# Sandcastle creates is therefore a SIBLING on the host, not a nested child, so
+# the image needs no nesting privilege.
+#
+# Build with:  agentbox build
+
+ARG RUNNER_BASE=registry.fedoraproject.org/fedora:44
+FROM ${RUNNER_BASE}
+
+# podman-remote is deliberately the same version as the host Podman, so the
+# client and the API server agree. git drives the worktrees Sandcastle creates.
+RUN dnf -y install --setopt=install_weak_deps=False \
+        podman-remote \
+        nodejs \
+        npm \
+        git \
+        jq \
+        ca-certificates \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Sandcastle calls the binary named "podman" on PATH. podman-remote is always
+# a remote client, so it cannot silently fall back to a local engine.
+RUN ln -s /usr/bin/podman-remote /usr/local/bin/podman
+
+# The orchestrator is an ES module. ESM ignores NODE_PATH, so the dependency
+# tree has to sit next to the script that imports it. bin/agentbox mounts
+# orchestrate.mjs into this directory read-only at run time.
+ARG SANDCASTLE_PACKAGE=@ai-hero/sandcastle
+ARG SANDCASTLE_VERSION=0.12.0
+WORKDIR /opt/workstation/sandcastle
+RUN printf '{"name":"workstation-agentbox","private":true,"type":"module"}\n' > package.json \
+    && npm install --no-audit --no-fund --omit=optional \
+        "${SANDCASTLE_PACKAGE}@${SANDCASTLE_VERSION}" \
+    && npm cache clean --force
+
+# The runner runs as the invoking user through --userns=keep-id. It never
+# needs root, and it never writes inside the image. It still needs a writable
+# HOME, because git and npm both expect one to exist.
+RUN install -d -o 1000 -g 1000 -m 0755 /home/agentbox
+USER 1000:1000
+ENV HOME=/home/agentbox
+ENTRYPOINT ["/usr/bin/node"]

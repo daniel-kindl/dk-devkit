@@ -1,0 +1,565 @@
+#!/usr/bin/env bash
+#
+# agentbox - run unattended agents in disposable Podman sandboxes.
+#
+# The unattended counterpart of the devbox router. devbox routes an
+# INTERACTIVE agent into the development environment that owns a repository.
+# agentbox runs an UNATTENDED agent in a throw-away sandbox, on its own branch,
+# and leaves the branch for a human to review.
+#
+#   agentbox build [--force]        build the runner and sandbox images
+#   agentbox doctor                 check that the machine can run a sandbox
+#   agentbox selftest --repo PATH   prove the sandbox lifecycle, no credential
+#   agentbox run      <options>     one agent, one branch
+#   agentbox pipeline <options>     implement -> check -> review -> check
+#   agentbox clean                  remove stray sandbox containers
+#   agentbox help
+#
+# Options for run and pipeline:
+#   --repo PATH              the repository to work on             (required)
+#   --branch NAME            the branch to create                  (required)
+#   --prompt-file FILE       the instruction for the agent         (required)
+#   --review-prompt-file F   the instruction for the reviewer
+#   --agent NAME             claude (default) or codex
+#   --model NAME             overrides the manifest default
+#   --review-agent NAME      codex (default), claude, or none
+#   --review-model NAME      overrides the manifest default
+#   --check CMD              a deterministic check; repeatable
+#   --max-iterations N       agent iterations, default 1
+#   --effort LEVEL           low, medium, high or xhigh
+#   --image IMAGE            overrides the sandbox image
+#   --assert-isolation       prove no key material reached the sandbox
+#   --dry-run                print the plan and change nothing
+#
+# What agentbox never does:
+#   * push a branch, open a pull request, or merge anything
+#   * write to the branch the repository has checked out
+#   * put a private SSH key, an ssh-agent socket, or the Podman socket into
+#     a sandbox
+#   * mount ~/.agents writable into a sandbox
+#
+# See docs/sandcastle.md.
+
+set -euo pipefail
+
+PROGRAM=agentbox
+VERSION=0.1.0
+
+# Exit codes (stable, scripts may depend on them).
+#   2  usage error
+#   3  the repository argument is not a usable Git repository
+#   4  a required image is missing
+#   5  no usable Podman connection
+#   6  a credential is missing or has the wrong permissions
+#   7  refused (the branch is unsafe, or the repository is the checked-out one)
+#   8  the agent run itself failed
+
+fail() {
+    local code=$1 line
+    shift
+    printf '%s: %s\n' "$PROGRAM" "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+    exit "$code"
+}
+
+info() { printf '%s: %s\n' "$PROGRAM" "$1"; }
+
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# --------------------------------------------------------------- host paths --
+#
+# Every path that reaches Podman must be spelled the way the HOST spells it.
+# The host daemon resolves a bind mount in its own namespace, so the container
+# spelling of ~/projects (/workspace) does not exist for it.
+
+IN_CONTAINER=0
+if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then IN_CONTAINER=1; fi
+
+if [ "$IN_CONTAINER" = 1 ]; then
+    HOST_HOME=${DISTROBOX_HOST_HOME:-/home/${USER:-$(id -un)}}
+else
+    HOST_HOME=$HOME
+fi
+
+# canon <path> - the path with every symlink resolved.
+#
+# Bazzite is an ostree system: /home is a symlink to /var/home. A bind mount
+# source and the path the orchestrator is told to use must be the SAME
+# spelling, or the source resolves through the symlink while the target does
+# not exist inside the runner. Canonicalising both is what keeps them equal.
+canon() { readlink -f -- "$1" 2>/dev/null || printf '%s' "$1"; }
+
+HOST_HOME=$(canon "$HOST_HOME")
+PROJECTS_ROOT=$(canon "$HOST_HOME/projects")
+# The canonical shared skill store. It lives in the web-dev home, because that
+# is where the agent CLIs run. Sandboxes get it READ ONLY.
+SKILLS_DIR=$(canon "$HOST_HOME/.local/share/distrobox-homes/web-dev/.agents/skills")
+
+# host_path <path> - absolute path, spelled as the host spells it.
+host_path() {
+    local p
+    p=$(canon "$1")
+    case $p in
+        /workspace) printf '%s' "$PROJECTS_ROOT" ;;
+        /workspace/*) printf '%s%s' "$PROJECTS_ROOT" "${p#/workspace}" ;;
+        *) printf '%s' "$p" ;;
+    esac
+}
+
+REPO_ROOT_HOST=$(host_path "$REPO_ROOT")
+
+# ------------------------------------------------------------------ manifest --
+
+MANIFEST=$REPO_ROOT/manifests/sandcastle.env
+[ -f "$MANIFEST" ] || fail 2 "manifest not found: $MANIFEST"
+# shellcheck source=/dev/null
+. "$MANIFEST"
+
+RUNNER_REF=$RUNNER_IMAGE:$RUNNER_TAG
+SANDBOX_REF=$SANDBOX_IMAGE:$SANDBOX_TAG
+
+# --------------------------------------------------------------- Podman client --
+#
+# On the host this is plain "podman". Inside a container there is no local
+# engine, so it is podman-remote pointed at the rootless host API socket. Both
+# reach the same daemon, and a container created either way is a host-level
+# sibling of the caller.
+
+PODMAN_SOCKET=${PODMAN_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
+PODMAN_BIN=''
+
+resolve_podman() {
+    [ -n "$PODMAN_BIN" ] && return 0
+    if [ "$IN_CONTAINER" = 0 ] && command -v podman >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman)
+        return 0
+    fi
+    if command -v podman-remote >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman-remote)
+        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
+        return 0
+    fi
+    if command -v podman >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman)
+        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
+        return 0
+    fi
+    return 1
+}
+
+# require_podman - resolve the client, or stop with a usable message.
+#
+# resolve_podman only reports; it never exits. "agentbox doctor" has to be able
+# to report a missing client instead of dying on it.
+require_podman() {
+    resolve_podman && return 0
+    fail 5 'no Podman client found' \
+        'On the Bazzite host, podman is part of the base image.' \
+        'Inside a container, install podman-remote and make sure' \
+        "the host socket is reachable at $PODMAN_SOCKET"
+}
+
+podman_() { require_podman; "$PODMAN_BIN" "$@"; }
+
+# ---------------------------------------------------------------- credentials --
+#
+# Credentials live outside this repository, in a file only the user can read.
+# agentbox passes the minimum set into the runner as environment variables.
+# Nothing is ever written into the repository or into a worktree.
+
+SECRETS_FILE=$HOST_HOME/.config/agentbox/secrets.env
+
+load_secrets() {
+    CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+    local readable=$SECRETS_FILE
+    [ -r "$readable" ] || readable=/run/host$SECRETS_FILE
+    if [ -r "$readable" ]; then
+        local mode
+        mode=$(stat -c '%a' "$readable" 2>/dev/null || printf '600')
+        case $mode in
+            600|400) ;;
+            *) fail 6 "$SECRETS_FILE has mode $mode" \
+                    'A credential file must not be readable by anyone else.' \
+                    "Fix it with: chmod 600 $SECRETS_FILE" ;;
+        esac
+        # shellcheck source=/dev/null
+        . "$readable"
+    fi
+}
+
+# ------------------------------------------------------------------- commands --
+
+cmd_build() {
+    local force=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --force) force=1; shift ;;
+            *) fail 2 "build: unknown option: $1" ;;
+        esac
+    done
+    require_podman
+
+    local img ref file ctx
+    for img in runner sandbox; do
+        if [ "$img" = runner ]; then
+            ref=$RUNNER_REF; file=$REPO_ROOT/containers/agent-runner/Containerfile
+            ctx=$REPO_ROOT/containers/agent-runner
+        else
+            ref=$SANDBOX_REF; file=$REPO_ROOT/containers/sandbox-web/Containerfile
+            ctx=$REPO_ROOT/containers/sandbox-web
+        fi
+        if [ "$force" = 0 ] && podman_ image exists "$ref" 2>/dev/null; then
+            info "image already present: $ref"
+            continue
+        fi
+        info "building $ref"
+        podman_ build -t "$ref" -f "$file" \
+            --build-arg "SANDCASTLE_PACKAGE=$SANDCASTLE_PACKAGE" \
+            --build-arg "SANDCASTLE_VERSION=$SANDCASTLE_VERSION" \
+            --build-arg "RUNNER_BASE=$RUNNER_BASE" \
+            --build-arg "SANDBOX_BASE=$SANDBOX_BASE" \
+            --build-arg "AGENT_UID=$(id -u)" \
+            --build-arg "AGENT_GID=$(id -g)" \
+            "$ctx"
+    done
+    info 'images ready'
+}
+
+cmd_doctor() {
+    local rc=0
+    printf '%s doctor\n\n' "$PROGRAM"
+
+    printf '  running on         %s\n' \
+        "$( [ "$IN_CONTAINER" = 1 ] && printf 'inside a container' || printf 'the Bazzite host' )"
+    printf '  host home          %s\n' "$HOST_HOME"
+    printf '  checkout (host)    %s\n' "$REPO_ROOT_HOST"
+    printf '  sandcastle         %s@%s\n' "$SANDCASTLE_PACKAGE" "$SANDCASTLE_VERSION"
+
+    if resolve_podman 2>/dev/null; then
+        printf '  podman client      %s\n' "$PODMAN_BIN"
+        printf '  podman connection  %s\n' "${CONTAINER_HOST:-local}"
+        if "$PODMAN_BIN" info --format '{{.Host.Security.Rootless}}' >/dev/null 2>&1; then
+            printf '  podman reachable   yes (rootless=%s)\n' \
+                "$("$PODMAN_BIN" info --format '{{.Host.Security.Rootless}}' 2>/dev/null)"
+        else
+            printf '  podman reachable   NO\n'; rc=1
+        fi
+    else
+        printf '  podman client      NOT FOUND\n'; rc=1
+    fi
+
+    # Without a client there is nothing to ask about the images. Report that
+    # and carry on, so doctor always prints the whole picture.
+    local ref
+    for ref in "$RUNNER_REF" "$SANDBOX_REF"; do
+        if [ -z "$PODMAN_BIN" ]; then
+            printf '  image              %s unknown (no Podman client)\n' "$ref"
+        elif "$PODMAN_BIN" image exists "$ref" 2>/dev/null; then
+            printf '  image              %s present\n' "$ref"
+        else
+            printf '  image              %s MISSING (run: agentbox build)\n' "$ref"; rc=1
+        fi
+    done
+
+    load_secrets
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+        printf '  claude credential  CLAUDE_CODE_OAUTH_TOKEN present\n'
+    elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        printf '  claude credential  ANTHROPIC_API_KEY present\n'
+    else
+        printf '  claude credential  MISSING (see docs/secrets.md)\n'; rc=1
+    fi
+    if [ -n "${OPENAI_API_KEY:-}" ]; then
+        printf '  codex credential   OPENAI_API_KEY present\n'
+    else
+        printf '  codex credential   absent (the review step will be skipped)\n'
+    fi
+
+    printf '\n'
+    [ "$rc" = 0 ] && info 'ready' || info 'not ready'
+    return "$rc"
+}
+
+cmd_clean() {
+    require_podman
+    local ids
+    ids=$(podman_ ps -a --filter 'name=^sandcastle-' --format '{{.Names}}' 2>/dev/null || true)
+    if [ -z "$ids" ]; then
+        info 'no stray sandbox containers'
+        return 0
+    fi
+    printf '%s\n' "$ids" | while read -r n; do
+        [ -n "$n" ] || continue
+        info "removing $n"
+        podman_ rm -f "$n" >/dev/null
+    done
+}
+
+# sandbox_mounts_json - the read-only mounts every sandbox receives.
+#
+# The shared agent policy comes from this checkout; the shared skill store comes
+# from the web-dev home. Both are READ ONLY, so a disposable agent cannot
+# rewrite the policy that governs it. ~/.agents itself is never mounted.
+sandbox_mounts_json() {
+    local policy_dir=$REPO_ROOT_HOST/config/agents
+    local skills_dir=$SKILLS_DIR
+    local skills_ok=0
+    { [ -d "$skills_dir" ] || [ -d "/run/host$skills_dir" ]; } && skills_ok=1
+    MOUNT_POLICY="$policy_dir" MOUNT_SKILLS="$skills_dir" SKILLS_OK="$skills_ok" \
+    python3 -c '
+import json, os
+m = [{"hostPath": os.environ["MOUNT_POLICY"],
+      "sandboxPath": "/opt/agents/policy", "readonly": True}]
+if os.environ.get("SKILLS_OK") == "1":
+    m.append({"hostPath": os.environ["MOUNT_SKILLS"],
+              "sandboxPath": "/opt/agents/skills", "readonly": True})
+print(json.dumps(m))'
+}
+
+# run_in_runner <script-basename> <config-json> - start the control plane.
+#
+# The runner is NOT privileged. It receives exactly three things: the Podman
+# API socket, the source tree at its host path, and one orchestrator script.
+# It never receives ~/.ssh, an ssh-agent socket, or a writable ~/.agents.
+#
+# --security-opt label=disable is required for one reason only: SELinux denies
+# a confined container process the connect() on the Podman socket. It applies
+# to the CONTROL PLANE alone. The sandboxes that run agent output keep their
+# full SELinux confinement, because Sandcastle never passes that flag.
+run_in_runner() {
+    local script=$1 config=$2
+    local -a env_args=()
+    [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] &&
+        env_args+=(-e "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN")
+    [ -n "${ANTHROPIC_API_KEY:-}" ] &&
+        env_args+=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+    [ -n "${OPENAI_API_KEY:-}" ] &&
+        env_args+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
+
+    # Sandcastle validates every sandbox mount source from inside the runner,
+    # so a directory the sandbox needs must be visible to the runner as well,
+    # at the same host path. It is read-only on both hops.
+    local -a skill_args=()
+    local skills_dir=$SKILLS_DIR
+    [ -d "$skills_dir" ] && skill_args+=(-v "$skills_dir:$skills_dir:ro")
+
+    podman_ run --rm -i \
+        --name "agentbox-runner-$$" \
+        --userns=keep-id \
+        --security-opt label=disable \
+        -e "AGENTBOX_CONFIG=$config" \
+        -e "CONTAINER_HOST=unix://$PODMAN_SOCKET" \
+        "${env_args[@]}" \
+        "${skill_args[@]+"${skill_args[@]}"}" \
+        -v "$PODMAN_SOCKET:$PODMAN_SOCKET" \
+        -v "$PROJECTS_ROOT:$PROJECTS_ROOT" \
+        -v "$REPO_ROOT_HOST/config/sandcastle/$script:/opt/workstation/sandcastle/$script:ro" \
+        -w "$PROJECTS_ROOT" \
+        "$RUNNER_REF" \
+        "/opt/workstation/sandcastle/$script"
+}
+
+# ------------------------------------------------------------------ selftest --
+
+cmd_selftest() {
+    local repo='' image=''
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo) repo=${2:?--repo needs a path}; shift 2 ;;
+            --image) image=${2:?}; shift 2 ;;
+            *) fail 2 "selftest: unknown option: $1" ;;
+        esac
+    done
+    [ -n "$repo" ] || fail 2 'selftest: --repo is required'
+    image=${image:-$SANDBOX_REF}
+
+    local repo_host
+    repo_host=$(host_path "$repo")
+    case $repo_host in
+        "$PROJECTS_ROOT"/*) ;;
+        *) fail 3 "the repository must live under $PROJECTS_ROOT" "got: $repo_host" ;;
+    esac
+
+    require_podman
+    podman_ image exists "$RUNNER_REF" 2>/dev/null ||
+        fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
+    podman_ image exists "$image" 2>/dev/null ||
+        fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
+
+    local config
+    config=$(REPO="$repo_host" IMAGE="$image" MOUNTS="$(sandbox_mounts_json)" python3 -c '
+import json, os
+print(json.dumps({
+    "repo": os.environ["REPO"],
+    "sandboxImage": os.environ["IMAGE"],
+    "mounts": json.loads(os.environ["MOUNTS"]),
+    "checks": ["npm test"],
+}))')
+
+    run_in_runner selftest.mjs "$config"
+}
+
+# ------------------------------------------------------------ run / pipeline --
+
+cmd_run() {
+    local mode=$1; shift
+    local repo='' branch='' prompt_file='' review_prompt_file=''
+    local agent=claude model='' review_agent=codex review_model=''
+    local max_iterations=1 effort='' image='' assert_isolation=0 dry_run=0
+    local -a checks=()
+
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo) repo=${2:?--repo needs a path}; shift 2 ;;
+            --branch) branch=${2:?--branch needs a name}; shift 2 ;;
+            --prompt-file) prompt_file=${2:?--prompt-file needs a path}; shift 2 ;;
+            --review-prompt-file) review_prompt_file=${2:?}; shift 2 ;;
+            --agent) agent=${2:?}; shift 2 ;;
+            --model) model=${2:?}; shift 2 ;;
+            --review-agent) review_agent=${2:?}; shift 2 ;;
+            --review-model) review_model=${2:?}; shift 2 ;;
+            --check) checks+=("${2:?--check needs a command}"); shift 2 ;;
+            --max-iterations) max_iterations=${2:?}; shift 2 ;;
+            --effort) effort=${2:?}; shift 2 ;;
+            --image) image=${2:?}; shift 2 ;;
+            --assert-isolation) assert_isolation=1; shift ;;
+            --dry-run) dry_run=1; shift ;;
+            *) fail 2 "$mode: unknown option: $1" ;;
+        esac
+    done
+
+    [ -n "$repo" ] || fail 2 "$mode: --repo is required"
+    [ -n "$branch" ] || fail 2 "$mode: --branch is required"
+    [ -n "$prompt_file" ] || fail 2 "$mode: --prompt-file is required"
+    [ -r "$prompt_file" ] || fail 2 "$mode: cannot read the prompt file: $prompt_file"
+
+    model=${model:-$AGENTBOX_MODEL}
+    review_model=${review_model:-$AGENTBOX_REVIEW_MODEL}
+    image=${image:-$SANDBOX_REF}
+
+    # --- the branch must be an agent branch ---------------------------------
+    case $branch in
+        "$AGENTBOX_BRANCH_PREFIX"*) ;;
+        *) fail 7 "refusing to use the branch \"$branch\"" \
+                "An unattended agent may only write to a branch that starts with \"$AGENTBOX_BRANCH_PREFIX\"." \
+                "This keeps main, and every human branch, out of reach." ;;
+    esac
+
+    # --- the repository -----------------------------------------------------
+    local repo_host
+    repo_host=$(host_path "$repo")
+    local repo_local=$repo
+    [ -d "$repo_local" ] || repo_local=$repo_host
+    [ -d "$repo_local/.git" ] || [ -f "$repo_local/.git" ] ||
+        fail 3 "not a Git repository: $repo"
+
+    case $repo_host in
+        "$PROJECTS_ROOT"/*) ;;
+        *) fail 3 "the repository must live under $PROJECTS_ROOT" \
+                "got: $repo_host" \
+                'Only that tree is mounted into the runner at its host path.' ;;
+    esac
+
+    # --- prompts ------------------------------------------------------------
+    local prompt review_prompt
+    prompt=$(cat -- "$prompt_file")
+    if [ -n "$review_prompt_file" ]; then
+        [ -r "$review_prompt_file" ] || fail 2 "cannot read: $review_prompt_file"
+        review_prompt=$(cat -- "$review_prompt_file")
+    else
+        review_prompt=$(cat -- "$REPO_ROOT/config/sandcastle/review-prompt.md")
+    fi
+
+    # --- the read-only mounts the sandbox gets ------------------------------
+    # The shared agent policy comes from this checkout. The shared skill store
+    # comes from the web-dev home. Both are mounted READ ONLY: a disposable
+    # agent must not be able to rewrite the policy that governs it.
+    local mounts_json
+    mounts_json=$(sandbox_mounts_json)
+
+    # --- the configuration document ----------------------------------------
+    local config
+    config=$(MODE="$mode" REPO="$repo_host" BRANCH="$branch" PROMPT="$prompt" \
+        REVIEW_PROMPT="$review_prompt" AGENT="$agent" MODEL="$model" \
+        REVIEW_AGENT="$review_agent" REVIEW_MODEL="$review_model" \
+        MAX_ITER="$max_iterations" EFFORT="$effort" IMAGE="$image" \
+        MOUNTS="$mounts_json" ASSERT="$assert_isolation" \
+        CHECKS="$(printf '%s\n' "${checks[@]+"${checks[@]}"}")" \
+        python3 -c '
+import json, os
+checks = [c for c in os.environ.get("CHECKS", "").split("\n") if c.strip()]
+cfg = {
+    "mode": os.environ["MODE"],
+    "repo": os.environ["REPO"],
+    "branch": os.environ["BRANCH"],
+    "prompt": os.environ["PROMPT"],
+    "reviewPrompt": os.environ["REVIEW_PROMPT"],
+    "agent": os.environ["AGENT"],
+    "model": os.environ["MODEL"],
+    "reviewAgent": os.environ["REVIEW_AGENT"],
+    "reviewModel": os.environ["REVIEW_MODEL"],
+    "maxIterations": int(os.environ["MAX_ITER"]),
+    "checks": checks,
+    "sandboxImage": os.environ["IMAGE"],
+    "mounts": json.loads(os.environ["MOUNTS"]),
+    "assertIsolation": os.environ["ASSERT"] == "1",
+}
+if os.environ.get("EFFORT"):
+    cfg["effort"] = os.environ["EFFORT"]
+print(json.dumps(cfg))')
+
+    require_podman
+    podman_ image exists "$RUNNER_REF" 2>/dev/null ||
+        fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
+    podman_ image exists "$image" 2>/dev/null ||
+        fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
+
+    load_secrets
+
+    # A dry run prints the plan and stops. It deliberately does not require a
+    # credential: showing what would happen is useful before one exists.
+    if [ "$dry_run" = 1 ]; then
+        info 'dry run - the plan:'
+        printf '%s\n' "$config" | python3 -m json.tool |
+            sed -e 's/^/  /' \
+                -e 's/\("prompt": "[^"]\{0,60\}\).*/\1...",/' \
+                -e 's/\("reviewPrompt": "[^"]\{0,60\}\).*/\1...",/'
+        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
+            info "no Claude credential yet; a real run needs one in $SECRETS_FILE"
+        fi
+        return 0
+    fi
+
+    if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
+        fail 6 'no Claude credential' \
+            "Put CLAUDE_CODE_OAUTH_TOKEN in $SECRETS_FILE (mode 600)." \
+            "Mint one on the host with: claude setup-token" \
+            'See docs/secrets.md.'
+    fi
+
+    local rc=0
+    run_in_runner orchestrate.mjs "$config" || rc=$?
+
+    [ "$rc" = 0 ] || fail 8 "the agent run failed (exit $rc)"
+}
+
+# ---------------------------------------------------------------------- main --
+
+case ${1:-help} in
+    build)    shift; cmd_build "$@" ;;
+    doctor)   shift; cmd_doctor "$@" ;;
+    clean)    shift; cmd_clean "$@" ;;
+    selftest) shift; cmd_selftest "$@" ;;
+    run)      shift; cmd_run run "$@" ;;
+    pipeline) shift; cmd_run pipeline "$@" ;;
+    version|--version) printf '%s %s\n' "$PROGRAM" "$VERSION" ;;
+    # Print the header comment block, and stop at the first line of code, so
+    # the help never has to be kept in step with a line number.
+    help|-h|--help)
+        awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0" ;;
+    *) fail 2 "unknown command: $1" 'Run "agentbox help".' ;;
+esac

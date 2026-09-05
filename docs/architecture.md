@@ -152,6 +152,32 @@ value that was changed by hand.
 Orca worktrees live under `~/projects/.worktrees`. They resolve through the
 git-common-dir rule, so they need no entry in `repos.tsv`.
 
+## Unattended agents
+
+`devbox` routes an **interactive** agent into the environment that owns a
+repository. `bin/agentbox` is the unattended counterpart: it runs an agent with
+no human present, in a Podman container that is destroyed afterwards, on a
+branch that no human is using.
+
+The control plane is deliberately **not** a Distrobox. `distrobox-create` adds
+`--privileged`, `--security-opt label=disable` and `--user root:root` to every
+container it makes, and none of the `--unshare-*` options removes that. Those
+are the right defaults for an interactive environment and the wrong ones for
+unattended model output, so the control plane is a plain non-privileged OCI
+image instead.
+
+It reaches the host Podman through the rootless API socket, so each sandbox is
+a sibling container on the host rather than a nested one. That is also why the
+control plane mounts `~/projects` at its **host** path and not at `/workspace`:
+the host engine resolves a bind mount in its own namespace, where `/workspace`
+does not exist.
+
+An unattended agent never receives the SSH key, the ssh-agent socket, the
+Podman socket, or a writable `~/.agents`. It cannot push, open a pull request,
+or merge, because it holds no credential that would let it.
+
+`docs/sandcastle.md` holds the full design.
+
 ## Secrets
 
 The private SSH key stays on the host, and only on the host. The host ssh-agent

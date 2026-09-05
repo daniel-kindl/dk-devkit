@@ -36,7 +36,13 @@ Edit it only through this repository.
 6. **Verify before you claim.** `./verify.sh` must pass. When you change the
    router, `bin/devbox-verify` must also pass.
 
-7. **Do not special-case a repository.** The router already resolves an
+7. **Keep the unattended agent boundary closed.** `bin/agentbox` runs model
+   output with no human watching. Never give a sandbox the SSH key, the
+   ssh-agent socket, the Podman socket, a writable `~/.agents`, or a push
+   credential. Never let it write to a branch outside `agent/`. `verify.sh`
+   module 8 checks each of these, and `docs/sandcastle.md` says why.
+
+8. **Do not special-case a repository.** The router already resolves an
    environment from `.devbox`, from the git-common-dir, from `repos.tsv`, and
    from the inference rules. Add a generic rule, not an exception.
 
