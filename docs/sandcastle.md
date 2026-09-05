@@ -64,6 +64,84 @@ git worktree carries no object store of its own.
 the old design is what that git directory belongs to: a clone this run made
 and this run deletes, not the repository a human works in.
 
+### The clone carries its own Git identity
+
+Every disposable clone is given a neutral identity at clone time, in
+`create_clone`, before anything records a baseline:
+
+    user.name  = Agent
+    user.email = agent@local
+
+`manifests/sandcastle.env` pins both values. They are set with `git config` in
+`<run-dir>/repo`, so they reach the disposable clone and nothing else. The real
+repository's configuration file is not opened, and `agentbox` never writes a
+global git configuration at all.
+
+This is not cosmetic. Sandcastle's lifecycle reads `user.name` and `user.email`
+out of the repository it drives and configures them inside the sandbox as part
+of `sandbox.run()`. A clone with neither gives the sandbox neither, and the
+agent CLI then writes its own fallback identity into the clone's `.git/config`
+the first time it commits - Claude Code uses `Claude <noreply@anthropic.com>`.
+That write lands **after** the orchestrator recorded its integrity baseline, so
+a correct run was reported as a run that changed the clone configuration, and
+the result was refused. The first real run against `dkkb` failed exactly that
+way.
+
+Giving the clone an identity removes the cause. It does not weaken the
+comparison:
+
+- the identity is part of the baseline, not a change measured against it
+- the orchestrator **refuses to start** when the baseline does not carry the
+  expected identity, so the ordering cannot silently regress
+- a later change to `user.name` or `user.email` is still a violation, exactly
+  like an alias, a hook, `core.fsmonitor` or any other configuration entry
+- `sanitize_clone` still restores the whole configuration file from the
+  pristine copy the host took at clone time; that copy is taken **after** the
+  identity is set, so the host-side copy and the clone agree
+
+**An imported commit is therefore authored and committed by `Agent
+<agent@local>`.** It is not attributed to the user, and it is not attributed to
+the agent vendor. A human who wants their own name on the work should amend or
+rebase the imported `agent/<name>` branch before merging it.
+
+`verify/probes/clone-identity.sh` proves the clone-side half against real
+repositories, and `verify/probes/clone-integrity.test.mjs` proves each rule of
+the comparison. Neither needs a container or a model credential.
+
+### The sandbox keeps its package manager out of the repository
+
+pnpm keeps its content-addressable store on the same filesystem as the project,
+because it links packages into `node_modules` rather than copying them. The git
+worktree is bind-mounted into the sandbox, so it is its own mount point and the
+default store in `HOME` is on another device; pnpm's answer is to create
+`<mount point>/.pnpm-store`, which is the repository root.
+
+The first real run left 18448 untracked files there. Every `git status` in the
+worktree was dirty, `sandbox.close()` reported `worktree preserved (uncommitted
+changes)` instead of removing it, and a careless `git add -A` would have
+committed the store.
+
+The sandbox image therefore pins `store-dir=/home/agent/.pnpm-store` in pnpm's
+own global configuration, `/home/agent/.config/pnpm/rc`. An explicit
+`store-dir` is used whatever device it names, so the fallback never runs. pnpm
+copies instead of linking, which costs a little time and nothing else.
+
+That is an image change, so `SANDBOX_TAG` moves with it. Run `agentbox build`
+before the next run; a run against an image that does not exist stops with exit
+code 4 and says so.
+
+A second untracked file can survive this, and `agentbox` should NOT remove it.
+`pnpm install` writes `pnpm-lock.yaml`, so a repository that does not commit
+its lockfile can leave that one file untracked, which is enough on its own for
+Sandcastle to preserve the worktree. That is the repository's own gap. The run
+that verified this fix did not reproduce it - only the store was left behind
+the first time - so treat it as a case to expect rather than a certainty.
+
+A preserved worktree is harmless either way: it lives inside the run directory,
+the host reads the branch and not the worktree, `sanitize_clone` removes
+`.git/worktrees` before anything is imported, and the whole run directory is
+removed at the end.
+
 ## Commit transfer
 
 The transfer is the one place where anything from the sandbox enters the real
@@ -221,11 +299,14 @@ worktrees are created inside the disposable clone.
 
 1. validate the branch name, resolve the base commit, and take the branch lock
 2. record the real repository's refs, `HEAD`, config, hooks and working tree
-3. clone the repository into the run directory with `--no-hardlinks`
+3. clone the repository into the run directory with `--no-hardlinks`, give the
+   clone the neutral `Agent <agent@local>` identity, and save its pristine
+   configuration
 4. stage the agent policy, the skills, the orchestrator and the configuration
 5. write the per-run credential file, mode 600
 6. start the control plane with a wall-clock limit
-7. create the isolated branch, worktree and Podman sandbox inside the clone
+7. record the clone integrity baseline, which must already carry that identity,
+   then create the isolated branch, worktree and Podman sandbox inside the clone
 8. prove no key material, no Podman socket and no real repository path reached
    the sandbox
 9. run the implementer agent (Claude)
@@ -246,7 +327,8 @@ merges into the checked-out branch.
 
     ~/.local/share/agentbox/runs/<run-id>/
         repo/       the disposable clone
-        staging/    policy, skills, orchestrator and the run configuration
+        staging/    policy, skills, the orchestrator and the clone-integrity
+                    module it imports, and the run configuration
         creds/      the per-run credential file, mode 600
         meta/       the integrity snapshots and the pristine clone config
 
@@ -468,6 +550,9 @@ them.
 - A full clone per run costs disk and time proportional to the repository. The
   run directory is removed on success and kept on failure; `agentbox clean`
   sweeps what a killed process left.
+- An imported commit is authored by `Agent <agent@local>`, never by the user.
+  Amend or rebase the `agent/<name>` branch before merging it if the work should
+  carry a person's name.
 - A run imports the committed state only. Uncommitted work in the real
   repository is not visible to the agent, because the clone starts from a
   commit.

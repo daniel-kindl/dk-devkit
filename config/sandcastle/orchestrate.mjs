@@ -28,18 +28,24 @@
 // config entry or a hook written there reaches nothing else. bin/agentbox
 // validates the result on the host and imports only the commits that pass.
 //
-// The snapshot below is defense in depth: it records the clone's refs, config
-// and hooks before the sandbox exists and compares them after it is
-// destroyed, so a run that wrote outside its own branch says so out loud even
-// though the write could not leave the run directory.
+// The snapshot in clone-integrity.mjs is defense in depth: it records the
+// clone's refs, config and hooks before the sandbox exists and compares them
+// after it is destroyed, so a run that wrote outside its own branch says so
+// out loud even though the write could not leave the run directory.
 //
 // ESM resolves @ai-hero/sandcastle from /opt/workstation/sandcastle/node_modules,
-// which is why bin/agentbox mounts this file into that directory.
+// which is why bin/agentbox mounts this file into that directory. It mounts
+// clone-integrity.mjs beside it for the same reason.
 
 import { createSandbox, claudeCode, codex } from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
-import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import {
+  diffIntegrity,
+  git,
+  missingIdentity,
+  snapshotIntegrity,
+} from "./clone-integrity.mjs";
 
 // --------------------------------------------------------------- utilities --
 
@@ -48,20 +54,6 @@ const log = (msg) => process.stdout.write(`[agentbox] ${msg}\n`);
 const fail = (msg) => {
   process.stderr.write(`[agentbox] error: ${msg}\n`);
   process.exit(1);
-};
-
-const git = (repo, args) =>
-  execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
-
-/** git(), but a non-zero exit yields "" instead of throwing.
- *  "symbolic-ref HEAD" exits 1 on a detached HEAD and "config --list" exits 1
- *  when there is no local config file. Both are valid states to record. */
-const gitOrEmpty = (repo, args) => {
-  try {
-    return git(repo, args);
-  } catch {
-    return "";
-  }
 };
 
 /** Quote one value for a POSIX shell. Every probe path comes from the host
@@ -86,7 +78,8 @@ if (!configFile) fail("AGENTBOX_CONFIG_FILE is not set");
  *   mounts: {hostPath: string, sandboxPath: string, readonly?: boolean}[],
  *   assertIsolation: boolean, timeoutSeconds: number,
  *   credentials: {claude: boolean, codex: boolean}, credentialPath: string,
- *   forbiddenPaths: string[], effort?: string
+ *   forbiddenPaths: string[], gitIdentity: {name: string, email: string},
+ *   effort?: string
  * }} */
 let cfg;
 try {
@@ -136,81 +129,12 @@ try {
 // while it had the disposable git directory, which is what a well-behaved run
 // does and what a hostile one does not.
 
-const gitCommonDir = () =>
-  git(cfg.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-
-/** A file list of <name> <mode> <size> for the hook directory, sorted. */
-const hookInventory = (commonDir) => {
-  const dir = `${commonDir}/hooks`;
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return []; // No hooks directory is a valid state.
-  }
-  return entries
-    .filter((e) => e.isFile() && !e.name.endsWith(".sample"))
-    .map((e) => {
-      const st = statSync(`${dir}/${e.name}`);
-      return `${e.name} ${(st.mode & 0o7777).toString(8)} ${st.size}`;
-    })
-    .sort();
-};
-
-const snapshotIntegrity = () => {
-  const commonDir = gitCommonDir();
-  return {
-    commonDir,
-    refs: git(cfg.repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
-      .split("\n")
-      .filter(Boolean)
-      .sort(),
-    head: gitOrEmpty(cfg.repo, ["symbolic-ref", "--quiet", "HEAD"]),
-    config: gitOrEmpty(cfg.repo, ["config", "--local", "--list"])
-      .split("\n")
-      .filter(Boolean)
-      .sort(),
-    hooks: hookInventory(commonDir),
-  };
-};
-
 /** The refname the run is allowed to create or move. */
 const agentRef = `refs/heads/${cfg.branch}`;
 
-const diffIntegrity = (before, after) => {
-  const violations = [];
-  const withoutAgentBranch = (refs) =>
-    refs.filter((r) => !r.startsWith(`${agentRef} `));
-
-  const refsBefore = withoutAgentBranch(before.refs);
-  const refsAfter = withoutAgentBranch(after.refs);
-  for (const r of refsAfter) {
-    if (!refsBefore.includes(r)) violations.push(`ref created or moved: ${r}`);
-  }
-  for (const r of refsBefore) {
-    if (!refsAfter.includes(r)) violations.push(`ref deleted or moved: ${r}`);
-  }
-  if (before.head !== after.head) {
-    violations.push(`the checked-out branch changed: ${before.head} -> ${after.head}`);
-  }
-  for (const c of after.config) {
-    if (!before.config.includes(c)) violations.push(`git config added: ${c}`);
-  }
-  for (const c of before.config) {
-    if (!after.config.includes(c)) violations.push(`git config removed: ${c}`);
-  }
-  for (const h of after.hooks) {
-    if (!before.hooks.includes(h)) violations.push(`git hook added or changed: ${h}`);
-  }
-  for (const h of before.hooks) {
-    if (!after.hooks.includes(h)) violations.push(`git hook removed: ${h}`);
-  }
-  return violations;
-};
-
 let integrityBefore;
 try {
-  integrityBefore = snapshotIntegrity();
+  integrityBefore = snapshotIntegrity(cfg.repo);
 } catch (e) {
   fail(`cannot record the clone integrity baseline: ${e.message}`);
 }
@@ -223,9 +147,27 @@ if (!integrityBefore.commonDir.startsWith(`${cfg.repo}/`)) {
       `clone ${cfg.repo}. Refusing to run.`,
   );
 }
+
+// The clone must already carry the neutral Git identity bin/agentbox gives it
+// at clone time. Sandcastle copies user.name and user.email out of this clone
+// into the sandbox as part of run(); when it finds none, the agent CLI writes
+// its own fallback identity into this git directory the first time it commits,
+// which is a configuration change the comparison below would report AFTER the
+// work is done. Requiring the identity here turns that into a refusal to
+// start, and it is what makes the baseline the identity is measured against.
+const identityGap = missingIdentity(integrityBefore.config, cfg.gitIdentity);
+if (identityGap.length > 0) {
+  fail(
+    `the disposable clone has no configured Git identity: ${identityGap.join(", ")} ` +
+      "is missing from its local configuration. bin/agentbox sets it at clone " +
+      "time, before this baseline is recorded. Refusing to run.",
+  );
+}
+
 log(
   `clone baseline   ${integrityBefore.refs.length} ref(s), ` +
-    `${integrityBefore.hooks.length} hook(s)`,
+    `${integrityBefore.hooks.length} hook(s), identity ` +
+    `${cfg.gitIdentity.name} <${cfg.gitIdentity.email}>`,
 );
 
 // --------------------------------------------------------------- providers --
@@ -517,7 +459,7 @@ try {
 // branch reached nothing. It is still a signal worth failing on: a run that
 // tried is a run whose result a human should look at before trusting it.
 try {
-  const violations = diffIntegrity(integrityBefore, snapshotIntegrity());
+  const violations = diffIntegrity(integrityBefore, snapshotIntegrity(cfg.repo), agentRef);
   summary.cloneIntegrityViolations = violations;
   summary.cloneIntact = violations.length === 0;
   if (violations.length > 0) {

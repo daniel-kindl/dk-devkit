@@ -40,8 +40,9 @@ const git = (repo, args) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 const shq = (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 
-/** Sandcastle sets a git identity in the sandbox as part of run(). This file
- *  never calls run(), so it carries its own. */
+/** bin/agentbox gives the disposable clone a git identity, and Sandcastle
+ *  copies it into the sandbox as part of run(). This file never calls run(),
+ *  so it carries its own and depends on neither. */
 const GIT_IDENTITY = "-c user.name=agentbox -c user.email=agentbox@localhost";
 
 const configFile = process.env.AGENTBOX_CONFIG_FILE;

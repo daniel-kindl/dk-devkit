@@ -72,6 +72,11 @@
 #     skill store, or this checkout into a sandbox
 #   * put a credential value in a command line
 #   * run a command, a hook or a filter that the disposable clone configures
+#   * change the real repository's git configuration, including its identity
+#
+# The disposable clone is given a neutral Git identity of its own at clone
+# time, before anything else reads it. An imported commit is therefore authored
+# and committed by that identity, not by the user and not by the agent vendor.
 #
 # See docs/sandcastle.md.
 
@@ -187,6 +192,12 @@ MANIFEST=$REPO_ROOT/manifests/sandcastle.env
 
 RUNNER_REF=$RUNNER_IMAGE:$RUNNER_TAG
 SANDBOX_REF=$SANDBOX_IMAGE:$SANDBOX_TAG
+
+# The identity every disposable clone is given. An empty value would leave the
+# clone exactly as unconfigured as it was before, so it is refused here rather
+# than discovered at the end of a run.
+[ -n "${AGENTBOX_GIT_NAME:-}" ] && [ -n "${AGENTBOX_GIT_EMAIL:-}" ] ||
+    fail 2 "AGENTBOX_GIT_NAME and AGENTBOX_GIT_EMAIL must be set in $MANIFEST"
 
 # ------------------------------------------------------------ Podman client --
 #
@@ -630,8 +641,33 @@ create_clone() {
     # name that the source repository already carries.
     sgit branch -D "$BRANCH" >/dev/null 2>&1 || true
 
-    # The pristine configuration. sanitize_clone puts this back before the
-    # host reads anything out of the clone again.
+    # A deterministic Git identity, in the DISPOSABLE clone only.
+    #
+    # A clone carries no identity of its own: "git clone" copies no local
+    # configuration, and the control plane has no global one. Sandcastle reads
+    # user.name and user.email out of the repository it drives and configures
+    # them inside the sandbox, so an empty pair means the sandbox gets none,
+    # and the agent CLI then writes its own fallback identity into this git
+    # directory the first time it commits. That write lands AFTER the
+    # orchestrator has recorded its integrity baseline, so an ordinary run is
+    # reported as a run that changed the clone configuration.
+    #
+    # Setting the identity here, before the baseline exists, removes the cause
+    # instead of excusing the symptom: the identity becomes part of what the
+    # comparison measures, and a LATER change to either key is still a
+    # violation, exactly like every other configuration change.
+    #
+    # The real repository is untouched. This writes to
+    # <run-dir>/repo/.git/config and to nothing else.
+    sgit config user.name "$AGENTBOX_GIT_NAME" ||
+        fail 3 'cannot set the git identity in the disposable clone'
+    sgit config user.email "$AGENTBOX_GIT_EMAIL" ||
+        fail 3 'cannot set the git identity in the disposable clone'
+
+    # The pristine configuration. It is taken AFTER the identity is set, so the
+    # copy sanitize_clone restores is the configuration the run started with.
+    # sanitize_clone puts this back before the host reads anything out of the
+    # clone again.
     cp -- "$CLONE_VIEW/.git/config" "$RUN_DIR_VIEW/meta/clone-config.pristine"
     chmod 600 -- "$RUN_DIR_VIEW/meta/clone-config.pristine"
 }
@@ -862,11 +898,16 @@ stage_policy_and_skills() {
 
 # stage_script <basename> - copy one orchestrator program into the run.
 #
-# The control plane never mounts this checkout either. It gets one file, from
-# the run directory, read-only.
+# The control plane never mounts this checkout either. It gets the named
+# program and the clone-integrity module it imports, from the run directory,
+# read-only. run_in_runner mounts both into the directory that holds the
+# Sandcastle dependency tree.
 stage_script() {
-    cp -- "$REPO_ROOT/config/sandcastle/$1" "$RUN_DIR_VIEW/staging/$1" ||
-        fail 2 "cannot copy config/sandcastle/$1"
+    local f
+    for f in "$1" clone-integrity.mjs; do
+        cp -- "$REPO_ROOT/config/sandcastle/$f" "$RUN_DIR_VIEW/staging/$f" ||
+            fail 2 "cannot copy config/sandcastle/$f"
+    done
 }
 
 # write_credential_file <agent>... - the only path a credential takes.
@@ -961,6 +1002,7 @@ run_in_runner() {
         -v "$RUN_DIR_HOST/staging:$RUN_DIR_HOST/staging:ro" \
         -v "$RUN_DIR_HOST/creds:$RUN_DIR_HOST/creds:ro" \
         -v "$RUN_DIR_HOST/staging/$script:/opt/workstation/sandcastle/$script:ro" \
+        -v "$RUN_DIR_HOST/staging/clone-integrity.mjs:/opt/workstation/sandcastle/clone-integrity.mjs:ro" \
         -w "$CLONE_HOST" \
         "$RUNNER_REF" \
         "/opt/workstation/sandcastle/$script" </dev/null 2>&1 | redact
@@ -1315,6 +1357,7 @@ cmd_run() {
         MAX_COMMITS="$max_commits" ALLOW_MERGES="$allow_merges" \
         TIMEOUT="$timeout" EFFORT="$effort" IMAGE="$image" \
         ASSERT="$assert_isolation" STATE="$STATE_HOST" \
+        GIT_NAME="$AGENTBOX_GIT_NAME" GIT_EMAIL="$AGENTBOX_GIT_EMAIL" \
         CHECKS="$(printf '%s\n' ${checks[@]+"${checks[@]}"})" \
         python3 -c '
 import json, os
@@ -1337,6 +1380,8 @@ plan = {
     "checks": checks,
     "sandboxImage": os.environ["IMAGE"],
     "assertIsolation": os.environ["ASSERT"] == "1",
+    "cloneGitIdentity": os.environ["GIT_NAME"] + " <" + os.environ["GIT_EMAIL"] + ">",
+    "realRepositoryConfigIsModified": False,
     "effort": os.environ.get("EFFORT") or None,
 }
 print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
@@ -1406,6 +1451,7 @@ print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
     HAS_CODEX="$( [ -n "$OPENAI_API_KEY" ] && printf 1 || printf 0 )" \
     FORBIDDEN="$(printf '%s\n%s\n%s\n%s\n' "$REAL_REPO_HOST" "$REAL_REPO_HOST/.git" \
                      "$HOST_HOME/.agents" "$SKILLS_DIR")" \
+    GIT_NAME="$AGENTBOX_GIT_NAME" GIT_EMAIL="$AGENTBOX_GIT_EMAIL" \
     CHECKS="$(printf '%s\n' ${checks[@]+"${checks[@]}"})" \
     python3 -c '
 import json, os
@@ -1434,6 +1480,7 @@ cfg = {
                     "codex": os.environ["HAS_CODEX"] == "1"},
     "credentialPath": "/opt/agents/credential/agent.env",
     "forbiddenPaths": forbidden,
+    "gitIdentity": {"name": os.environ["GIT_NAME"], "email": os.environ["GIT_EMAIL"]},
 }
 if os.environ.get("EFFORT"):
     cfg["effort"] = os.environ["EFFORT"]
@@ -1653,6 +1700,7 @@ cmd_selftest() {
     RUN_ID="$run_id" CLONE="$CLONE_HOST" BRANCH_="$BRANCH" \
     BASE_BRANCH="$BASE_BRANCH" BASE="$base_sha" IMAGE="$image" \
     MOUNTS="$mounts_json" \
+    GIT_NAME="$AGENTBOX_GIT_NAME" GIT_EMAIL="$AGENTBOX_GIT_EMAIL" \
     FORBIDDEN="$(printf '%s\n%s\n%s\n%s\n' "$REAL_REPO_HOST" "$REAL_REPO_HOST/.git" \
                      "$HOST_HOME/.agents" "$SKILLS_DIR")" \
     python3 -c '
@@ -1667,6 +1715,7 @@ print(json.dumps({
     "sandboxImage": os.environ["IMAGE"],
     "mounts": json.loads(os.environ["MOUNTS"]),
     "forbiddenPaths": forbidden,
+    "gitIdentity": {"name": os.environ["GIT_NAME"], "email": os.environ["GIT_EMAIL"]},
     "checks": ["git --version"],
 }))' > "$RUN_DIR_VIEW/staging/config.json"
 

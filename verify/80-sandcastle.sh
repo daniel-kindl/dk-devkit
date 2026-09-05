@@ -8,6 +8,12 @@
 #   only validated commits reach an agent/* branch
 #   no credential value is ever an argument
 #   only disposable per-run paths receive a container SELinux label
+#   every disposable clone carries a Git identity of its own, and every other
+#     change to its configuration is still a violation
+#
+# Two of the groups below are not static checks. They run the real create_clone
+# and the real integrity comparison against real repositories in a scratch
+# directory, with no container and no model credential.
 #
 # The checks that need a running Podman are skipped when there is none, so a
 # fresh machine still reports a clean run before "agentbox build".
@@ -43,11 +49,19 @@ if command -v node >/dev/null 2>&1; then
     check 'A11 orchestrate.mjs parses' -- node --check "$SC_DIR/orchestrate.mjs"
     check 'A12 selftest.mjs parses'    -- node --check "$SC_DIR/selftest.mjs"
     check 'A13 adversarial.mjs parses' -- node --check "$SC_DIR/adversarial.mjs"
+    check 'A17 clone-integrity.mjs parses' -- node --check "$SC_DIR/clone-integrity.mjs"
 else
     skip 'A11 orchestrate.mjs parses' 'no node on this side'
     skip 'A12 selftest.mjs parses'    'no node on this side'
     skip 'A13 adversarial.mjs parses' 'no node on this side'
+    skip 'A17 clone-integrity.mjs parses' 'no node on this side'
 fi
+
+check 'A18 clone-integrity.mjs exists'       -- test -f "$SC_DIR/clone-integrity.mjs"
+check 'A19 the clone identity probe is executable' -- \
+    test -x "$REPO_ROOT/verify/probes/clone-identity.sh"
+check 'A20 the clone identity probe parses' -- \
+    bash -n "$REPO_ROOT/verify/probes/clone-identity.sh"
 
 # --- the versions and the limits are pinned ---------------------------------
 
@@ -71,6 +85,16 @@ if [ -f "$MANIFEST" ]; then
         [0-9]*) pass "B5 a wall-clock limit is configured (${manifest_timeout}s)" ;;
         *) fail 'B5 a wall-clock limit is configured' "got: [$manifest_timeout]" ;;
     esac
+    # A clone with no identity is what made an agent write one of its own,
+    # halfway through a run, into the git directory the baseline was taken from.
+    manifest_git_name=$(sed -n 's/^AGENTBOX_GIT_NAME=//p' "$MANIFEST")
+    manifest_git_email=$(sed -n 's/^AGENTBOX_GIT_EMAIL=//p' "$MANIFEST")
+    if [ -n "$manifest_git_name" ] && [ -n "$manifest_git_email" ]; then
+        pass "B7 the disposable clone identity is pinned ($manifest_git_name <$manifest_git_email>)"
+    else
+        fail 'B7 the disposable clone identity is pinned' \
+            "name: [$manifest_git_name] email: [$manifest_git_email]"
+    fi
     manifest_commits=$(sed -n 's/^AGENTBOX_MAX_COMMITS=//p' "$MANIFEST")
     case $manifest_commits in
         [0-9]*) pass "B6 the import commit bound is configured ($manifest_commits)" ;;
@@ -173,6 +197,49 @@ check_contains 'D11 the selftest commit carries its own git identity' \
     'user.email=agentbox@localhost' "$SELF"
 check_contains 'D12 the adversarial commit carries its own git identity' \
     'user.email=agentbox@localhost' "$ADV"
+
+# --- the disposable clone has a Git identity of its own ---------------------
+#
+# Sandcastle reads user.name and user.email out of the repository it drives and
+# configures them inside the sandbox. A clone that carries neither leaves the
+# agent CLI to write its own fallback identity into the clone's git directory,
+# AFTER the orchestrator has recorded its integrity baseline, and an ordinary
+# run is then reported as a run that changed the clone configuration.
+
+check_contains 'D13 the clone is given a git identity' \
+    'sgit config user.name "$AGENTBOX_GIT_NAME"' "$AB_CODE"
+check_contains 'D14 the clone is given a git email' \
+    'sgit config user.email "$AGENTBOX_GIT_EMAIL"' "$AB_CODE"
+# It must be the clone. "git config --global" or a bare "git config" outside
+# sgit would reach a configuration the host also reads.
+check_not_contains 'D15 no global git config is ever written' \
+    'config --global' "$AB_CODE"
+check_contains 'D16 the orchestrator is told which identity to expect' \
+    '"gitIdentity": {"name": os.environ["GIT_NAME"]' "$AB_CODE"
+check_contains 'D17 the orchestrator refuses a clone with no identity' \
+    'missingIdentity(integrityBefore.config, cfg.gitIdentity)' "$ORCH"
+# The order is the whole fix: the identity has to be in the baseline, not a
+# change measured against it.
+identity_line=$(printf '%s\n' "$AB_CODE" | grep -n 'sgit config user.name' | cut -d: -f1)
+pristine_line=$(printf '%s\n' "$AB_CODE" | grep -n 'meta/clone-config.pristine"$' | head -1 | cut -d: -f1)
+if [ -n "$identity_line" ] && [ -n "$pristine_line" ] &&
+   [ "$identity_line" -lt "$pristine_line" ]; then
+    pass 'D18 the identity is set before the pristine configuration is saved'
+else
+    fail 'D18 the identity is set before the pristine configuration is saved' \
+        "identity at line $identity_line, pristine copy at line $pristine_line"
+fi
+
+# A package manager must not put its store in the repository it installs for.
+# pnpm does exactly that when its default store is on another device, which is
+# always true for a bind-mounted worktree. The first real run left 18448
+# untracked files in the clone, which is what made Sandcastle preserve the
+# worktree at teardown.
+SANDBOX_CF=$(code_of "$REPO_ROOT/containers/sandbox-web/Containerfile")
+check_contains 'D19 the sandbox pins a pnpm store outside the repository' \
+    'store-dir=/home/agent/.pnpm-store' "$SANDBOX_CF"
+check_contains 'D20 that store lives in the sandbox home' \
+    '/home/agent/.config/pnpm/rc' "$SANDBOX_CF"
 
 # --- the agent cannot reach main --------------------------------------------
 
@@ -383,6 +450,10 @@ check_contains 'I4 the plan records that the repository is not mounted' \
 check_contains 'I5 the plan names the disposable clone location' \
     '"disposableCloneUnder"' "$out"
 check_contains 'I6 the plan carries the wall-clock limit' '"timeoutSeconds"' "$out"
+check_contains 'I9 the plan names the identity the clone will carry' \
+    '"cloneGitIdentity"' "$out"
+check_contains 'I10 the plan records that the real config is not modified' \
+    '"realRepositoryConfigIsModified": false' "$out"
 
 # The isolation probes default to on, and --no-isolation-check turns them off.
 check_contains 'I7 a plain run asserts isolation' '"assertIsolation": true' "$out"
@@ -397,6 +468,38 @@ check 'J1 the credential file is not in the repository' -- \
     test ! -e "$REPO_ROOT/config/agentbox/secrets.env"
 check 'J2 no run directory is tracked' -- \
     test ! -e "$REPO_ROOT/runs"
+
+# --- the comparison itself, run against real repositories -------------------
+#
+# Everything above reads the code. This runs it. verify/probes/ makes throwaway
+# repositories in a scratch directory, calls the real create_clone and the real
+# integrity comparison, and removes everything it made.
+
+if command -v node >/dev/null 2>&1; then
+    probe_out=$(node --test "$REPO_ROOT/verify/probes/clone-integrity.test.mjs" 2>&1) &&
+        probe_rc=0 || probe_rc=$?
+    probe_pass=$(printf '%s\n' "$probe_out" | sed -n 's/^# pass //p')
+    probe_fail=$(printf '%s\n' "$probe_out" | sed -n 's/^# fail //p')
+    if [ "$probe_rc" = 0 ] && [ "${probe_fail:-1}" = 0 ]; then
+        pass "L1 the clone integrity comparison behaves ($probe_pass assertions)"
+    else
+        fail 'L1 the clone integrity comparison behaves' \
+            "${probe_fail:-?} failed" \
+            "$(printf '%s\n' "$probe_out" | grep -E '^not ok|Expected' | head -6 |
+               tr '\n' ' ')"
+    fi
+else
+    skip 'L1 the clone integrity comparison behaves' 'no node on this side'
+fi
+
+probe_out=$("$REPO_ROOT/verify/probes/clone-identity.sh" 2>&1) && probe_rc=0 || probe_rc=$?
+probe_pass=$(printf '%s\n' "$probe_out" | sed -n 's/^passed \([0-9]*\) .*/\1/p')
+if [ "$probe_rc" = 0 ]; then
+    pass "L2 a real disposable clone starts with the agent identity ($probe_pass checks)"
+else
+    fail 'L2 a real disposable clone starts with the agent identity' \
+        "$(printf '%s\n' "$probe_out" | grep -A2 '  FAIL' | head -9 | tr '\n' ' ')"
+fi
 
 # --- the machine side, when Podman is reachable -----------------------------
 
