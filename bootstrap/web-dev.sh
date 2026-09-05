@@ -12,7 +12,7 @@
 #   * wires the shared agent configuration into ~/.agents, ~/.claude and ~/.codex
 #   * installs the Orca bridge wrappers and sync-agent-skills
 #   * installs the third-party skills in manifests/skills.tsv
-#   * installs the agentqueue backlog coordinator, which needs gh
+#   * installs the agentqueue backlog coordinator runtime, which needs gh
 #   * applies the shared status line specification
 #
 # What it never does:
@@ -172,8 +172,10 @@ link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca"
 
 # --------------------------------------------- the GitHub backlog coordinator --
 section 'GitHub backlog coordinator (agentqueue)'
-# It lives here and not on the host, because it needs gh and the forwarded
-# ssh-agent, and both are reachable from inside this container.
+# The runtime lives here and not on the host, because it needs gh and the
+# forwarded ssh-agent, and both are reachable from inside this container.
+# bootstrap/host.sh installs a shim of the same name on the host, which
+# delegates here through the devbox router.
 install_agentqueue "$REPO_ROOT" "$LINK_ROOT"
 
 # ------------------------------------------------------- third-party skills --

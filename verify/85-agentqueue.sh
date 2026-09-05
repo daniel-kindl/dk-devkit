@@ -270,3 +270,191 @@ fi
 
 check 'J1 no repository policy file is tracked here' -- \
     test ! -e "$REPO_ROOT/.agentqueue.json"
+
+# --- the host entry point ---------------------------------------------------
+#
+# The coordinator runs inside a container, because it needs gh and the
+# forwarded ssh-agent. The COMMAND must still work from a normal host terminal:
+#
+#     cd ~/projects/dkkb
+#     agentqueue drain --repo .
+#
+# The host side is a devbox router shim and nothing else. These checks prove
+# that it exists, that it delegates, that it carries the working directory and
+# the arguments across unchanged, that the exit status comes back, that it
+# cannot call itself, and that it adds nothing to the environment it delegates
+# to.
+
+section '8c. agentqueue host entry point'
+
+AQ_ENV=$(sed -n 's/^AGENTQUEUE_ENVIRONMENT=//p' "$AQ_MANIFEST" | head -1 | tr -d '"'"'"' \t\r')
+AQ_SHIM=$HOST_HOME/.local/bin/agentqueue
+AQ_DEVBOX=$HOST_HOME/.local/bin/devbox
+
+# The host spelling of this checkout. Only the host side can run the shim, and
+# the host does not know the /workspace spelling.
+AQ_CHECKOUT=$REPO_ROOT
+case $REPO_ROOT in
+    /workspace/*) AQ_CHECKOUT=$HOST_HOME/projects/${REPO_ROOT#/workspace/} ;;
+    /run/host/*)  AQ_CHECKOUT=${REPO_ROOT#/run/host} ;;
+esac
+
+# --- the pin is configuration, not a constant in a script -------------------
+
+if [ -n "$AQ_ENV" ]; then
+    pass "K1 the manifest names the environment that owns the runtime ($AQ_ENV)"
+else
+    fail 'K1 the manifest names the environment that owns the runtime' \
+        'AGENTQUEUE_ENVIRONMENT is missing from manifests/agentqueue.env'
+fi
+check "K2 the environment $AQ_ENV is configured for the router" -- \
+    test -f "$REPO_ROOT/config/devbox-router/environments.d/$AQ_ENV.env"
+
+# --- the shim is installed, and it is what the router generates today -------
+
+if on_host test -x "$AQ_SHIM"; then
+    pass 'K3 the host command ~/.local/bin/agentqueue exists and is executable'
+else
+    fail 'K3 the host command ~/.local/bin/agentqueue exists and is executable' \
+        'run bootstrap/host.sh'
+fi
+
+aq_shim_now=$(on_host cat "$AQ_SHIM" 2>/dev/null || true)
+aq_shim_want=$("$REPO_ROOT/bin/devbox" new-shim agentqueue --env "$AQ_ENV" --print 2>/dev/null || true)
+if [ -z "$aq_shim_now" ]; then
+    fail 'K4 the installed shim is exactly what the router generates' \
+        'the shim is missing or unreadable'
+elif [ "$aq_shim_now" = "$aq_shim_want" ]; then
+    pass 'K4 the installed shim is exactly what the router generates'
+else
+    fail 'K4 the installed shim is exactly what the router generates' \
+        'it has drifted; re-run bootstrap/host.sh'
+fi
+
+# --- it holds no runtime and no credential ----------------------------------
+#
+# A host shim is a router entry point. The host has no gh, no Node toolchain
+# and no model credential, and this file must not be the thing that changes
+# that.
+
+check_contains 'K5 the shim delegates through the devbox router' \
+    "exec \"\$router\" exec $AQ_ENV --cwd \"\$PWD\" -- agentqueue \"\$@\"" "$aq_shim_now"
+check_not_contains 'K6 the shim contains no Python runtime' 'python' "$aq_shim_now"
+for aq_needle in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY \
+                 OPENAI_API_KEY SSH_AUTH_SOCK secrets.env id_ed25519; do
+    check_not_contains "K7 the shim never names $aq_needle" "$aq_needle" "$aq_shim_now"
+done
+
+# Nothing is exported, and the only assignment is the router path. A shim that
+# set a variable would change the environment of the delegated process, and
+# "the shim adds nothing" would stop being true.
+aq_assignments=$(printf '%s\n' "$aq_shim_now" |
+    grep -oE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' |
+    tr -d ' \t' | sort -u | tr '\n' ' ')
+check_eq 'K8 the shim assigns nothing but the router path' 'router=' \
+    "$(printf '%s' "$aq_assignments" | tr -d ' ')"
+
+if [ -x "$REPO_ROOT/bin/scan-secrets" ]; then
+    printf '%s\n' "$aq_shim_now" | "$REPO_ROOT/bin/scan-secrets" --stdin >/dev/null 2>&1 &&
+        pass 'K9 the shim carries no credential' ||
+        fail 'K9 the shim carries no credential' 'bin/scan-secrets reported a finding'
+fi
+
+# --- it delegates, and it carries the working directory across --------------
+#
+# DEVBOX_DRY_RUN makes the router print the plan instead of entering the
+# container, so these checks start nothing.
+
+aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' plan --repo ." 2>&1)
+check_contains "L1 the shim delegates into $AQ_ENV" "env=$AQ_ENV" "$aq_out"
+check_contains 'L2 it is an explicit pin, not repository resolution' \
+    'source=explicit' "$aq_out"
+check_contains 'L3 ~/projects maps to the workspace inside the container' \
+    'guest_cwd=/workspace' "$aq_out"
+check_contains 'L4 argv[0] is the coordinator, not the shim' \
+    'argv[0]=agentqueue' "$aq_out"
+check_contains 'L5 --repo . reaches the coordinator unchanged' 'argv[3]=.' "$aq_out"
+
+# The reported defect, as a path mapping: a repository under ~/projects on the
+# host is the same repository under /workspace in the container. The name below
+# is an example, not a configured repository: 'devbox path' maps a path whether
+# or not it exists, and the space proves the mapping is not word-split.
+check_eq 'L6 a host repository path maps to the shared workspace path' \
+    '/workspace/a repo' \
+    "$(on_host "$AQ_DEVBOX" path "$AQ_ENV" "$HOST_HOME/projects/a repo" 2>&1)"
+check_eq 'L7 a directory outside the workspace maps through /run/host' \
+    "/run/host$(on_host realpath -m "$HOST_HOME/.config" 2>/dev/null)" \
+    "$(on_host "$AQ_DEVBOX" path "$AQ_ENV" "$HOST_HOME/.config" 2>&1)"
+
+# --- argv survives verbatim -------------------------------------------------
+
+aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' drain --repo 'a b' --label \"c'd\" --base 'e\"f'" 2>&1)
+check_contains 'M1 an argument with a space survives'  'argv[3]=a b' "$aq_out"
+check_contains 'M2 an argument with a quote survives'  "argv[5]=c'd" "$aq_out"
+check_contains 'M3 an argument with a double quote survives' 'argv[7]=e"f' "$aq_out"
+
+# --- the recursion guard ----------------------------------------------------
+#
+# The host shim must never be the thing that runs inside the container. Two
+# defences: the shim refuses when it detects an environment, and the router
+# strips the host shim directory from the container PATH.
+
+aq_rc=0
+host_sh "DEVBOX_ACTIVE_ENV=$AQ_ENV '$AQ_SHIM' --version" >/dev/null 2>&1 || aq_rc=$?
+check_eq 'N1 the shim refuses inside an environment (exit 8)' '8' "$aq_rc"
+
+if [ "$IN_CONTAINER" = 1 ]; then
+    aq_rc=0
+    "$HOST_HOME_VIEW/.local/bin/agentqueue" --version >/dev/null 2>&1 || aq_rc=$?
+    check_eq 'N2 the shim refuses when it is run inside the container (exit 8)' \
+        '8' "$aq_rc"
+
+    aq_path=$(bash -lc 'command -v agentqueue' 2>/dev/null || true)
+    case $aq_path in
+        "$HOST_HOME_VIEW"/.local/bin/*)
+            fail 'N3 agentqueue inside the container is the real command' \
+                 "the host shim is on PATH here: $aq_path" ;;
+        '') fail 'N3 agentqueue inside the container is the real command' \
+                 'not on PATH; run bootstrap/web-dev.sh' ;;
+        *)  pass "N3 agentqueue inside the container is the real command ($aq_path)" ;;
+    esac
+else
+    skip 'N2 the shim refuses when it is run inside the container' 'host side'
+    skip 'N3 agentqueue inside the container is the real command' 'host side'
+fi
+
+# --- the exit status and the resolved repository come back ------------------
+#
+# These enter the container for real. They read nothing from GitHub and they
+# change nothing: "policy" resolves files, and a directory that is not a Git
+# working tree is refused before anything else happens.
+
+if on_host test -x "$AQ_SHIM"; then
+    aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' policy --repo ." 2>&1); aq_rc=$?
+    check_eq 'O1 a usage failure inside the container exits 2 on the host' '2' "$aq_rc"
+    check_contains 'O2 --repo . resolved against the translated directory' \
+        'not a Git working tree: /workspace' "$aq_out"
+
+    aq_out=$(host_sh "'$AQ_SHIM' --version" 2>&1); aq_rc=$?
+    check_eq 'O3 a success inside the container exits 0 on the host' '0' "$aq_rc"
+    check_contains 'O4 the version comes from the coordinator, not the shim' \
+        'agentqueue ' "$aq_out"
+
+    if on_host test -d "$AQ_CHECKOUT/.git" &&
+       host_sh "git -C '$AQ_CHECKOUT' remote get-url origin" >/dev/null 2>&1; then
+        aq_out=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy --repo ." 2>&1); aq_rc=$?
+        check_eq 'O5 --repo . works from a repository on the host' '0' "$aq_rc"
+        check_contains 'O6 it resolved this repository' 'repository' "$aq_out"
+    else
+        skip 'O5 --repo . works from a repository on the host' \
+             "no host checkout with an origin remote at $AQ_CHECKOUT"
+        skip 'O6 it resolved this repository' 'see O5'
+    fi
+else
+    skip 'O1 a usage failure inside the container exits 2 on the host' 'no host shim'
+    skip 'O2 --repo . resolved against the translated directory' 'no host shim'
+    skip 'O3 a success inside the container exits 0 on the host' 'no host shim'
+    skip 'O4 the version comes from the coordinator, not the shim' 'no host shim'
+    skip 'O5 --repo . works from a repository on the host' 'no host shim'
+    skip 'O6 it resolved this repository' 'no host shim'
+fi

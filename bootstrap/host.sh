@@ -15,9 +15,11 @@
 #   * creates the web-dev Distrobox from distrobox/web-dev.ini when it is absent
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
 #   * installs the agentbox CLI and prepares its credential file location
+#   * installs the agentqueue host shim, which delegates into the container
 #
 # What it never does:
 #   * install a Node or npm toolchain on the host
+#   * install the agentqueue runtime on the host: the host gets the shim only
 #   * touch an existing web-dev container
 #   * write any credential
 #   * overwrite live devbox repository assignments
@@ -27,6 +29,8 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 . "$REPO_ROOT/bootstrap/lib/common.sh"
 # shellcheck source=lib/sandcastle.sh
 . "$REPO_ROOT/bootstrap/lib/sandcastle.sh"
+# shellcheck source=lib/agentqueue.sh
+. "$REPO_ROOT/bootstrap/lib/agentqueue.sh"
 
 SKIP_FLATPAK=0
 SKIP_BREW=0
@@ -216,6 +220,14 @@ else
     warn 'podman is not available; agentbox cannot run'
 fi
 
+# ------------------------------------------- the GitHub backlog coordinator --
+section 'GitHub backlog coordinator host entry point (agentqueue)'
+# The coordinator itself stays inside the container: it needs gh and the
+# forwarded ssh-agent, and the host keeps no Node toolchain. The host gets the
+# COMMAND, as a router shim that carries the working directory across and holds
+# no credential of its own. See docs/agentqueue.md.
+install_agentqueue_host_shim "$REPO_ROOT"
+
 # ---------------------------------------------------------------------- Orca --
 section 'Orca'
 if [ -x "$HOME/.local/bin/orca-ide" ]; then
@@ -229,6 +241,6 @@ fi
 manual 'Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519'
 manual 'Authenticate GitHub on the host: gh auth login --git-protocol ssh'
 manual 'Mint an unattended Claude token on the host with "claude setup-token", then put it in ~/.config/agentbox/secrets.env'
-manual 'Run bootstrap/web-dev.sh inside the container: devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh'
+manual 'Run bootstrap/web-dev.sh inside the container: devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh (it installs the agentqueue runtime the host shim delegates to)'
 
 summary

@@ -55,6 +55,10 @@ Edit it only through this repository.
    write outside the `agent/` namespace. `verify.sh` module 8b checks each of
    these, and `docs/agentqueue.md` says why.
 
+   The host `agentqueue` command is a router shim and must stay one. It holds
+   no runtime, no state and no credential, and it delegates to the environment
+   that `manifests/agentqueue.env` names. `verify.sh` module 8c checks that.
+
 9. **Do not special-case a repository.** The router already resolves an
    environment from `.devbox`, from the git-common-dir, from `repos.tsv`, and
    from the inference rules. The queue policy resolves the same way, from

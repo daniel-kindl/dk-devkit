@@ -102,6 +102,15 @@ It stores no credential of its own. It writes no token to disk, it never runs
 `gh auth token`, and it never reads `~/.config/agentbox/secrets.env`. Those
 three facts are checked statically by `verify.sh` module 8b.
 
+The host `agentqueue` command adds nothing to that picture. It is a devbox
+router shim: it translates the working directory and delegates into the
+container, and it assigns no variable but the router path. The host therefore
+gains no `gh` sign-in, no SSH key and no model credential because this command
+exists. `verify.sh` module 8c checks the installed shim for each of those
+names, scans it with `bin/scan-secrets`, and `bin/devbox-verify` compares the
+delegated environment against a direct `devbox exec` and requires them to be
+identical.
+
 `agentqueue` gives a sandbox nothing. It hands `agentbox` a repository path, a
 branch name, a prompt file and a set of limits, and `agentbox` decides what
 reaches the container. The prompt it writes names no credential and no

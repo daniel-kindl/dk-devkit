@@ -324,6 +324,133 @@ out=$(dbx doctor "$PRIMARY_REPO" 2>&1); rc=$?
 expect_rc 'N5 devbox doctor runs' 0 "$rc" "$out"
 expect_contains 'N6 doctor reports in-box tools' 'distrobox-homes/web-dev' "$out"
 
+# ------------------------------------------------ O: pinned host shims -----
+
+section 'O. pinned host shims (devbox new-shim --env)'
+#
+# A resolved shim asks the repository which environment owns it. A pinned shim
+# does not: the tool is installed in ONE environment, so the working directory
+# decides the path and never the destination. agentqueue is the first user.
+#
+# The shims below are written into the scratch directory, so the real
+# ~/.local/bin is untouched.
+
+SHIMS=$SCRATCH/shims
+mkdir -p -- "$SHIMS"
+# A variable assignment in front of a real command does not survive it, so
+# neither helper leaks its settings into the rest of this suite.
+mkshim()  { DEVBOX_SHIM_DIR=$SHIMS "$DEVBOX" new-shim "$@" >/dev/null 2>&1; }
+# The shims must see the throwaway configuration and this router, exactly as an
+# installed shim sees the real ones.
+runshim() { DEVBOX_CONFIG_HOME=$CFG DEVBOX_BIN=$DEVBOX "$SHIMS/$1" "${@:2}"; }
+
+mkshim env   --env verify-alt
+mkshim false --env verify-alt
+out=$(DEVBOX_SHIM_DIR=$SHIMS "$DEVBOX" new-shim env --env verify-alt 2>&1); rc=$?
+expect_rc 'O1 new-shim refuses to overwrite an existing shim' 8 "$rc" "$out"
+
+# Generation is reproducible: the installed file is what --print prints today.
+expect_eq 'O2 the installed shim is exactly what --print generates' \
+    "$(dbx new-shim env --env verify-alt --print 2>/dev/null)" "$(cat "$SHIMS/env")"
+
+# The pin wins over repository resolution. $SCRATCH/nodeish infers web-dev on
+# its own; through a shim pinned to verify-alt it must reach verify-alt.
+out=$(cd "$SCRATCH/nodeish" && DEVBOX_DRY_RUN=1 runshim env 2>&1)
+expect_contains 'O3 a pinned shim ignores the repository environment' $'env=verify-alt' "$out"
+expect_contains 'O4 the pin is explicit, not resolved'               $'source=explicit' "$out"
+out=$(cd "$SCRATCH/nodeish" && dbx_cfg where --porcelain 2>&1)
+expect_contains 'O5 the same directory resolves elsewhere on its own' $'env\tweb-dev' "$out"
+
+# The working directory crosses the boundary, and so does argv.
+out=$(cd "$SPACED" && DEVBOX_DRY_RUN=1 runshim env 2>&1)
+expect_contains 'O6 a pinned shim translates the working directory' \
+    'guest_cwd=/workspace/.devbox-verify.tmp/re po/my project' "$out"
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim env --repo . 'a b' 2>&1)
+expect_contains 'O7 argv[0] is the tool, not the shim' $'argv[0]=env' "$out"
+expect_contains 'O8 a relative path reaches the tool unchanged' $'argv[1]=--repo' "$out"
+expect_contains 'O9 argv keeps a dot'    $'argv[2]=.' "$out"
+expect_contains 'O10 argv keeps a space' $'argv[3]=a b' "$out"
+
+# The recursion guard: a host shim must never run inside a container.
+out=$(DEVBOX_ACTIVE_ENV=verify-alt runshim env 2>&1); rc=$?
+expect_rc 'O11 a pinned shim refuses inside an environment' 8 "$rc" "$out"
+expect_contains 'O12 and it says which environment' 'verify-alt' "$out"
+
+# The exit status of the real command comes back to the host.
+out=$(cd "$PROJECTS" && runshim env 2>&1 </dev/null); rc=$?
+expect_rc 'O13 a pinned shim returns the exit status of a success' 0 "$rc" "$out"
+out=$(cd "$PROJECTS" && runshim false 2>&1 </dev/null); rc=$?
+expect_rc 'O14 a pinned shim returns the exit status of a failure' 1 "$rc" "$out"
+mkshim definitely-not-a-real-command --env verify-alt
+out=$(cd "$PROJECTS" && runshim definitely-not-a-real-command 2>&1 </dev/null); rc=$?
+expect_rc 'O15 a missing command inside the environment still exits 127' 127 "$rc" "$out"
+
+# The shim adds NOTHING to the environment of the delegated process. This is
+# the check that keeps a host shim from becoming a place to put a credential.
+# Both sides carry the same two test overrides, so the only difference that can
+# appear is one the shim itself made.
+shim_env=$(cd "$PROJECTS" && runshim env 2>/dev/null </dev/null | sort)
+direct_env=$(cd "$PROJECTS" &&
+    DEVBOX_CONFIG_HOME=$CFG DEVBOX_BIN=$DEVBOX "$DEVBOX" exec verify-alt \
+        --cwd "$PROJECTS" -- env 2>/dev/null </dev/null | sort)
+if [[ -z $shim_env || -z $direct_env ]]; then
+    t_fail 'O16 the shim adds nothing to the delegated environment' \
+        'one of the two environments could not be read'
+else
+    env_delta=$(diff <(printf '%s\n' "$direct_env") <(printf '%s\n' "$shim_env") |
+                grep '^[<>]' | tr '\n' ' ')
+    expect_eq 'O16 the shim adds nothing to the delegated environment' '' "$env_delta"
+fi
+
+# A terminal interrupt must reach the command inside the container, and the
+# host must see the usual 130. A pty is what makes this representative: an
+# interactive Ctrl-C goes to the foreground process group of the terminal, not
+# to the host-side process id.
+if command -v python3 >/dev/null 2>&1; then
+    mkshim sleep --env verify-alt
+    out=$(cd "$PROJECTS" && DEVBOX_CONFIG_HOME=$CFG DEVBOX_BIN=$DEVBOX \
+          python3 - "$SHIMS/sleep" <<'PY'
+import os, pty, signal, sys, time
+
+shim = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv("/bin/bash", ["bash", "-c", f'{shim} 25.7; echo "RC=$?"'])
+
+time.sleep(4)                       # let the command reach the container
+os.write(fd, b"\x03")               # Ctrl-C on the terminal
+
+deadline, seen = time.time() + 15, ""
+os.set_blocking(fd, False)
+while time.time() < deadline and "RC=" not in seen:
+    try:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        seen += chunk.decode(errors="replace")
+    except BlockingIOError:
+        time.sleep(0.2)
+    except OSError:
+        break
+print(seen.replace("\r\n", " ").strip() or "(no output)")
+try:
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+except OSError:
+    pass
+PY
+    )
+    expect_contains 'O17 a terminal interrupt ends the delegated command (exit 130)' \
+        'RC=130' "$out"
+    left=$(dbx_cfg exec verify-alt -- bash -lc 'pgrep -c -f "sleep 25\.7" || true' \
+           2>/dev/null </dev/null | tr -d '[:space:]')
+    expect_eq 'O18 the interrupted command left nothing inside the environment' \
+        0 "${left:-0}"
+else
+    t_skip 'O17 a terminal interrupt ends the delegated command' 'no python3'
+    t_skip 'O18 the interrupted command left nothing inside the environment' 'no python3'
+fi
+
 # ------------------------------------------------------------------ summary --
 
 printf '\n== summary ==\n'

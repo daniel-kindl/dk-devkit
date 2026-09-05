@@ -14,6 +14,7 @@ optional `.devbox` file, and using one is a project's own decision.
     ~/.local/bin/devbox-verify       the verification suite
     ~/.local/bin/claude              host shim -> devbox agent claude
     ~/.local/bin/codex               host shim -> devbox agent codex
+    ~/.local/bin/agentqueue          pinned shim -> devbox exec web-dev
     ~/.local/bin/devbox-run          compatibility wrapper -> devbox run
     ~/.local/bin/web-dev-run         compatibility wrapper -> devbox exec web-dev
 
@@ -78,11 +79,33 @@ workspace".
 
     devbox new-env rust-dev --box rust-dev --workspace ~/projects:/workspace
     devbox new-shim gemini           add a host shim for another agent CLI
+    devbox new-shim aq --env web-dev add a host shim pinned to one environment
+    devbox new-shim aq --print       print the shim text instead of writing it
 
 Exit codes: 2 usage, 3 not a repository, 4 unresolved, 5 environment not
 configured, 6 container missing, 7 ambiguous inference, 8 refused
 (recursion guard / would silently change an assignment), 127 command not found
 inside the container.
+
+## Two kinds of host shim
+
+A **resolved** shim asks the repository which environment owns it:
+
+    exec "$router" agent claude "$@"
+
+That is right for a toolchain command. `claude` in a Rust repository belongs in
+`rust-dev`, and in a Node repository it belongs in `web-dev`.
+
+A **pinned** shim names the environment:
+
+    exec "$router" exec web-dev --cwd "$PWD" -- agentqueue "$@"
+
+That is right for a command that is installed in exactly one environment. The
+working directory still crosses the boundary, so a relative path such as
+`--repo .` keeps its meaning; only the destination is fixed.
+
+Both kinds refuse to run inside a container and exit 8, and the router strips
+this directory from the container `PATH`, so a shim can never call itself.
 
 ## Orca
 
