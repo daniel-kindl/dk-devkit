@@ -79,8 +79,9 @@ if [ "$uv_current" = "$UV_VERSION" ]; then
 elif [ "$DRY_RUN" = 1 ]; then
     info "would install uv $UV_VERSION into $HOME/.local/bin"
 else
-    UV_NO_MODIFY_PATH=1 \
-        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
+    export UV_NO_MODIFY_PATH=1
+    curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
+    unset UV_NO_MODIFY_PATH
     uv_current=$("$HOME/.local/bin/uv" --version 2>/dev/null | awk '{print $2}')
     [ "$uv_current" = "$UV_VERSION" ] || die "uv install returned version ${uv_current:-unknown}; expected $UV_VERSION"
     change "installed uv $UV_VERSION"
