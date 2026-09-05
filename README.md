@@ -1,149 +1,196 @@
 # workstation
 
-A version-controlled definition of a Bazzite KDE development workstation.
+Reusable development tools, agent workflows, environment definitions, and automation that power Daniel's software-development setup.
 
-The goal is narrow and practical: a fresh Bazzite installation must be able to
-use this repository to rebuild the development and agent environment, with as
-little manual work as the tools allow.
+This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-This repository holds **configuration, manifests and installers**. It holds no
-credentials, no session state and no toolchain payloads. See
-[docs/secrets.md](docs/secrets.md).
+> The toolkit architecture is in transition. Current commands below exist now. Modular component installation, profiles, and broader platform adapters are roadmap work tracked in #8 and #24; this README does not present them as already implemented.
 
-## The shape of the machine
+## Current tools
 
-    Bazzite host                          isolated, purpose-specific containers
-    ------------                          -------------------------------------
-    Homebrew CLI tools                    web-dev      Node 22 + pnpm  (exists)
-    Flatpak desktop apps                  dotnet-dev   planned
-    Git + GitHub over SSH                 rust-dev     planned
-    Orca (~/.local/bin/orca-ide)          android-dev  planned
-    ~/projects  <- source checkouts
-    ~/.local/bin/devbox  <- the router
+### `devbox`
 
-The host keeps no language toolchain. Node, pnpm and the agent CLIs live inside
-`web-dev`. The `devbox` router decides which container owns the current Git
-repository, and runs the command there. The `claude` and `codex` commands on the
-host are shims that go through the router, so Orca launches an agent on the host
-and the agent runs in the correct container.
+Routes interactive commands into the development environment that owns a repository. The current primary environment is `web-dev`, a Fedora Distrobox with an isolated home and the web/Node agent toolchain.
 
-Unattended agents are the other half. `agentbox` runs an agent with no human
-present, in a Podman container that is destroyed afterwards, against a
-disposable clone of the repository. The real repository is never mounted, and
-only validated commits are imported onto an `agent/` branch. It never pushes.
-Read [docs/sandcastle.md](docs/sandcastle.md).
+```bash
+devbox doctor
+devbox exec web-dev --cwd ~/projects/example -- pnpm check
+```
 
-`agentq` carries that result the rest of the way. One command runs a
-GitHub backlog: it picks a runnable issue, drives `agentbox`, pushes the
-validated branch, opens the pull request, waits for the checks, merges when
-every gate passes, and looks again, because a merge can unblock the next issue.
-It is a separate program because it holds the GitHub authority that a sandbox
-must never get. Read [docs/agentq.md](docs/agentq.md).
+Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
+
+### `agentbox`
+
+Runs an unattended coding agent against a **disposable clone** in an isolated Podman sandbox. The real repository is not mounted into the model sandbox. `agentbox` validates the result before importing accepted commits onto an `agent/*` branch and never receives GitHub push or merge authority.
+
+```bash
+agentbox doctor
+agentbox build
+agentbox selftest
+agentbox selftest --adversarial
+```
+
+Read [docs/sandcastle.md](docs/sandcastle.md) for the security and runtime architecture.
+
+### `agentq`
+
+Coordinates a GitHub issue backlog in the trusted layer. It selects runnable issues, drives `agentbox`, scans validated diffs, pushes branches, opens pull requests, waits for configured checks/review gates, and merges only when repository policy permits.
 
 ```bash
 cd ~/projects/dkkb
-agentq plan               # what it would do, changes nothing
-agentq run                # do it
-agentq run --verbose      # more detail
-agentq run --debug        # the raw agentbox stream
-agentq run --quiet        # failures and the summary only
+agentq doctor
+agentq plan
+agentq run
 ```
 
-Every command works on the repository you stand in. `--repo PATH` names
-another one, for a run started from somewhere else.
+The host command is a router shim; the real coordinator currently runs inside `web-dev`, where `gh` and the forwarded SSH agent are available. Read [docs/agentq.md](docs/agentq.md).
 
-A run prints a compact stage view: which issue, which stage, how long, and
-what happened. The full transcript of every run is kept under the historical
-internal state path `~/.local/share/agentqueue/runs/`, so a quiet terminal costs
-no evidence.
+The coordinator's public name is `agentq`. Some durable internal identifiers intentionally keep the older `agentqueue` name, including `.agentqueue.json`, existing run-state paths, internal configuration variables, and historical claim markers.
+
+## Current architecture
 
 ```text
-[1/2] #86 Implement entry-selection module
-  ✓ CLAIM            agent/issue-86-implement-entry-selection-module
-  ● IMPLEMENT        3m 42s · Claude · iteration 2/4
+Bazzite/Fedora host
+|
++-- devbox ----------------------> web-dev Distrobox
+|                                  +-- Node / pnpm
+|                                  +-- Claude Code
+|                                  +-- Codex
+|                                  `-- agentq runtime
+|
++-- agentbox
+|    +-- disposable clone
+|    +-- agent-runner control plane
+|    `-- disposable model sandbox
+|
+`-- agentq host shim
+     `-- trusted GitHub coordinator in web-dev
 ```
 
-You type that on the host. The coordinator runs inside `web-dev`, where `gh`
-and the forwarded ssh-agent are, and the host `agentq` is a router shim that
-carries the working directory across. It works the same way the `claude` and
-`codex` commands do.
+The trust boundary is deliberate:
 
-Read [docs/architecture.md](docs/architecture.md) for the full picture.
+- `agentq` is trusted and can use GitHub/SSH authority.
+- `agentbox` is the trusted driver around disposable execution and import validation.
+- model output runs in a disposable sandbox without GitHub or SSH authority.
+- the development Distrobox is a convenience/development environment, **not** a hostile-code security boundary.
 
-## Rebuild a machine
+See [docs/architecture.md](docs/architecture.md) for the full current workstation architecture.
 
-Full instructions, including every manual step, are in
-[docs/recovery.md](docs/recovery.md). The short form:
+## Toolkit direction
+
+The target shape is independently reusable components that declare capabilities and dependencies instead of assuming one Bazzite machine:
+
+```text
+personal development toolkit
+|
++-- commands
+|   +-- devbox
+|   +-- agentbox
+|   +-- agentq
+|   `-- repository tools
+|
++-- agent workflows / policies / skills
++-- development environments
++-- platform capability adapters
+`-- profiles
+    +-- minimal
+    +-- developer
+    +-- agent-dev
+    `-- daniel
+```
+
+The planned `daniel` profile will compose the complete personal workstation. It will not be a hidden dependency of reusable tools.
+
+Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/workstation/issues/8) and [#24](https://github.com/daniel-kindl/workstation/issues/24).
+
+## Platform support
+
+| Platform | Status |
+| --- | --- |
+| Bazzite/Fedora | Primary current implementation and verification target |
+| Debian/Ubuntu | Planned capability adapter |
+| Arch Linux | Planned after the capability abstraction is proven |
+| macOS | Future, component by component where requirements can be met |
+| Windows | WSL2 preferred before native support |
+
+A future adapter does not imply that every component will work everywhere. In particular, `agentbox` requires security/runtime properties that a platform must prove before it can be considered supported.
+
+## Current setup
+
+The repository still has a machine-oriented bootstrap while the component installer is being designed.
+
+On Bazzite/Fedora:
 
 ```bash
-# 1. On a fresh Bazzite install, get Git and Homebrew, then the SSH key.
-ujust install-brew
-ssh-add ~/.ssh/id_ed25519          # restore the key first; see docs/secrets.md
-
-# 2. Clone this repository.
+# Clone the repository.
 mkdir -p ~/projects
 git clone git@github.com:daniel-kindl/workstation.git ~/projects/workstation
 
-# 3. Build the host: packages, router, shims, and the web-dev container.
+# Configure the host and create web-dev when absent.
 ~/projects/workstation/bootstrap/host.sh
 
-# 4. Build the container: toolchain, agent CLIs, shared configuration, skills.
+# Configure the web-dev environment.
 ~/.local/bin/devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh
 
-# 5. Authenticate. This step is manual on purpose.
-gh auth login --git-protocol ssh
-~/.local/bin/devbox exec web-dev -- claude    # then /login
-~/.local/bin/devbox exec web-dev -- codex login
-
-# 6. Prepare unattended agent runs (optional).
-claude setup-token                        # then edit ~/.config/agentbox/secrets.env
-agentbox build
-
-# 7. Check the result.
+# Verify the current installation.
 ~/projects/workstation/verify.sh
 ```
 
-Both bootstrap scripts are idempotent. Run them again at any time. They check
-the current state first and change only what does not match. Anything they
-replace is copied into `~/.agents/backups/<timestamp>/` first. Add `--dry-run`
-to see what a run would change.
+Both bootstrap scripts are intended to converge existing state rather than blindly replace it. Use `--dry-run` where supported to preview changes.
 
-## Layout
+Full recovery instructions are in [docs/recovery.md](docs/recovery.md).
 
-| Path | What it holds |
+## Authentication and private state
+
+Credentials and authentication state are not repository configuration.
+
+The repository does not intentionally track:
+
+- SSH private keys;
+- GitHub tokens;
+- Claude or Codex credentials/session state;
+- machine-local secrets;
+- generated run logs;
+- private overrides.
+
+See [docs/secrets.md](docs/secrets.md). Public defaults and local/private state are being formalized further under #14.
+
+## Repository layout
+
+| Path | Purpose |
 | --- | --- |
-| `bootstrap/` | The two installers: `host.sh` and `web-dev.sh` |
-| `distrobox/` | `web-dev.ini`, a Distrobox Assemble manifest |
-| `manifests/` | What to install: Homebrew, Flatpak, packages, toolchain versions, skills |
-| `config/agents/` | The canonical shared agent policy and the status line |
-| `config/devbox-router/` | The router configuration and inference rules |
-| `config/claude/`, `config/codex/` | Non-secret client preferences |
-| `config/web-dev/` | Files that belong to the container: shell fragment, Orca bridge |
-| `bin/` | The router, `agentbox`, `agentq`, the verification suites and the other tools |
-| `lib/agentqueue/` | The backlog coordinator implementation; the package name is a stable internal identifier |
-| `containers/` | The Containerfiles for the agent control plane and its sandboxes |
-| `config/sandcastle/` | The orchestration programs that run inside the control plane |
-| `config/agentqueue/` | The built-in queue policy; the path is a stable internal identifier |
-| `verify/` | The verification modules that `./verify.sh` runs |
-| `docs/` | Architecture, bootstrap, recovery, and the secret policy |
-| `.devbox` | The router declaration: this repository is edited in `web-dev` |
+| `bin/` | Reusable commands and utilities |
+| `lib/agentqueue/` | Internal Python implementation behind the public `agentq` command |
+| `bootstrap/` | Current host and `web-dev` convergence scripts |
+| `distrobox/` | Current development-environment definitions |
+| `containers/` | Agent control-plane and sandbox images |
+| `config/` | Public non-secret configuration and agent/runtime policy |
+| `manifests/` | Package, toolchain, skill, and runtime version declarations |
+| `verify/` | Deterministic verification modules and probes |
+| `docs/` | Architecture, recovery, security, and tool documentation |
 
-## Verify
+The planned component/profile layout is a roadmap direction. Existing files will move only when the component contract makes the new boundary useful.
+
+## Verification
 
 ```bash
-./verify.sh              # everything, with the fast devbox suite
-./verify.sh --full       # also launch the real agent CLIs
+./verify.sh              # normal verification
+./verify.sh --full       # includes slower real-agent routing checks
 ./verify.sh --no-devbox  # skip the devbox routing suite
-./verify.sh --only 3     # one module group
+./verify.sh --list       # list verification modules
 ```
 
-`verify.sh` runs from either side: on the host, or inside the `web-dev`
-container. It changes nothing, except that module 9 runs the pre-existing
-`devbox-verify` suite, which uses its own scratch directory and removes it
-again.
+Some verification is deliberately machine-specific because this repository is also the source of truth for Daniel's real setup. Portable component verification will be separated as the toolkit architecture matures.
 
-## Writing policy
+## Project policies
 
-The prose in this repository follows ASD-STE100. `config/agents/AGENTS.md` holds
-the policy, and it is the same file that Claude Code and Codex read as their
-global instructions.
+- Technical prose follows the repository's ASD-STE100 policy in `config/agents/AGENTS.md`.
+- Security-sensitive changes must preserve the `agentbox` sandbox/import boundary and `agentq` authority boundary.
+- Platform support claims require verification evidence.
+- Credentials and private machine state stay outside Git.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
