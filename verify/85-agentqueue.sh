@@ -772,7 +772,9 @@ fi
 # --- argv survives verbatim -------------------------------------------------
 
 aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' run --repo 'a b' --label \"c'd\" --base 'e\"f'" 2>&1)
-check_contains 'M1 an argument with a space survives'  'argv[3]=a b' "$aq_out"
+# --repo is a mapped path option, so 'a b' resolves against the host working
+# directory and crosses over as a workspace path. The space must survive that.
+check_contains 'M1 an argument with a space survives'  'argv[3]=/workspace/a b' "$aq_out"
 check_contains 'M2 an argument with a quote survives'  "argv[5]=c'd" "$aq_out"
 check_contains 'M3 an argument with a double quote survives' 'argv[7]=e"f' "$aq_out"
 
