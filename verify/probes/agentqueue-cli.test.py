@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""The agentqueue command surface: the command names and the repository.
+"""The agentq command surface: command names and repository resolution.
 
-Two things are proved here, and both are user-visible:
-
-    "run" is the only command that starts a run, and "drain" is gone
-    the repository is the current Git working tree unless --repo names one
-
-The tests drive ``agentqueue.cli.main`` itself, against a real disposable Git
-repository, so a passing case is the real argument parsing, the real
-resolution and the real exit code. GitHub and agentbox stay doubles, because
-neither can be created in a temporary directory.
-
-    python3 verify/probes/agentqueue-cli.test.py
-
-verify/85-agentqueue.sh runs this file, and it fails the module on any error.
+The tests drive the internal ``agentqueue.cli.main`` implementation directly.
+The package name is deliberately stable, while the supported CLI identity is
+``agentq``.
 """
 
 from __future__ import annotations
@@ -40,9 +30,6 @@ READY = "ready-for-agent"
 COMMANDS = ("run", "plan", "doctor", "policy", "init")
 SCANNER = os.path.join(_ROOT, "bin", "scan-secrets")
 
-# The identity agentbox stamps on every commit, read from the same manifest
-# the coordinator reads. A branch whose commits carry another identity is not
-# adopted, so the double must commit as agentbox does.
 _IDENTITY = cli_mod._agent_identities(_ROOT) or ["Agent <agent@local>"]
 AGENT_NAME, _, AGENT_EMAIL = _IDENTITY[0].partition(" <")
 AGENT_EMAIL = AGENT_EMAIL.rstrip(">")
@@ -70,13 +57,6 @@ def git(args, cwd):
 
 
 class Repository:
-    """A bare remote and a working clone, both disposable.
-
-    ``name`` is used verbatim as a directory name, so a test can ask for a
-    path that holds a space or a quote and prove that nothing along the way
-    splits it.
-    """
-
     def __init__(self, root, name="work", policy=None):
         self.remote = os.path.join(root, name + ".git")
         self.work = os.path.join(root, name)
@@ -105,8 +85,6 @@ class Repository:
 
 
 class CommittingRunner(fakes.FakeRunner):
-    """An agentbox double that really commits into the disposable clone."""
-
     def __init__(self, work, script=None):
         super().__init__(None, script)
         self.work = work
@@ -146,8 +124,6 @@ class CommittingRunner(fakes.FakeRunner):
 
 
 class CliCase(unittest.TestCase):
-    """One disposable repository, and a ``main`` that cannot reach GitHub."""
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = self._tmp.name
@@ -168,15 +144,8 @@ class CliCase(unittest.TestCase):
         os.chdir(self._cwd)
         self._tmp.cleanup()
 
-    # ------------------------------------------------------------- driving --
-
     def invoke(self, argv, cwd=None, wire=True):
-        """Run ``agentqueue`` argv and answer (exit code, stdout, stderr).
-
-        ``wire`` replaces GitHub and agentbox with the doubles. It is off for
-        the cases that must not reach either, so that a resolution failure
-        cannot be hidden by a double that answers anyway.
-        """
+        """Run agentq argv against the internal CLI implementation."""
         github, runner = cli_mod.GitHub, cli_mod.AgentboxRunner
         if wire:
             outer = self
@@ -189,7 +158,7 @@ class CliCase(unittest.TestCase):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
                     code = cli_mod.main(argv, install_root=_ROOT)
-                except SystemExit as exc:  # argparse refuses an argument
+                except SystemExit as exc:
                     code = exc.code if isinstance(exc.code, int) else 2
         finally:
             cli_mod.GitHub, cli_mod.AgentboxRunner = github, runner
@@ -204,13 +173,13 @@ class CliCase(unittest.TestCase):
         return git(["for-each-ref", "--format=%(refname:short)"], self.repo.remote)
 
 
-# ------------------------------------------------------------ the commands --
-
-
 class TestTheCommandNames(CliCase):
     def test_run_is_a_command(self):
         args = cli_mod.build_parser().parse_args(["run"])
         self.assertEqual(args.command, "run")
+
+    def test_program_name_is_agentq(self):
+        self.assertEqual(cli_mod.build_parser().prog, "agentq")
 
     def test_drain_is_rejected_as_an_unknown_command(self):
         code, _, err = self.invoke(["drain", "--repo", self.repo.work], wire=False)
@@ -223,11 +192,6 @@ class TestTheCommandNames(CliCase):
         self.assertEqual(code, cli_mod.EXIT_USAGE)
 
     def test_drain_is_not_an_alias_of_anything(self):
-        """No alias, no hidden command, no compatibility path.
-
-        The parser is asked for its whole set of commands, so a command that
-        exists but is left out of the help would still be found here.
-        """
         import argparse
 
         found = set()
@@ -239,6 +203,7 @@ class TestTheCommandNames(CliCase):
     def test_the_help_advertises_run(self):
         code, out, _ = self.invoke(["--help"], wire=False)
         self.assertEqual(code, 0)
+        self.assertIn("agentq", out)
         self.assertIn("run", out)
         for command in COMMANDS:
             self.assertIn(command, out)
@@ -273,9 +238,6 @@ class TestTheCommandNames(CliCase):
         ):
             code, _, _ = self.invoke(["run", first, second], wire=False)
             self.assertEqual(code, cli_mod.EXIT_USAGE, f"{first} {second}")
-
-
-# ------------------------------------------------- the repository is found --
 
 
 class TestRepositoryResolution(CliCase):
@@ -358,15 +320,13 @@ class TestRepositoryResolution(CliCase):
         with self.assertRaises(cli_mod.SystemExit_) as caught:
             self.resolve(missing, self.repo.work)
         self.assertEqual(caught.exception.code, cli_mod.EXIT_USAGE)
-        self.assertIn(f"not a Git working tree: {missing}",
-                      caught.exception.message)
+        self.assertIn(f"not a Git working tree: {missing}", caught.exception.message)
 
 
 class TestEveryCommandWorksWithoutRepo(CliCase):
     def test_policy(self):
         code, out, _ = self.invoke(["policy"])
         self.assertEqual(code, cli_mod.EXIT_OK)
-        # The slug comes from the origin remote of the resolved repository.
         self.assertIn(f"{os.path.basename(self.root)}/work", out)
         self.assertIn(os.path.join(self.repo.work, ".agentqueue.json"), out)
 
@@ -377,8 +337,8 @@ class TestEveryCommandWorksWithoutRepo(CliCase):
 
     def test_doctor(self):
         code, out, _ = self.invoke(["doctor"])
-        # 5 when this machine has no gh and no forwarded agent, 0 when it has.
         self.assertIn(code, (cli_mod.EXIT_OK, cli_mod.EXIT_NOT_READY))
+        self.assertIn("agentq doctor", out)
         self.assertIn(os.path.realpath(self.repo.work), os.path.realpath(out))
 
     def test_plan(self):
@@ -397,14 +357,13 @@ class TestEveryCommandWorksWithoutRepo(CliCase):
         target = os.path.join(self.repo.work, ".agentqueue.json")
         self.assertTrue(os.path.isfile(target))
         self.assertIn(target, out)
+        self.assertIn("agentq:", out)
 
     def test_init_from_a_subdirectory_writes_at_the_top(self):
         os.remove(os.path.join(self.repo.work, ".agentqueue.json"))
         code, _, _ = self.invoke(["init"], cwd=self.repo.subdir())
         self.assertEqual(code, cli_mod.EXIT_OK)
-        self.assertTrue(
-            os.path.isfile(os.path.join(self.repo.work, ".agentqueue.json"))
-        )
+        self.assertTrue(os.path.isfile(os.path.join(self.repo.work, ".agentqueue.json")))
 
     def test_run(self):
         self.github.add_issue(85, "Implement the module", labels=(READY,))
@@ -430,16 +389,13 @@ class TestRepoRemainsAnExplicitOverride(CliCase):
 
     def test_repo_wins_over_the_working_directory(self):
         other = Repository(self.root, "other")
-        code, out, _ = self.invoke(["policy", "--repo", other.work],
-                                   cwd=self.repo.work)
+        code, out, _ = self.invoke(["policy", "--repo", other.work], cwd=self.repo.work)
         self.assertEqual(code, cli_mod.EXIT_OK)
         self.assertIn(other.work, out)
 
     def test_every_command_still_takes_repo(self):
         for command in COMMANDS:
-            args = cli_mod.build_parser().parse_args(
-                [command, "--repo", "/tmp/x"]
-            )
+            args = cli_mod.build_parser().parse_args([command, "--repo", "/tmp/x"])
             self.assertEqual(args.repo, "/tmp/x", command)
 
 
@@ -453,6 +409,7 @@ class TestOutsideARepositoryEveryCommandFails(CliCase):
         for command in COMMANDS:
             code, _, err = self.invoke([command], cwd=self.outside, wire=False)
             self.assertEqual(code, cli_mod.EXIT_USAGE, command)
+            self.assertIn("agentq:", err, command)
             self.assertIn("not a Git working tree", err, command)
             self.assertIn(self.outside, err, command)
             self.assertIn("--repo", err, command)
@@ -460,9 +417,6 @@ class TestOutsideARepositoryEveryCommandFails(CliCase):
     def test_nothing_is_created_where_it_refused(self):
         self.invoke(["init"], cwd=self.outside, wire=False)
         self.assertEqual(os.listdir(self.outside), [])
-
-
-# ------------------------------------------------ run is what drain was ----
 
 
 class TestRunDoesWhatDrainDid(CliCase):
@@ -519,11 +473,10 @@ class TestRunDoesWhatDrainDid(CliCase):
         self.assertNotIn("agent/issue-85", self.refs_on_the_remote())
 
     def test_an_unusable_policy_exits_three(self):
-        self.repo.write(".agentqueue.json", json.dumps({"version": 1,
-                                                        "maxParallel": 0}))
+        self.repo.write(".agentqueue.json", json.dumps({"version": 1, "maxParallel": 0}))
         code, _, err = self.invoke(["run"])
         self.assertEqual(code, cli_mod.EXIT_POLICY)
-        self.assertTrue(err.startswith("agentqueue:"))
+        self.assertTrue(err.startswith("agentq:"))
 
 
 class TestTheOutputModesStillWork(CliCase):
@@ -539,11 +492,11 @@ class TestTheOutputModesStillWork(CliCase):
     def test_compact_is_the_default(self):
         out = self.text_of()
         self.assertIn("#85", out)
-        # The compact view is the stage view, not the coordinator's notes.
         self.assertNotIn("run id", out)
 
     def test_verbose_adds_the_header_and_the_notes(self):
         out = self.text_of("--verbose")
+        self.assertIn("agentq", out)
         self.assertIn("run id", out)
         self.assertIn("repository", out)
 
