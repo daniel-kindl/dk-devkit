@@ -151,10 +151,18 @@ try {
   const headAfter = git(cfg.repo, ["rev-parse", "HEAD"]);
   record("the checked-out branch is unchanged after teardown",
     headAfter === headBefore, `${headAfter.slice(0, 12)} vs ${headBefore.slice(0, 12)}`);
+  // "git branch -D" is a force delete. It runs only against a branch this
+  // selftest made, and the prefix is what proves that: a configuration that
+  // named an existing branch must not be able to turn teardown into a delete
+  // of someone's work.
   if (cfg.removeBranch !== false) {
-    try { git(cfg.repo, ["worktree", "prune"]); } catch { /* nothing to prune */ }
-    try { git(cfg.repo, ["branch", "-D", branch]); log(`removed the temporary branch ${branch}`); }
-    catch { /* the branch may never have been created */ }
+    if (!branch.startsWith("agent/")) {
+      log(`refusing to delete "${branch}": it is not an agent/ branch`);
+    } else {
+      try { git(cfg.repo, ["worktree", "prune"]); } catch { /* nothing to prune */ }
+      try { git(cfg.repo, ["branch", "-D", branch]); log(`removed the temporary branch ${branch}`); }
+      catch { /* the branch may never have been created */ }
+    }
   }
 } catch (err) {
   record("the checked-out branch is unchanged after teardown", false, err?.message ?? "");

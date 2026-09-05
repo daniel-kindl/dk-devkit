@@ -174,9 +174,16 @@ does not exist.
 
 An unattended agent never receives the SSH key, the ssh-agent socket, the
 Podman socket, or a writable `~/.agents`. It cannot push, open a pull request,
-or merge, because it holds no credential that would let it.
+or merge on GitHub, because it holds no credential that would let it.
 
-`docs/sandcastle.md` holds the full design.
+It does receive the target repository's `.git` directory, read-write: that is
+how Sandcastle's worktree sandbox works, and it means the `agent/` branch prefix
+is a policy the orchestrator verifies after the run rather than a boundary the
+sandbox is held inside. Every run records the repository's refs, local config
+and hooks before the sandbox exists and fails if any of them moved. Point
+`agentbox` at a repository you can afford to have an unattended agent touch.
+
+`docs/sandcastle.md` holds the full design and the limits.
 
 ## Secrets
 

@@ -82,8 +82,15 @@ over far more than a single run needs. When `OPENAI_API_KEY` is absent,
 `auth.json`.
 
 A sandbox also never receives the private SSH key or the ssh-agent socket, so it
-cannot push, open a pull request, or merge. `agentbox selftest` proves this from
-inside a running sandbox.
+cannot push, open a pull request, or merge on GitHub. `agentbox selftest` proves
+this from inside a running sandbox, and the same probes run on every real run.
+
+Two limits belong here rather than only in `docs/sandcastle.md`:
+
+- The token is passed as `podman run -e NAME=VALUE`, so it is visible in the
+  `podman` process arguments to this user and to root.
+- Agent output is streamed without redaction. An agent that prints its
+  environment prints the token into your terminal and into any captured log.
 
 ## Scanning
 

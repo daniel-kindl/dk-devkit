@@ -101,6 +101,89 @@ check_contains 'D5 agentbox refuses to work on main' 'refusing to use the branch
 out=$("$AB" run --repo "$REPO_ROOT" --branch feature/x --prompt-file "$SC_DIR/review-prompt.md" 2>&1 || true)
 check_contains 'D6 agentbox refuses a non-agent branch' 'refusing to use the branch' "$out"
 
+# --- the branch prefix is a policy, and the repository is checked ----------
+#
+# Sandcastle's worktree sandbox mounts <repo>/.git read-write, so nothing
+# inside the sandbox is PREVENTED from writing a ref outside agent/. The
+# orchestrator therefore has to detect it: a baseline before the sandbox
+# exists, a comparison after it is destroyed, and a failing run when they
+# differ. These checks fail if that guard is ever removed.
+
+check_contains 'D7 the orchestrator records an integrity baseline' \
+    'snapshotIntegrity' "$ORCH"
+check_contains 'D8 the orchestrator compares it after teardown' \
+    'diffIntegrity(integrityBefore' "$ORCH"
+check_contains 'D9 the baseline covers every ref' 'for-each-ref' "$ORCH"
+check_contains 'D10 the baseline covers the local git config' \
+    '"config", "--local", "--list"' "$ORCH"
+check_contains 'D11 the baseline covers the git hooks' 'hookInventory' "$ORCH"
+# A detected violation must FAIL the run, not merely be reported in the summary.
+check_contains 'D12 an integrity violation fails the run' \
+    'REPOSITORY INTEGRITY FAILED' "$ORCH"
+
+# agentbox must reject a name git would not accept as a ref, even when it
+# carries the agent/ prefix. These exit before Podman is touched.
+for bad in 'agent/../../escape' 'agent/' 'agent/has space'; do
+    out=$("$AB" run --repo "$REPO_ROOT" --branch "$bad" \
+              --prompt-file "$SC_DIR/review-prompt.md" 2>&1 || true)
+    check_contains "D13 agentbox rejects the branch name [$bad]" \
+        'not a usable branch name' "$out"
+done
+
+# The selftest force-deletes its temporary branch. That must stay bounded to
+# the agent/ namespace.
+SELF=$(code_of "$SC_DIR/selftest.mjs")
+check_contains 'D14 the selftest only force-deletes an agent/ branch' \
+    'branch.startsWith("agent/")' "$SELF"
+
+# --- an interrupted run leaves nothing behind -------------------------------
+#
+# "podman run --rm" only removes the container when the client exits cleanly.
+# A control plane that outlives its run still holds the credential in its
+# environment, so agentbox traps the signals and "agentbox clean" sweeps what
+# a killed process could not.
+
+check_contains 'G1 agentbox removes the runner on INT'  'trap' "$AB_CODE"
+check_contains 'G2 the runner teardown is a real removal' 'remove_runner' "$AB_CODE"
+check_contains 'G3 clean also sweeps control-plane containers' \
+    'agentbox-runner-' "$AB_CODE"
+# A fixed name collides: agentbox runs on the host and in the container, where
+# the same PID exists in another namespace.
+check_not_contains 'G4 the runner name is not just the PID' \
+    'name "agentbox-runner-$$"' "$AB_CODE"
+
+# --- a dry run works on a machine that is not set up yet --------------------
+#
+# "print the plan and change nothing" is most useful on the machine that has
+# neither a Podman client, nor a built image, nor a credential. Requiring any
+# of them would defeat the option.
+DRY_PROMPT=$SC_DIR/review-prompt.md
+out=$("$AB" run --repo "$REPO_ROOT" --branch agent/verify-dry-run \
+          --prompt-file "$DRY_PROMPT" --dry-run 2>&1) && dry_rc=0 || dry_rc=$?
+check_eq 'G7 a dry run exits 0 with no Podman and no image' '0' "$dry_rc"
+check_contains 'G8 a dry run prints the plan' '"mode": "run"' "$out"
+# The plan must not carry a credential into the terminal.
+check_not_contains 'G9 the plan holds no credential' 'CLAUDE_CODE_OAUTH_TOKEN=' "$out"
+
+# The isolation probes default to on, and --no-isolation-check turns them off.
+check_contains 'G10 a plain run asserts isolation' '"assertIsolation": true' "$out"
+out=$("$AB" run --repo "$REPO_ROOT" --branch agent/verify-dry-run \
+          --prompt-file "$DRY_PROMPT" --no-isolation-check --dry-run 2>&1 || true)
+check_contains 'G11 --no-isolation-check turns the probes off' \
+    '"assertIsolation": false' "$out"
+
+# --- the credential file is checked, not assumed ----------------------------
+#
+# A mode that cannot be read must refuse the file. Defaulting to "600" would
+# pass a world-readable credential whenever stat is unavailable.
+check_not_contains 'G5 the credential mode check does not default to 600' \
+    "|| printf '600'" "$AB_CODE"
+
+# The isolation probes are the evidence that no key material reached the
+# sandbox. They have to be the default, not an opt-in.
+check_contains 'G6 the isolation probes run by default' \
+    'assert_isolation=1 dry_run=0' "$AB_CODE"
+
 # --- nothing secret is tracked ----------------------------------------------
 
 check 'E1 the credential file is not in the repository' -- \

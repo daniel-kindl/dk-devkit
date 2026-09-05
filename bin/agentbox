@@ -12,7 +12,7 @@
 #   agentbox selftest --repo PATH   prove the sandbox lifecycle, no credential
 #   agentbox run      <options>     one agent, one branch
 #   agentbox pipeline <options>     implement -> check -> review -> check
-#   agentbox clean                  remove stray sandbox containers
+#   agentbox clean                  remove stray sandbox and runner containers
 #   agentbox help
 #
 # Options for run and pipeline:
@@ -28,15 +28,24 @@
 #   --max-iterations N       agent iterations, default 1
 #   --effort LEVEL           low, medium, high or xhigh
 #   --image IMAGE            overrides the sandbox image
-#   --assert-isolation       prove no key material reached the sandbox
+#   --no-isolation-check     skip the probes that prove no key material
+#                            reached the sandbox (they run by default)
 #   --dry-run                print the plan and change nothing
 #
 # What agentbox never does:
 #   * push a branch, open a pull request, or merge anything
-#   * write to the branch the repository has checked out
 #   * put a private SSH key, an ssh-agent socket, or the Podman socket into
 #     a sandbox
 #   * mount ~/.agents writable into a sandbox
+#
+# What agentbox cannot prevent, and detects instead:
+#   Sandcastle's worktree sandbox mounts <repo>/.git read-write, so a process
+#   inside the sandbox can write a ref outside agent/, change .git/config, or
+#   install a git hook that later runs on the host. "agent/" is a policy, not
+#   a boundary. Every run records the repository's refs, local config and hook
+#   inventory before the sandbox exists, compares them after it is destroyed,
+#   and FAILS when anything outside the agent branch moved. Point agentbox at
+#   a repository you are willing to have an unattended agent touch.
 #
 # See docs/sandcastle.md.
 
@@ -95,6 +104,18 @@ PROJECTS_ROOT=$(canon "$HOST_HOME/projects")
 # The canonical shared skill store. It lives in the web-dev home, because that
 # is where the agent CLIs run. Sandboxes get it READ ONLY.
 SKILLS_DIR=$(canon "$HOST_HOME/.local/share/distrobox-homes/web-dev/.agents/skills")
+
+# skills_available - true when the host has the shared skill store.
+#
+# Both mount sites must agree. The sandbox mount is declared by
+# sandbox_mounts_json and the runner mount by run_in_runner, and Sandcastle
+# validates every sandbox mount source from INSIDE the runner: declaring the
+# one without creating the other fails the run at container-create time.
+# Either spelling proves the host has the directory; the mount argument is
+# always the host spelling.
+skills_available() {
+    [ -d "$SKILLS_DIR" ] || [ -d "/run/host$SKILLS_DIR" ]
+}
 
 # host_path <path> - absolute path, spelled as the host spells it.
 host_path() {
@@ -162,6 +183,31 @@ require_podman() {
 
 podman_() { require_podman; "$PODMAN_BIN" "$@"; }
 
+# --------------------------------------------------------- runner teardown --
+#
+# "podman run --rm" removes the container when the client exits cleanly. An
+# interrupt, a timeout or a killed terminal is not a clean exit: the name stays
+# taken and the control plane keeps running with the credential in its
+# environment. The trap closes that, and "agentbox clean" closes the case where
+# even the trap did not get to run.
+#
+# $$ alone is not unique: agentbox runs both on the host and inside the
+# container, where the same PID number exists in a different namespace.
+RUNNER_NAME=''
+
+remove_runner() {
+    [ -n "$RUNNER_NAME" ] || return 0
+    [ -n "$PODMAN_BIN" ] || return 0
+    "$PODMAN_BIN" rm -f "$RUNNER_NAME" >/dev/null 2>&1 || true
+    RUNNER_NAME=''
+}
+
+# The EXIT trap covers a normal return as well, where the container is already
+# gone and "podman rm" is a no-op.
+trap 'remove_runner' EXIT
+trap 'remove_runner; exit 130' INT
+trap 'remove_runner; exit 143' TERM
+
 # ---------------------------------------------------------------- credentials --
 #
 # Credentials live outside this repository, in a file only the user can read.
@@ -178,8 +224,13 @@ load_secrets() {
     local readable=$SECRETS_FILE
     [ -r "$readable" ] || readable=/run/host$SECRETS_FILE
     if [ -r "$readable" ]; then
+        # A mode this cannot read is a mode this cannot vouch for. Refusing is
+        # the only safe answer; defaulting to "600" would pass a world-readable
+        # file whenever stat is unavailable.
         local mode
-        mode=$(stat -c '%a' "$readable" 2>/dev/null || printf '600')
+        mode=$(stat -c '%a' "$readable" 2>/dev/null) ||
+            fail 6 "cannot read the permissions of $SECRETS_FILE" \
+                'A credential file whose mode cannot be checked is not used.'
         case $mode in
             600|400) ;;
             *) fail 6 "$SECRETS_FILE has mode $mode" \
@@ -284,19 +335,27 @@ cmd_doctor() {
     return "$rc"
 }
 
+# cmd_clean - remove every container an interrupted run can leave behind.
+#
+# Two prefixes, not one. "sandcastle-" is the sandbox Sandcastle creates;
+# "agentbox-runner-" is the control plane that created it, and a control plane
+# that outlives its run still holds the credential in its environment.
 cmd_clean() {
     require_podman
-    local ids
-    ids=$(podman_ ps -a --filter 'name=^sandcastle-' --format '{{.Names}}' 2>/dev/null || true)
-    if [ -z "$ids" ]; then
-        info 'no stray sandbox containers'
-        return 0
-    fi
-    printf '%s\n' "$ids" | while read -r n; do
-        [ -n "$n" ] || continue
-        info "removing $n"
-        podman_ rm -f "$n" >/dev/null
+    local ids prefix found=0
+    for prefix in 'agentbox-runner-' 'sandcastle-'; do
+        ids=$(podman_ ps -a --filter "name=^$prefix" --format '{{.Names}}' 2>/dev/null || true)
+        [ -n "$ids" ] || continue
+        found=1
+        # A while-read over a here-string, not a pipeline: a pipeline runs the
+        # loop in a subshell, where a failed removal cannot stop the command.
+        while read -r n; do
+            [ -n "$n" ] || continue
+            info "removing $n"
+            podman_ rm -f "$n" >/dev/null
+        done <<<"$ids"
     done
+    [ "$found" = 1 ] || info 'no stray agentbox containers'
 }
 
 # sandbox_mounts_json - the read-only mounts every sandbox receives.
@@ -308,7 +367,7 @@ sandbox_mounts_json() {
     local policy_dir=$REPO_ROOT_HOST/config/agents
     local skills_dir=$SKILLS_DIR
     local skills_ok=0
-    { [ -d "$skills_dir" ] || [ -d "/run/host$skills_dir" ]; } && skills_ok=1
+    skills_available && skills_ok=1
     MOUNT_POLICY="$policy_dir" MOUNT_SKILLS="$skills_dir" SKILLS_OK="$skills_ok" \
     python3 -c '
 import json, os
@@ -344,11 +403,12 @@ run_in_runner() {
     # so a directory the sandbox needs must be visible to the runner as well,
     # at the same host path. It is read-only on both hops.
     local -a skill_args=()
-    local skills_dir=$SKILLS_DIR
-    [ -d "$skills_dir" ] && skill_args+=(-v "$skills_dir:$skills_dir:ro")
+    skills_available && skill_args+=(-v "$SKILLS_DIR:$SKILLS_DIR:ro")
+
+    RUNNER_NAME="agentbox-runner-$$-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')"
 
     podman_ run --rm -i \
-        --name "agentbox-runner-$$" \
+        --name "$RUNNER_NAME" \
         --userns=keep-id \
         --security-opt label=disable \
         -e "AGENTBOX_CONFIG=$config" \
@@ -409,7 +469,7 @@ cmd_run() {
     local mode=$1; shift
     local repo='' branch='' prompt_file='' review_prompt_file=''
     local agent=claude model='' review_agent=codex review_model=''
-    local max_iterations=1 effort='' image='' assert_isolation=0 dry_run=0
+    local max_iterations=1 effort='' image='' assert_isolation=1 dry_run=0
     local -a checks=()
 
     while [ $# -gt 0 ]; do
@@ -426,7 +486,10 @@ cmd_run() {
             --max-iterations) max_iterations=${2:?}; shift 2 ;;
             --effort) effort=${2:?}; shift 2 ;;
             --image) image=${2:?}; shift 2 ;;
+            # The probes run by default: a sandbox that turned out to hold key
+            # material must stop the run, not be discovered afterwards.
             --assert-isolation) assert_isolation=1; shift ;;
+            --no-isolation-check) assert_isolation=0; shift ;;
             --dry-run) dry_run=1; shift ;;
             *) fail 2 "$mode: unknown option: $1" ;;
         esac
@@ -448,6 +511,16 @@ cmd_run() {
                 "An unattended agent may only write to a branch that starts with \"$AGENTBOX_BRANCH_PREFIX\"." \
                 "This keeps main, and every human branch, out of reach." ;;
     esac
+
+    # A prefix test is not a name test. "agent/../../x" passes the prefix and is
+    # not a branch; so is "agent/" on its own, and so is a name carrying a shell
+    # metacharacter that git happens to allow. git owns these rules, so ask git
+    # instead of restating them here.
+    command -v git >/dev/null 2>&1 ||
+        fail 3 'git is not on PATH' 'agentbox needs git to validate a branch name.'
+    git check-ref-format "refs/heads/$branch" ||
+        fail 7 "not a usable branch name: \"$branch\"" \
+            'git rejects it as a ref. Use a plain name such as agent/my-task.'
 
     # --- the repository -----------------------------------------------------
     local repo_host
@@ -512,6 +585,25 @@ if os.environ.get("EFFORT"):
     cfg["effort"] = os.environ["EFFORT"]
 print(json.dumps(cfg))')
 
+    # A dry run prints the plan and stops. It runs BEFORE the Podman, image and
+    # credential requirements on purpose: what a run would do is the useful
+    # thing to see on a machine where none of them exist yet, which is exactly
+    # the machine someone is setting up.
+    if [ "$dry_run" = 1 ]; then
+        load_secrets
+        info 'dry run - the plan:'
+        printf '%s\n' "$config" | python3 -m json.tool |
+            sed -e 's/^/  /' \
+                -e 's/\("prompt": "[^"]\{0,60\}\).*/\1...",/' \
+                -e 's/\("reviewPrompt": "[^"]\{0,60\}\).*/\1...",/'
+        resolve_podman 2>/dev/null ||
+            info 'no Podman client here; a real run needs one'
+        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
+            info "no Claude credential yet; a real run needs one in $SECRETS_FILE"
+        fi
+        return 0
+    fi
+
     require_podman
     podman_ image exists "$RUNNER_REF" 2>/dev/null ||
         fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
@@ -519,20 +611,6 @@ print(json.dumps(cfg))')
         fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
 
     load_secrets
-
-    # A dry run prints the plan and stops. It deliberately does not require a
-    # credential: showing what would happen is useful before one exists.
-    if [ "$dry_run" = 1 ]; then
-        info 'dry run - the plan:'
-        printf '%s\n' "$config" | python3 -m json.tool |
-            sed -e 's/^/  /' \
-                -e 's/\("prompt": "[^"]\{0,60\}\).*/\1...",/' \
-                -e 's/\("reviewPrompt": "[^"]\{0,60\}\).*/\1...",/'
-        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
-            info "no Claude credential yet; a real run needs one in $SECRETS_FILE"
-        fi
-        return 0
-    fi
 
     if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]; then
         fail 6 'no Claude credential' \

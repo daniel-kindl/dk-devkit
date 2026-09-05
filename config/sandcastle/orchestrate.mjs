@@ -18,10 +18,18 @@
 //   * push a branch
 //   * open or merge a pull request
 //   * merge into the checked-out branch
-//   * write to any branch other than the requested one
 //
 // The branch strategy is always an explicit named branch. Sandcastle's
 // "head" and "merge-to-head" strategies are never selected here.
+//
+// What it CANNOT prevent, and checks for instead:
+//   Sandcastle's bind-mount worktree mounts <repo>/.git into the sandbox
+//   read-write, because a worktree's ".git" is only a pointer into it. An
+//   agent inside the sandbox can therefore write a ref outside "agent/",
+//   change .git/config, or install a git hook that later runs on the host.
+//   The snapshot below records every ref, the local config and the hook
+//   inventory before the sandbox exists, compares them after it is destroyed,
+//   and fails the run when anything outside the agent branch moved.
 //
 // ESM resolves @ai-hero/sandcastle from /opt/workstation/sandcastle/node_modules,
 // which is why bin/agentbox mounts this file into that directory.
@@ -29,6 +37,7 @@
 import { createSandbox, claudeCode, codex } from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { execFileSync } from "node:child_process";
+import { readdirSync, statSync } from "node:fs";
 
 // --------------------------------------------------------------- utilities --
 
@@ -41,6 +50,17 @@ const fail = (msg) => {
 
 const git = (repo, args) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+
+/** git(), but a non-zero exit yields "" instead of throwing.
+ *  "symbolic-ref HEAD" exits 1 on a detached HEAD and "config --list" exits 1
+ *  when there is no local config file. Both are valid states to record. */
+const gitOrEmpty = (repo, args) => {
+  try {
+    return git(repo, args);
+  } catch {
+    return "";
+  }
+};
 
 // ----------------------------------------------------------- configuration --
 
@@ -84,6 +104,111 @@ if (cfg.branch === currentBranch) {
 }
 
 log(`checked out      ${currentBranch} @ ${headBefore.slice(0, 12)}`);
+
+// ------------------------------------------------- repository integrity --
+//
+// Sandcastle's bind-mount worktree gives the sandbox the repository's SHARED
+// git directory, read-write: a worktree's ".git" is a file pointing at
+// <repo>/.git/worktrees/<name>, so the provider mounts <repo>/.git as well.
+// Nothing inside the sandbox is therefore prevented from writing a ref
+// outside "agent/", from rewriting .git/config, or from installing a hook
+// that would later run on the HOST.
+//
+// The branch prefix is a policy, not a boundary. This snapshot is what turns
+// a violation of that policy from a silent one into a loud one: everything
+// except the agent branch is recorded before the sandbox exists and compared
+// after it is destroyed. See docs/sandcastle.md, "Honest limits".
+
+const gitCommonDir = () =>
+  git(cfg.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+
+/** A file list of <name> <mode> <size> for the hook directory, sorted. */
+const hookInventory = (commonDir) => {
+  const dir = `${commonDir}/hooks`;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return []; // No hooks directory is a valid state.
+  }
+  return entries
+    .filter((e) => e.isFile() && !e.name.endsWith(".sample"))
+    .map((e) => {
+      const st = statSync(`${dir}/${e.name}`);
+      return `${e.name} ${(st.mode & 0o7777).toString(8)} ${st.size} ${st.mtimeMs}`;
+    })
+    .sort();
+};
+
+/**
+ * Everything the agent must not change. Taken before the sandbox is created
+ * and again after it is destroyed.
+ */
+const snapshotIntegrity = () => {
+  const commonDir = gitCommonDir();
+  return {
+    commonDir,
+    // Every ref and the object it points at. The agent branch is filtered out
+    // of the comparison; every other entry must be identical.
+    refs: git(cfg.repo, [
+      "for-each-ref", "--format=%(refname) %(objectname)",
+    ]).split("\n").filter(Boolean).sort(),
+    // Which branch the primary working tree is on.
+    head: gitOrEmpty(cfg.repo, ["symbolic-ref", "--quiet", "HEAD"]),
+    // .git/config decides what git EXECUTES: aliases, pagers, fsmonitor,
+    // credential helpers. A change here is a host-side code-execution change.
+    config: gitOrEmpty(cfg.repo, ["config", "--local", "--list"])
+      .split("\n").filter(Boolean).sort(),
+    hooks: hookInventory(commonDir),
+  };
+};
+
+/** The refname the agent is allowed to create or move. */
+const agentRef = `refs/heads/${cfg.branch}`;
+
+/** Compare two snapshots. Returns a list of human-readable violations. */
+const diffIntegrity = (before, after) => {
+  const violations = [];
+  const withoutAgentBranch = (refs) =>
+    refs.filter((r) => !r.startsWith(`${agentRef} `));
+
+  const refsBefore = withoutAgentBranch(before.refs);
+  const refsAfter = withoutAgentBranch(after.refs);
+  for (const r of refsAfter) {
+    if (!refsBefore.includes(r)) violations.push(`ref created or moved: ${r}`);
+  }
+  for (const r of refsBefore) {
+    if (!refsAfter.includes(r)) violations.push(`ref deleted or moved: ${r}`);
+  }
+  if (before.head !== after.head) {
+    violations.push(`the checked-out branch changed: ${before.head} -> ${after.head}`);
+  }
+  for (const c of after.config) {
+    if (!before.config.includes(c)) violations.push(`git config added: ${c}`);
+  }
+  for (const c of before.config) {
+    if (!after.config.includes(c)) violations.push(`git config removed: ${c}`);
+  }
+  for (const h of after.hooks) {
+    if (!before.hooks.includes(h)) violations.push(`git hook added or changed: ${h}`);
+  }
+  for (const h of before.hooks) {
+    if (!after.hooks.includes(h)) violations.push(`git hook removed: ${h}`);
+  }
+  return violations;
+};
+
+// Taken BEFORE anything is created. A repository this cannot be read from is
+// not one an unattended agent should be pointed at, so this failure is fatal
+// and happens while nothing has been changed yet.
+let integrityBefore;
+try {
+  integrityBefore = snapshotIntegrity();
+} catch (e) {
+  fail(`cannot record the repository integrity baseline: ${e.message}`);
+}
+log(`integrity baseline ${integrityBefore.refs.length} ref(s), ` +
+    `${integrityBefore.hooks.length} hook(s)`);
 
 // --------------------------------------------------------------- providers --
 
@@ -241,6 +366,8 @@ const summary = {
   sandboxDestroyed: false,
   headAfter: null,
   mainUnchanged: null,
+  integrityViolations: null,
+  repositoryIntact: null,
 };
 
 let sandbox;
@@ -341,6 +468,33 @@ try {
     .filter(Boolean);
 } catch {
   // The branch may not exist when the run failed before the worktree was made.
+}
+
+// -------------------------------------------------- repository integrity --
+//
+// The sandbox held the repository's shared git directory read-write, so the
+// agent/ prefix could not stop a write outside it. This is the check that says
+// whether one happened. It runs AFTER teardown, and it fails the run: a
+// repository whose refs, config or hooks moved is one a human must look at
+// before trusting anything on the branch.
+try {
+  const violations = diffIntegrity(integrityBefore, snapshotIntegrity());
+  summary.integrityViolations = violations;
+  summary.repositoryIntact = violations.length === 0;
+  if (violations.length > 0) {
+    exitCode = 1;
+    log(`REPOSITORY INTEGRITY FAILED: ${violations.length} change(s) outside ${cfg.branch}`);
+    for (const v of violations) log(`  ! ${v}`);
+    log("Inspect the repository before you use this branch.");
+  } else {
+    log(`repository integrity: intact (nothing changed outside ${cfg.branch})`);
+  }
+} catch (err) {
+  // Not being able to answer the question is a failure, not a pass.
+  exitCode = 1;
+  summary.repositoryIntact = false;
+  summary.integrityViolations = [`the integrity check could not run: ${err?.message}`];
+  log(`REPOSITORY INTEGRITY UNKNOWN: ${err?.message}`);
 }
 
 // A failing check is a RESULT, not a crash: the branch is still left for a
