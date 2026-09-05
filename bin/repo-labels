@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""Check or converge a GitHub repository to the canonical label manifest."""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Iterable, Sequence
+
+PROGRAM = "repo-labels"
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG = ROOT / "manifests" / "github-labels.json"
+HEX_COLOR = re.compile(r"^[0-9a-fA-F]{6}$")
+
+EXIT_OK = 0
+EXIT_DRIFT = 1
+EXIT_USAGE = 2
+EXIT_GH = 3
+EXIT_REFUSED = 4
+EXIT_VERIFY = 5
+
+
+class ConfigError(ValueError):
+    pass
+
+
+class GitHubError(RuntimeError):
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class Label:
+    name: str
+    color: str
+    description: str
+    group: str = ""
+
+    @property
+    def key(self) -> str:
+        return self.name.casefold()
+
+
+@dataclasses.dataclass(frozen=True)
+class Change:
+    kind: str
+    desired: Label | None = None
+    current: Label | None = None
+
+    @property
+    def name(self) -> str:
+        label = self.desired or self.current
+        assert label is not None
+        return label.name
+
+
+@dataclasses.dataclass(frozen=True)
+class Plan:
+    creates: tuple[Change, ...]
+    updates: tuple[Change, ...]
+    deletes: tuple[Change, ...]
+
+    @property
+    def changes(self) -> tuple[Change, ...]:
+        return self.creates + self.updates + self.deletes
+
+    @property
+    def exact(self) -> bool:
+        return not self.changes
+
+
+def _label_from(value: object, where: str) -> Label:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{where} must be an object")
+    name = value.get("name")
+    color = value.get("color")
+    description = value.get("description")
+    group = value.get("group", "")
+    if not isinstance(name, str) or not name.strip():
+        raise ConfigError(f"{where}.name must be a non-empty string")
+    if name != name.strip():
+        raise ConfigError(f"{where}.name must not have leading/trailing whitespace")
+    if not isinstance(color, str) or not HEX_COLOR.fullmatch(color):
+        raise ConfigError(f"{where}.color must be exactly six hexadecimal digits")
+    if not isinstance(description, str):
+        raise ConfigError(f"{where}.description must be a string")
+    if len(description) > 100:
+        raise ConfigError(f"{where}.description exceeds GitHub's 100-character limit")
+    if not isinstance(group, str):
+        raise ConfigError(f"{where}.group must be a string when present")
+    return Label(name, color.lower(), description, group)
+
+
+def load_manifest(path: Path) -> tuple[Label, ...]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"invalid JSON in {path}: {exc}") from exc
+    if not isinstance(document, dict) or document.get("version") != 1:
+        raise ConfigError("manifest version must be 1")
+    raw = document.get("labels")
+    if not isinstance(raw, list):
+        raise ConfigError("manifest labels must be an array")
+    labels = tuple(_label_from(item, f"labels[{index}]") for index, item in enumerate(raw))
+    seen: dict[str, str] = {}
+    for label in labels:
+        previous = seen.get(label.key)
+        if previous is not None:
+            raise ConfigError(f"duplicate label names are not allowed: {previous!r} and {label.name!r}")
+        seen[label.key] = label.name
+    return tuple(sorted(labels, key=lambda item: (item.group, item.name.casefold(), item.name)))
+
+
+def labels_from_github(values: object) -> tuple[Label, ...]:
+    if not isinstance(values, list):
+        raise GitHubError("gh returned an unexpected label document")
+    labels = []
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            raise GitHubError(f"gh label result {index} is not an object")
+        try:
+            labels.append(Label(
+                str(value["name"]),
+                str(value["color"]).lower(),
+                "" if value.get("description") is None else str(value.get("description")),
+            ))
+        except KeyError as exc:
+            raise GitHubError(f"gh label result {index} is missing {exc.args[0]}") from exc
+    return tuple(sorted(labels, key=lambda item: (item.name.casefold(), item.name)))
+
+
+def build_plan(desired: Sequence[Label], current: Sequence[Label]) -> Plan:
+    wanted = {label.key: label for label in desired}
+    have = {label.key: label for label in current}
+
+    creates = []
+    updates = []
+    deletes = []
+
+    for key in sorted(wanted):
+        target = wanted[key]
+        actual = have.get(key)
+        if actual is None:
+            creates.append(Change("CREATE", desired=target))
+            continue
+        if (actual.name != target.name or actual.color.lower() != target.color.lower()
+                or actual.description != target.description):
+            updates.append(Change("UPDATE", desired=target, current=actual))
+
+    for key in sorted(have):
+        if key not in wanted:
+            deletes.append(Change("DELETE", current=have[key]))
+
+    return Plan(tuple(creates), tuple(updates), tuple(deletes))
+
+
+def _run_gh(args: Sequence[str]) -> str:
+    try:
+        proc = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError as exc:
+        raise GitHubError("gh is not installed or is not on PATH") from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        raise GitHubError(f"gh {' '.join(args[:2])} failed: {detail}")
+    return proc.stdout
+
+
+def resolve_repo(explicit: str | None) -> str:
+    if explicit:
+        if explicit.count("/") != 1 or any(not part for part in explicit.split("/")):
+            raise ConfigError("--repo must be OWNER/NAME")
+        return explicit
+    value = _run_gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).strip()
+    if value.count("/") != 1:
+        raise GitHubError("cannot resolve the current GitHub repository")
+    return value
+
+
+def read_current(repo: str) -> tuple[Label, ...]:
+    raw = _run_gh([
+        "label", "list", "--repo", repo, "--limit", "1000",
+        "--json", "name,color,description",
+    ])
+    try:
+        return labels_from_github(json.loads(raw))
+    except json.JSONDecodeError as exc:
+        raise GitHubError(f"gh returned invalid JSON for {repo}: {exc}") from exc
+
+
+def render_plan(plan: Plan) -> str:
+    lines = []
+    for change in plan.creates:
+        assert change.desired
+        lines.append(f"CREATE  {change.desired.name}  #{change.desired.color}  {change.desired.description}")
+    for change in plan.updates:
+        assert change.desired and change.current
+        before = f"{change.current.name} #{change.current.color} {change.current.description}"
+        after = f"{change.desired.name} #{change.desired.color} {change.desired.description}"
+        lines.append(f"UPDATE  {before} -> {after}")
+    for change in plan.deletes:
+        assert change.current
+        lines.append(f"DELETE  {change.current.name}  #{change.current.color}  {change.current.description}")
+    return "\n".join(lines)
+
+
+def _confirm_deletes(plan: Plan, assume_yes: bool, stdin) -> bool:
+    if not plan.deletes or assume_yes:
+        return True
+    if not getattr(stdin, "isatty", lambda: False)():
+        return False
+    names = ", ".join(change.name for change in plan.deletes)
+    print(f"{PROGRAM}: sync will delete labels from issues/PRs: {names}", file=sys.stderr)
+    answer = input("Continue with destructive label sync? [y/N] ").strip().casefold()
+    return answer in {"y", "yes"}
+
+
+def apply_plan(repo: str, plan: Plan) -> None:
+    # Desired labels exist with the right metadata before anything is removed.
+    for change in plan.creates:
+        label = change.desired
+        assert label
+        _run_gh([
+            "label", "create", label.name, "--repo", repo,
+            "--color", label.color, "--description", label.description,
+        ])
+    for change in plan.updates:
+        target, actual = change.desired, change.current
+        assert target and actual
+        _run_gh([
+            "label", "edit", actual.name, "--repo", repo,
+            "--name", target.name, "--color", target.color,
+            "--description", target.description,
+        ])
+    for change in plan.deletes:
+        label = change.current
+        assert label
+        _run_gh(["label", "delete", label.name, "--repo", repo, "--yes"])
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=PROGRAM, description="Check or sync repository labels exactly.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("check", "sync"):
+        command = sub.add_parser(name)
+        command.add_argument("--repo", help="target repository as OWNER/NAME; default: current repository")
+        command.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
+                             help=f"label manifest (default: {DEFAULT_CONFIG})")
+        if name == "sync":
+            command.add_argument("--dry-run", action="store_true", help="show the exact plan and change nothing")
+            command.add_argument("--yes", action="store_true", help="allow destructive non-interactive sync")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        desired = load_manifest(args.config)
+        repo = resolve_repo(args.repo)
+        current = read_current(repo)
+        plan = build_plan(desired, current)
+    except ConfigError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except GitHubError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return EXIT_GH
+
+    print(f"{PROGRAM}: {repo}")
+    if plan.exact:
+        print("labels match the manifest exactly")
+        return EXIT_OK
+
+    print(render_plan(plan))
+    print(
+        f"summary: {len(plan.creates)} create, {len(plan.updates)} update, "
+        f"{len(plan.deletes)} delete"
+    )
+
+    if args.command == "check":
+        return EXIT_DRIFT
+    if args.dry_run:
+        return EXIT_OK
+    if not _confirm_deletes(plan, args.yes, sys.stdin):
+        print(f"{PROGRAM}: refused destructive sync; re-run interactively or pass --yes", file=sys.stderr)
+        return EXIT_REFUSED
+
+    try:
+        apply_plan(repo, plan)
+        remaining = build_plan(desired, read_current(repo))
+    except GitHubError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return EXIT_GH
+    if not remaining.exact:
+        print(f"{PROGRAM}: repository still differs after sync", file=sys.stderr)
+        print(render_plan(remaining), file=sys.stderr)
+        return EXIT_VERIFY
+
+    print("sync complete; labels match the manifest exactly")
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "labels": [
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "Something is not working",
+      "group": "type"
+    },
+    {
+      "name": "feature",
+      "color": "0e8a16",
+      "description": "New user-visible capability",
+      "group": "type"
+    },
+    {
+      "name": "enhancement",
+      "color": "a2eeef",
+      "description": "General improvement that does not fit a more specific type",
+      "group": "type"
+    },
+    {
+      "name": "refactor",
+      "color": "7057ff",
+      "description": "Structural change without intended behavior change",
+      "group": "type"
+    },
+    {
+      "name": "documentation",
+      "color": "0075ca",
+      "description": "Documentation-only work",
+      "group": "type"
+    },
+    {
+      "name": "security",
+      "color": "b60205",
+      "description": "Security-sensitive work",
+      "group": "type"
+    },
+    {
+      "name": "chore",
+      "color": "6e7781",
+      "description": "Maintenance and tooling work",
+      "group": "type"
+    },
+    {
+      "name": "release",
+      "color": "fbca04",
+      "description": "Release and publication work",
+      "group": "type"
+    },
+    {
+      "name": "ready-for-agent",
+      "color": "0e8a16",
+      "description": "Specified and eligible for unattended agent work",
+      "group": "agent-workflow"
+    },
+    {
+      "name": "agent-in-progress",
+      "color": "1d76db",
+      "description": "Currently claimed by the unattended agent workflow",
+      "group": "agent-workflow"
+    },
+    {
+      "name": "ready-for-human",
+      "color": "5319e7",
+      "description": "Requires human decision, review, or intervention",
+      "group": "agent-workflow"
+    },
+    {
+      "name": "agent-failed",
+      "color": "b60205",
+      "description": "Unattended agent execution reached an issue-local terminal failure",
+      "group": "agent-workflow"
+    },
+    {
+      "name": "wayfinder",
+      "color": "0e8a8a",
+      "description": "Issue participates in the Wayfinder discovery/specification workflow",
+      "group": "agent-workflow"
+    }
+  ]
+}
