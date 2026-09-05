@@ -13,6 +13,7 @@
 #   agentbox run      <options>     one agent, one branch
 #   agentbox pipeline <options>     implement -> check -> review -> check
 #   agentbox clean [--all]          remove stray containers, run dirs and locks
+#                                   --all also takes a run that is still going
 #   agentbox help
 #
 # Options for run and pipeline:
@@ -1081,37 +1082,47 @@ cmd_clean() {
         warn 'no Podman client here; only locks and run directories are swept'
     fi
 
-    local d owner run_dir
+    # A run directory is finished when no LIVE lock names it. That is the right
+    # signal, and age is not: a failed run keeps its directory on purpose, so a
+    # later sweep still has to be able to take it away, while a run that is
+    # still going must not lose the clone from under it.
+    local -a live_dirs=()
+    local d owner run_dir dir_view
     if [ -d "$STATE_VIEW/locks" ]; then
         for d in "$STATE_VIEW/locks"/*.lock; do
             [ -d "$d" ] || continue
             owner=$(cat -- "$d/owner" 2>/dev/null || printf '')
             run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
+            dir_view=''
+            [ -n "$run_dir" ] && dir_view=$(view_path "$run_dir")
             if [ "$all" = 1 ] || [ -z "$run_dir" ] ||
-               { [ ! -d "$(view_path "$run_dir")" ] && [ ! -d "$run_dir" ]; }; then
+               { [ ! -d "$dir_view" ] && [ ! -d "$run_dir" ]; }; then
                 info "removing lock $(basename -- "$d")"
                 rm -rf -- "$d"
                 found=1
+            else
+                live_dirs+=("$run_dir")
             fi
         done
     fi
 
-    if [ "$all" = 1 ] && [ -d "$STATE_VIEW/runs" ]; then
+    if [ -d "$STATE_VIEW/runs" ]; then
+        local host_spelling live l
         for d in "$STATE_VIEW/runs"/*; do
             [ -d "$d" ] || continue
+            host_spelling=$(host_path "$d")
+            live=0
+            for l in ${live_dirs[@]+"${live_dirs[@]}"}; do
+                [ "$l" = "$host_spelling" ] && live=1
+            done
+            if [ "$live" = 1 ]; then
+                info "keeping $(basename -- "$d") (a run still holds its branch lock)"
+                continue
+            fi
             info "removing run directory $(basename -- "$d")"
             rm -rf -- "$d"
             found=1
         done
-    elif [ -d "$STATE_VIEW/runs" ]; then
-        # Without --all, only a run directory older than a day is swept: a
-        # younger one may belong to a run that is still going.
-        while IFS= read -r d; do
-            [ -n "$d" ] || continue
-            info "removing stale run directory $(basename -- "$d")"
-            rm -rf -- "$d"
-            found=1
-        done < <(find "$STATE_VIEW/runs" -mindepth 1 -maxdepth 1 -type d -mtime +0 2>/dev/null)
     fi
 
     [ "$found" = 1 ] || info 'nothing to clean'

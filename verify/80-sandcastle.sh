@@ -315,8 +315,12 @@ check_contains 'H1c the wall-clock limit keeps the client in this process group'
 check_contains 'H2 a branch can only be claimed by one run' 'take_lock' "$AB_CODE"
 check_contains 'H3 a stale lock is broken, not obeyed' \
     'breaking a stale lock' "$AB_CODE"
-check_contains 'H4 a stale run directory is swept' \
-    'removing stale run directory' "$AB_CODE"
+check_contains 'H4 a finished run directory is swept' \
+    'removing run directory' "$AB_CODE"
+# A live branch lock, not the directory age, is what says a run is still going.
+# A failed run keeps its directory on purpose, so age would keep it forever.
+check_contains 'H4a a run that still holds its lock is kept' \
+    'a run still holds its branch lock' "$AB_CODE"
 check_contains 'H5 a multi-line --check is refused, not split' \
     'Put a multi-line check in a script and call the script.' "$AB_CODE"
 check_contains 'H6 agentbox cleans up on INT and TERM' \

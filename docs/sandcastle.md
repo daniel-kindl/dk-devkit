@@ -257,9 +257,14 @@ below.
 
 The credential file is removed as soon as the control plane exits, even when
 the run directory is kept for inspection. A successful run removes the whole
-directory; a failed one keeps it and says where it is. `agentbox clean` sweeps
-run directories older than a day, and `agentbox clean --all` sweeps all of
-them, along with every lock and every stray container.
+directory; a failed one keeps it and says where it is.
+
+`agentbox clean` then sweeps every run directory that no **live** branch lock
+names, along with stale locks and stray containers. The lock is the right
+signal and the directory age is not: a failed run keeps its directory on
+purpose, so a later sweep still has to be able to take it away, while a run
+that is still going must not lose the clone from under it. `agentbox clean
+--all` sweeps everything, including a run that is still going.
 
 ## SELinux
 
@@ -404,7 +409,7 @@ is a larger exposure than an independent review is worth.
 | `--allow-merges` | accepts merge commits in the imported range |
 | `--check CMD` | a deterministic check. A newline in the argument is refused, not split into two checks |
 | `INT` and `TERM` | remove the control plane, remove this run's sandboxes, remove the credential file, release the lock |
-| `agentbox clean` | sweeps stray containers, stale locks and stale run directories |
+| `agentbox clean` | sweeps stray containers, stale locks, and every run directory no live lock names |
 
 `--max-iterations` bounds the number of agent turns; `--timeout` bounds how
 long they may take in total.
@@ -479,8 +484,8 @@ agentbox build                      # build the runner and sandbox images
 agentbox doctor                     # what is ready, what is missing
 agentbox selftest                   # prove the lifecycle on a throw-away repository
 agentbox selftest --adversarial     # attack the git directory and prove it reached nothing
-agentbox clean                      # remove stray containers, stale locks and run dirs
-agentbox clean --all                # remove every run directory and lock as well
+agentbox clean                      # remove stray containers, stale locks and finished run dirs
+agentbox clean --all                # also remove a run that is still going
 
 agentbox run \
   --repo ~/projects/example \
