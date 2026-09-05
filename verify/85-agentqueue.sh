@@ -39,6 +39,8 @@ check 'A6 the integration test exists'       -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-integration.test.py"
 check 'A6a the output test exists'           -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-output.test.py"
+check 'A6b the command surface test exists'  -- \
+    test -f "$REPO_ROOT/verify/probes/agentqueue-cli.test.py"
 check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentqueue.md"
 
 if command -v python3 >/dev/null 2>&1; then
@@ -385,6 +387,17 @@ if command -v python3 >/dev/null 2>&1; then
                tr '\n' ' ')"
     fi
 
+    cli_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-cli.test.py" 2>&1) &&
+        cli_rc=0 || cli_rc=$?
+    cli_n=$(printf '%s\n' "$cli_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
+    if [ "$cli_rc" = 0 ]; then
+        pass "H1b the command surface tests pass ($cli_n tests)"
+    else
+        fail 'H1b the command surface tests pass' \
+            "$(printf '%s\n' "$cli_out" | grep -E '^(FAIL|ERROR):' | head -5 |
+               tr '\n' ' ')"
+    fi
+
     int_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-integration.test.py" 2>&1) &&
         int_rc=0 || int_rc=$?
     int_n=$(printf '%s\n' "$int_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
@@ -398,6 +411,7 @@ if command -v python3 >/dev/null 2>&1; then
 else
     skip 'H1 the coordinator unit tests pass' 'no python3 on this side'
     skip 'H1a the output tests pass' 'no python3 on this side'
+    skip 'H1b the command surface tests pass' 'no python3 on this side'
     skip 'H2 the coordinator integration tests pass' 'no python3 on this side'
 fi
 
@@ -422,13 +436,61 @@ fi
 check 'J1 no repository policy file is tracked here' -- \
     test ! -e "$REPO_ROOT/.agentqueue.json"
 
+# --- the removed command stays removed --------------------------------------
+#
+# "drain" became "run". It is not an alias, not deprecated, not hidden and not
+# a compatibility path, so the name must not survive anywhere a user reads or
+# a parser looks. The behavioural proof is in agentqueue-cli.test.py; this is
+# the static one, and it also covers the documentation the tests cannot read.
+#
+# The probes are excluded on purpose: they name the removed command in order
+# to prove that it is refused.
+
+aq_stale=$(grep -rIln --exclude-dir=.git --exclude-dir=__pycache__ \
+    --exclude-dir=.worktrees --exclude='agentqueue-cli.test.py' \
+    --exclude='85-agentqueue.sh' -e 'agentqueue drain' -e 'cmd_drain' \
+    -- "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/docs" "$REPO_ROOT/config" \
+       "$REPO_ROOT/manifests" "$REPO_ROOT/verify" "$REPO_ROOT/README.md" \
+       "$REPO_ROOT/AGENTS.md" 2>/dev/null | tr '\n' ' ')
+if [ -z "$aq_stale" ]; then
+    pass 'J2 nothing still advertises the removed "drain" command'
+else
+    fail 'J2 nothing still advertises the removed "drain" command' "$aq_stale"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+    check 'J3 "drain" is not a command the parser knows' -- \
+        python3 -c "
+import sys, argparse
+sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue.cli import build_parser
+found = set()
+for action in build_parser()._actions:
+    if isinstance(action, argparse._SubParsersAction):
+        found.update(action.choices)
+assert found == {'run', 'plan', 'doctor', 'policy', 'init'}, found
+" "$REPO_ROOT"
+    check 'J4 the help advertises run and never drain' -- \
+        python3 -c "
+import io, sys, contextlib
+sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue.cli import build_parser
+text = build_parser().format_help()
+assert 'run' in text, text
+assert 'drain' not in text.lower(), text
+" "$REPO_ROOT"
+else
+    skip 'J3 "drain" is not a command the parser knows' 'no python3 on this side'
+    skip 'J4 the help advertises run and never drain' 'no python3 on this side'
+fi
+
 # --- the host entry point ---------------------------------------------------
 #
 # The coordinator runs inside a container, because it needs gh and the
 # forwarded ssh-agent. The COMMAND must still work from a normal host terminal:
 #
 #     cd ~/projects/dkkb
-#     agentqueue drain --repo .
+#     agentqueue run
 #
 # The host side is a devbox router shim and nothing else. These checks prove
 # that it exists, that it delegates, that it carries the working directory and
@@ -441,6 +503,23 @@ section '8c. agentqueue host entry point'
 AQ_ENV=$(sed -n 's/^AGENTQUEUE_ENVIRONMENT=//p' "$AQ_MANIFEST" | head -1 | tr -d '"'"'"' \t\r')
 AQ_SHIM=$HOST_HOME/.local/bin/agentqueue
 AQ_DEVBOX=$HOST_HOME/.local/bin/devbox
+
+# The checks that ENTER the container run the coordinator this machine has
+# installed, and that is a link into ONE checkout. When it is not the checkout
+# under test - a linked worktree, or a branch that bootstrap has not seen - a
+# behaviour check would report the installed version instead of the change, so
+# it is skipped with that reason rather than answering about the wrong file.
+# The comparison is "-ef", the same device and inode, and not string equality:
+# the same file has several valid spellings here (/workspace and ~/projects,
+# /home and /var/home, /run/host/... from inside the container).
+AQ_LINK=$BOX_HOME/.local/bin/agentqueue
+if [ -e "$AQ_LINK" ] && [ "$AQ_LINK" -ef "$REPO_ROOT/bin/agentqueue" ]; then
+    AQ_LIVE=1; AQ_STALE=''
+else
+    AQ_LIVE=0
+    AQ_STALE="the installed coordinator is $(readlink -f "$AQ_LINK" 2>/dev/null ||
+              printf 'missing'), not this checkout"
+fi
 
 # The host spelling of this checkout. Only the host side can run the shim, and
 # the host does not know the /workspace spelling.
@@ -537,9 +616,27 @@ check_eq 'L7 a directory outside the workspace maps through /run/host' \
     "/run/host$(on_host realpath -m "$HOST_HOME/.config" 2>/dev/null)" \
     "$(on_host "$AQ_DEVBOX" path "$AQ_ENV" "$HOST_HOME/.config" 2>&1)"
 
+# The shim resolves NO repository. It carries the working directory across the
+# boundary and the coordinator resolves the repository on the far side, from
+# the TRANSLATED directory. A shim that resolved it here would hand over a host
+# path that does not exist inside the container.
+aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' run" 2>&1)
+check_contains 'L8 a run without --repo still delegates' "env=$AQ_ENV" "$aq_out"
+check_contains 'L9 the translated directory is what crosses over' \
+    'guest_cwd=/workspace' "$aq_out"
+check_contains 'L10 argv is the command alone' 'argv[1]=run' "$aq_out"
+if printf '%s\n' "$aq_out" | grep -q '^argv\[2\]='; then
+    fail 'L11 the shim adds no --repo of its own' \
+        "$(printf '%s\n' "$aq_out" | grep '^argv\[2\]=')"
+else
+    pass 'L11 the shim adds no --repo of its own'
+fi
+check_not_contains 'L12 the host path never crosses the boundary as an argument' \
+    "argv[2]=$HOST_HOME" "$aq_out"
+
 # --- argv survives verbatim -------------------------------------------------
 
-aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' drain --repo 'a b' --label \"c'd\" --base 'e\"f'" 2>&1)
+aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' run --repo 'a b' --label \"c'd\" --base 'e\"f'" 2>&1)
 check_contains 'M1 an argument with a space survives'  'argv[3]=a b' "$aq_out"
 check_contains 'M2 an argument with a quote survives'  "argv[5]=c'd" "$aq_out"
 check_contains 'M3 an argument with a double quote survives' 'argv[7]=e"f' "$aq_out"
@@ -580,32 +677,91 @@ fi
 # change nothing: "policy" resolves files, and a directory that is not a Git
 # working tree is refused before anything else happens.
 
-if on_host test -x "$AQ_SHIM"; then
+if on_host test -x "$AQ_SHIM" && [ "$AQ_LIVE" = 1 ]; then
     aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' policy --repo ." 2>&1); aq_rc=$?
     check_eq 'O1 a usage failure inside the container exits 2 on the host' '2' "$aq_rc"
     check_contains 'O2 --repo . resolved against the translated directory' \
         'not a Git working tree: /workspace' "$aq_out"
+
+    # The same directory, with no --repo at all. The coordinator resolves it
+    # from the working directory the router translated, so it refuses the same
+    # container path and not the host one.
+    aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' policy" 2>&1); aq_rc=$?
+    check_eq 'O2a no --repo outside a repository exits 2 as well' '2' "$aq_rc"
+    check_contains 'O2b it names the translated directory, not the host one' \
+        'not a Git working tree: /workspace' "$aq_out"
+    check_contains 'O2c it says how to name a repository elsewhere' \
+        '--repo' "$aq_out"
+    check_not_contains 'O2d the host spelling never appears in the refusal' \
+        "$HOST_HOME/projects" "$aq_out"
+
+    # The removed command. It is not an alias, not deprecated and not hidden,
+    # so the parser refuses it the way it refuses any unknown word.
+    aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' drain" 2>&1); aq_rc=$?
+    check_eq 'O2e drain is rejected as an unknown command (exit 2)' '2' "$aq_rc"
+    check_contains 'O2f the refusal names the commands that do exist' \
+        'invalid choice' "$aq_out"
 
     aq_out=$(host_sh "'$AQ_SHIM' --version" 2>&1); aq_rc=$?
     check_eq 'O3 a success inside the container exits 0 on the host' '0' "$aq_rc"
     check_contains 'O4 the version comes from the coordinator, not the shim' \
         'agentqueue ' "$aq_out"
 
-    if on_host test -d "$AQ_CHECKOUT/.git" &&
+    if on_host test -e "$AQ_CHECKOUT/.git" &&
        host_sh "git -C '$AQ_CHECKOUT' remote get-url origin" >/dev/null 2>&1; then
         aq_out=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy --repo ." 2>&1); aq_rc=$?
         check_eq 'O5 --repo . works from a repository on the host' '0' "$aq_rc"
         check_contains 'O6 it resolved this repository' 'repository' "$aq_out"
+
+        # The point of the issue: standing in the repository is enough. The
+        # answer must be the same one --repo . gives, through the same shim
+        # and the same path translation.
+        aq_bare=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy" 2>&1); aq_rc=$?
+        check_eq 'O7 no --repo works from a repository on the host' '0' "$aq_rc"
+        check_eq 'O8 it resolves the same repository --repo . resolves' \
+            "$aq_out" "$aq_bare"
+
+        # And from a subdirectory of it, which --repo . could not do.
+        if on_host test -d "$AQ_CHECKOUT/lib/agentqueue"; then
+            aq_sub=$(host_sh "cd '$AQ_CHECKOUT/lib/agentqueue' && '$AQ_SHIM' policy" 2>&1)
+            aq_rc=$?
+            check_eq 'O9 no --repo works from a subdirectory too' '0' "$aq_rc"
+            check_eq 'O10 a subdirectory resolves to the top of the tree' \
+                "$aq_out" "$aq_sub"
+        else
+            skip 'O9 no --repo works from a subdirectory too' 'no lib/agentqueue'
+            skip 'O10 a subdirectory resolves to the top of the tree' 'see O9'
+        fi
     else
         skip 'O5 --repo . works from a repository on the host' \
              "no host checkout with an origin remote at $AQ_CHECKOUT"
         skip 'O6 it resolved this repository' 'see O5'
+        skip 'O7 no --repo works from a repository on the host' 'see O5'
+        skip 'O8 it resolves the same repository --repo . resolves' 'see O5'
+        skip 'O9 no --repo works from a subdirectory too' 'see O5'
+        skip 'O10 a subdirectory resolves to the top of the tree' 'see O5'
     fi
 else
-    skip 'O1 a usage failure inside the container exits 2 on the host' 'no host shim'
-    skip 'O2 --repo . resolved against the translated directory' 'no host shim'
-    skip 'O3 a success inside the container exits 0 on the host' 'no host shim'
-    skip 'O4 the version comes from the coordinator, not the shim' 'no host shim'
-    skip 'O5 --repo . works from a repository on the host' 'no host shim'
-    skip 'O6 it resolved this repository' 'no host shim'
+    aq_why=$AQ_STALE
+    on_host test -x "$AQ_SHIM" || aq_why='no host shim'
+    for aq_name in \
+        'O1 a usage failure inside the container exits 2 on the host' \
+        'O2 --repo . resolved against the translated directory' \
+        'O2a no --repo outside a repository exits 2 as well' \
+        'O2b it names the translated directory, not the host one' \
+        'O2c it says how to name a repository elsewhere' \
+        'O2d the host spelling never appears in the refusal' \
+        'O2e drain is rejected as an unknown command (exit 2)' \
+        'O2f the refusal names the commands that do exist' \
+        'O3 a success inside the container exits 0 on the host' \
+        'O4 the version comes from the coordinator, not the shim' \
+        'O5 --repo . works from a repository on the host' \
+        'O6 it resolved this repository' \
+        'O7 no --repo works from a repository on the host' \
+        'O8 it resolves the same repository --repo . resolves' \
+        'O9 no --repo works from a subdirectory too' \
+        'O10 a subdirectory resolves to the top of the tree'
+    do
+        skip "$aq_name" "${aq_why:-no host shim}"
+    done
 fi

@@ -102,7 +102,9 @@ A **pinned** shim names the environment:
 
 That is right for a command that is installed in exactly one environment. The
 working directory still crosses the boundary, so a relative path such as
-`--repo .` keeps its meaning; only the destination is fixed.
+`--repo .` keeps its meaning, and a command that resolves its repository from
+the working directory resolves it against the translated one. Only the
+destination is fixed.
 
 Both kinds refuse to run inside a container and exit 8, and the router strips
 this directory from the container `PATH`, so a shim can never call itself.

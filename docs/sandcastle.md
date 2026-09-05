@@ -318,7 +318,7 @@ so the client and the API server agree.
 it needs a client there for the same reason. The Bazzite host needs no package
 for this - `podman` is part of the base image - so the requirement is easy to
 miss, and it was: `web-dev` declared only `git`, `jq` and `gh`, and the first
-`agentqueue drain` stopped with
+`agentqueue` run stopped with
 
     agentbox: no Podman client found
 

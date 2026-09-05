@@ -1,6 +1,6 @@
 """What the operator sees.
 
-Two outputs. The dry run prints the plan. The drain prints the summary. Both
+Two outputs. The dry run prints the plan. The run prints the summary. Both
 read the same verdict list, so a plan cannot disagree with a run.
 """
 

@@ -1,4 +1,4 @@
-"""The drain loop: select an issue, implement it, merge it, look again.
+"""The run loop: select an issue, implement it, merge it, look again.
 
     scan the backlog
       -> compute runnable
@@ -177,9 +177,9 @@ class Coordinator:
         candidates = self.github.list_issues(self.policy.issueLabel)
         return self.scheduler.evaluate(candidates)
 
-    # ---------------------------------------------------------------- drain --
+    # ------------------------------------------------------------------ run --
 
-    def drain(self, once: bool = False, max_waves: int = 100) -> Report:
+    def run(self, once: bool = False, max_waves: int = 100) -> Report:
         report = Report()
         while report.waves < max_waves:
             report.waves += 1

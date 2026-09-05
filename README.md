@@ -33,7 +33,7 @@ disposable clone of the repository. The real repository is never mounted, and
 only validated commits are imported onto an `agent/` branch. It never pushes.
 Read [docs/sandcastle.md](docs/sandcastle.md).
 
-`agentqueue` carries that result the rest of the way. One command drains a
+`agentqueue` carries that result the rest of the way. One command runs a
 GitHub backlog: it picks a runnable issue, drives `agentbox`, pushes the
 validated branch, opens the pull request, waits for the checks, merges when
 every gate passes, and looks again, because a merge can unblock the next issue.
@@ -42,14 +42,17 @@ must never get. Read [docs/agentqueue.md](docs/agentqueue.md).
 
 ```bash
 cd ~/projects/dkkb
-agentqueue plan  --repo .              # what it would do, changes nothing
-agentqueue drain --repo .              # do it
-agentqueue drain --repo . --verbose    # more detail
-agentqueue drain --repo . --debug      # the raw agentbox stream
-agentqueue drain --repo . --quiet      # failures and the summary only
+agentqueue plan               # what it would do, changes nothing
+agentqueue run                # do it
+agentqueue run --verbose      # more detail
+agentqueue run --debug        # the raw agentbox stream
+agentqueue run --quiet        # failures and the summary only
 ```
 
-A drain prints a compact stage view: which issue, which stage, how long, and
+Every command works on the repository you stand in. `--repo PATH` names
+another one, for a run started from somewhere else.
+
+A run prints a compact stage view: which issue, which stage, how long, and
 what happened. The full transcript of every run is kept under
 `~/.local/share/agentqueue/runs/`, so a quiet terminal costs no evidence.
 

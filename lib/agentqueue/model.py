@@ -130,7 +130,7 @@ class Verdict:
 
 @dataclasses.dataclass
 class IssueResult:
-    """What the coordinator did with one issue in one drain."""
+    """What the coordinator did with one issue in one run."""
 
     issue: int
     outcome: Outcome

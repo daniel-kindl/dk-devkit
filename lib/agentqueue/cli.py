@@ -1,13 +1,22 @@
 """The agentqueue command line.
 
-    agentqueue drain  --repo PATH [options]   drain the backlog
-    agentqueue plan   --repo PATH             the dry run, an alias of
-                                              "drain --dry-run"
-    agentqueue doctor --repo PATH             what is ready, what is missing
-    agentqueue policy --repo PATH             the resolved policy and its source
-    agentqueue init   --repo PATH             write a policy file to start from
+    agentqueue run    [options]   run the eligible issues
+    agentqueue plan   [options]   what a run would do, and nothing else
+    agentqueue doctor [options]   what is ready, what is missing
+    agentqueue policy [options]   the resolved policy and its source
+    agentqueue init   [options]   write a policy file to start from
 
-The output level of a drain, one at a time:
+Every command works on ONE repository. It is the current Git working tree,
+so the normal case is to stand in the repository and say nothing:
+
+    cd ~/projects/dkkb
+    agentqueue run
+
+``--repo PATH`` names another repository, for a run started from elsewhere:
+
+    agentqueue run --repo ~/projects/dkkb
+
+The output level of a run, one at a time:
 
     (none)      the compact stage view: one line per stage of one issue
     --verbose   the stage view and the coordinator's own notes
@@ -20,8 +29,8 @@ display received is appended to the run log, so no level loses evidence.
 
 Exit codes, stable, scripts may depend on them:
 
-    0   the queue drained, or it is empty, or what is left is legitimately
-        blocked
+    0   the queue ran out of runnable work, or it is empty, or what is
+        left is legitimately blocked
     1   a coordinator defect
     2   a usage error
     3   the policy is unusable
@@ -43,7 +52,7 @@ from typing import List, Optional
 from . import VERSION, policy as policy_mod, report as report_mod, ui as ui_mod
 from .coordinator import Coordinator
 from .ghapi import GitHub, GhTransport
-from .gitops import Git, GitError
+from .gitops import Git, GitError, discover_root
 from .model import Runnability
 from .runner import AgentboxRunner
 
@@ -55,8 +64,42 @@ EXIT_SECURITY = 4
 EXIT_NOT_READY = 5
 
 
-def _repo_root(path: str) -> str:
-    return os.path.abspath(os.path.expanduser(path))
+class SystemExit_(Exception):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _repo_root(path: Optional[str]) -> str:
+    """The one repository this command works on.
+
+    ``--repo PATH`` names it. Without the option it is the Git working tree
+    that holds the current directory, because the normal case is a user who
+    already stands in the repository.
+
+    Both spellings end at the TOP of the working tree, so a command run from
+    a subdirectory reaches the same repository as one run from the top, and a
+    linked worktree reaches its own top rather than the main one.
+
+    The resolution happens here, inside the environment that owns the
+    runtime. The host command is a router shim: it translates the working
+    directory into the container and delegates. A shim that resolved the
+    repository itself would hand over a host path that does not exist on this
+    side, so the shim stays a shim and this function stays the only resolver.
+
+    A directory that is not inside a working tree is a usage error. The queue
+    does not guess.
+    """
+    start = os.path.abspath(os.path.expanduser(path)) if path else os.getcwd()
+    root = discover_root(start)
+    if root is None:
+        message = f"not a Git working tree: {start}"
+        if path is None:
+            message += ("\n  run agentqueue inside a repository, or name one"
+                        " with --repo PATH")
+        raise SystemExit_(EXIT_USAGE, message)
+    return root
 
 
 def _agent_identities(repo_root: str) -> List[str]:
@@ -83,7 +126,7 @@ def _agent_identities(repo_root: str) -> List[str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentqueue",
-        description="Drain a GitHub implementation backlog with unattended agents.",
+        description="Run a GitHub implementation backlog with unattended agents.",
     )
     parser.add_argument("--version", action="version", version=f"agentqueue {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -109,30 +152,36 @@ def build_parser() -> argparse.ArgumentParser:
                            help="one JSON object per event, for a machine")
 
     def common(p):
-        p.add_argument("--repo", required=True, help="the repository to work on")
+        # Optional, and resolved by _repo_root. The default is the working
+        # tree the user already stands in.
+        p.add_argument("--repo",
+                       help="the repository (default: the current Git working tree)")
         p.add_argument("--config", help="an explicit policy file")
         p.add_argument("--label", help="override the ready label")
         p.add_argument("--base", help="override the base branch")
 
-    drain = sub.add_parser("drain", help="drain the backlog")
-    common(drain)
-    drain.add_argument("--max-parallel", type=int, help="issues at a time")
-    drain.add_argument("--max-retries", type=int, help="repair attempts per issue")
-    drain.add_argument("--merge-method", choices=("squash", "merge", "rebase"))
-    drain.add_argument("--auto-merge", dest="auto_merge", action="store_true",
-                       default=None, help="merge when every gate passes")
-    drain.add_argument("--no-auto-merge", dest="auto_merge", action="store_false",
-                       help="stop at a green pull request")
-    drain.add_argument("--once", action="store_true",
-                       help="process one wave, then stop")
-    drain.add_argument("--dry-run", action="store_true",
-                       help="print the plan and change nothing")
-    output(drain)
+    run = sub.add_parser(
+        "run", help="run the eligible issues until no runnable work remains")
+    common(run)
+    run.add_argument("--max-parallel", type=int, help="issues at a time")
+    run.add_argument("--max-retries", type=int, help="repair attempts per issue")
+    run.add_argument("--merge-method", choices=("squash", "merge", "rebase"))
+    run.add_argument("--auto-merge", dest="auto_merge", action="store_true",
+                     default=None, help="merge when every gate passes")
+    run.add_argument("--no-auto-merge", dest="auto_merge", action="store_false",
+                     help="stop at a green pull request")
+    run.add_argument("--once", action="store_true",
+                     help="process one wave, then stop")
+    run.add_argument("--dry-run", action="store_true",
+                     help="print the plan and change nothing")
+    output(run)
 
-    plan = sub.add_parser("plan", help="print the plan and change nothing")
+    plan = sub.add_parser(
+        "plan", help="show what a run would do and change nothing")
     common(plan)
 
-    doctor = sub.add_parser("doctor", help="report what is ready")
+    doctor = sub.add_parser(
+        "doctor", help="check the repository and the machine")
     common(doctor)
 
     show = sub.add_parser("policy", help="print the resolved policy")
@@ -148,10 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _load(args, install_root: str):
-    repo_root = _repo_root(args.repo)
+    repo_root = _repo_root(getattr(args, "repo", None))
     git = Git(repo_root)
-    if not git.is_repository():
-        raise SystemExit_(EXIT_USAGE, f"not a Git working tree: {repo_root}")
     owner, name = git.remote_slug()
     default = os.path.join(install_root, "config", "agentqueue", "policy.default.json")
     pol = policy_mod.load(repo_root, default, owner, name, args.config)
@@ -171,13 +218,6 @@ def _load(args, install_root: str):
         pol.autoMerge = args.auto_merge
     pol.validate()
     return repo_root, git, owner, name, pol
-
-
-class SystemExit_(Exception):
-    def __init__(self, code: int, message: str):
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 def _state_dir() -> str:
@@ -308,7 +348,7 @@ class _NoRunLog:
 
 
 class _RunLog:
-    """The whole transcript of one drain, at every output level.
+    """The whole transcript of one run, at every output level.
 
     Compact output is a display choice. The evidence is not: every line the
     display received, including the ones it did not print, is appended here.
@@ -372,7 +412,7 @@ def _build_ui(args, pol, run_log):
     )
 
 
-def cmd_drain(args, install_root: str, dry_run: bool) -> int:
+def cmd_run(args, install_root: str, dry_run: bool) -> int:
     repo_root, git, owner, name, pol = _load(args, install_root)
     state_dir = _state_dir()
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -438,7 +478,7 @@ def cmd_drain(args, install_root: str, dry_run: bool) -> int:
     git.fetch()
     ui.start()
     try:
-        report = coordinator.drain(once=args.once)
+        report = coordinator.run(once=args.once)
     finally:
         # The heartbeat thread and the active line go away first, so an
         # interrupt leaves the terminal on a line of its own.
@@ -465,9 +505,9 @@ def main(argv: Optional[List[str]] = None, install_root: str = "") -> int:
             return cmd_init(args, install_root)
         if args.command == "plan":
             args.once = False
-            return cmd_drain(args, install_root, dry_run=True)
-        if args.command == "drain":
-            return cmd_drain(args, install_root, dry_run=bool(args.dry_run))
+            return cmd_run(args, install_root, dry_run=True)
+        if args.command == "run":
+            return cmd_run(args, install_root, dry_run=bool(args.dry_run))
     except policy_mod.PolicyError as exc:
         sys.stderr.write(f"agentqueue: {exc}\n")
         return EXIT_POLICY

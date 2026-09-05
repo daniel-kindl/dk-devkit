@@ -24,7 +24,7 @@ gh
 #
 # The host needs no such package: podman is part of the Bazzite base image.
 # This container is not the host, so without this line "agentbox doctor" and
-# every "agentqueue drain" stop with "no Podman client found".
+# every "agentqueue run" stop with "no Podman client found".
 #
 # See docs/sandcastle.md, "Podman connection design".
 podman-remote
