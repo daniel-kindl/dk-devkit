@@ -4,9 +4,23 @@ Reusable development tools, agent workflows, environment definitions, and automa
 
 This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-> The toolkit architecture is in transition. Current commands below exist now. Modular component installation, profiles, and broader platform adapters are roadmap work tracked in #8 and #24; this README does not present them as already implemented.
+> The toolkit architecture is in transition. Current commands below exist now. Modular component installation exists as `./install.sh`; interactive selection, named profiles, and broader platform adapters are roadmap work tracked in #8 and #24, and this README does not present them as already implemented.
 
 ## Current tools
+
+### `install.sh`
+
+Installs reusable components. It resolves the dependency and capability closure of what you name, shows the plan, converges in deterministic order, and verifies only what it selected.
+
+```bash
+./install.sh --list
+./install.sh --dry-run --components web-dev
+./install.sh --components agentbox
+```
+
+A component declares its dependencies, the platform capabilities its installation needs, and where its public configuration ends and machine-local state begins. Read [docs/components.md](docs/components.md).
+
+Interactive selection and named `--profile` options are roadmap work; a profile is currently selected the way any other component is.
 
 ### `devbox`
 
@@ -99,7 +113,7 @@ personal development toolkit
     `-- daniel
 ```
 
-The planned `daniel` profile will compose the complete personal workstation. It will not be a hidden dependency of reusable tools.
+The `daniel` profile composes the complete personal workstation. It is not a dependency of any reusable tool, and `./install.sh --dry-run --components daniel` shows what it resolves to.
 
 Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/workstation/issues/8) and [#24](https://github.com/daniel-kindl/workstation/issues/24).
 
@@ -117,7 +131,7 @@ A future adapter does not imply that every component will work everywhere. In pa
 
 ## Current setup
 
-The repository still has a machine-oriented bootstrap while the component installer is being designed.
+Two entry points converge the same state. `./install.sh` installs a selected part; the bootstrap scripts install the whole machine. Both call the same library functions.
 
 On Bazzite/Fedora:
 
@@ -136,7 +150,14 @@ git clone git@github.com:daniel-kindl/workstation.git ~/projects/workstation
 ~/projects/workstation/verify.sh
 ```
 
-Both bootstrap scripts are intended to converge existing state rather than blindly replace it. Use `--dry-run` where supported to preview changes.
+To install one part instead of the whole machine:
+
+```bash
+~/projects/workstation/install.sh --dry-run --components agentbox
+~/projects/workstation/install.sh --components agentbox
+```
+
+Every installer converges existing state rather than blindly replacing it. Use `--dry-run` to preview changes.
 
 Full recovery instructions are in [docs/recovery.md](docs/recovery.md).
 
@@ -159,9 +180,11 @@ See [docs/secrets.md](docs/secrets.md). Public defaults and local/private state 
 
 | Path | Purpose |
 | --- | --- |
+| `install.sh` | Component installer entry point |
+| `components/` | Component contracts and their install, doctor, and verify operations |
 | `bin/` | Reusable commands and utilities |
 | `lib/agentqueue/` | Internal Python implementation behind the public `agentq` command |
-| `bootstrap/` | Current host and `web-dev` convergence scripts |
+| `bootstrap/` | Convergence libraries, and the whole-machine host and environment scripts |
 | `distrobox/` | Current development-environment definitions |
 | `containers/` | Agent control-plane and sandbox images |
 | `config/` | Public non-secret configuration and agent/runtime policy |
@@ -169,7 +192,7 @@ See [docs/secrets.md](docs/secrets.md). Public defaults and local/private state 
 | `verify/` | Deterministic verification modules and probes |
 | `docs/` | Architecture, recovery, security, and tool documentation |
 
-The planned component/profile layout is a roadmap direction. Existing files will move only when the component contract makes the new boundary useful.
+Component operations live with their component. Existing files move only when the component contract makes the new boundary useful.
 
 ## Verification
 

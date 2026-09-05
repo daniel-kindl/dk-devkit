@@ -4,6 +4,11 @@
 #
 #   bootstrap/host.sh [--dry-run] [--skip-flatpak] [--skip-brew]
 #
+# This is the complete host composition. It is the `daniel` profile expressed
+# as one script, and it stays supported while the component installer in
+# install.sh takes over piece by piece. Each step below is one toolkit
+# component, and both entry points call the same library function.
+#
 # What it does, all idempotently:
 #   * creates ~/projects and ~/.local/bin
 #   * installs the Homebrew taps, formulae and casks in manifests/homebrew.txt
@@ -27,6 +32,14 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/host-packages.sh
+. "$REPO_ROOT/bootstrap/lib/host-packages.sh"
+# shellcheck source=lib/devbox.sh
+. "$REPO_ROOT/bootstrap/lib/devbox.sh"
+# shellcheck source=lib/environments.sh
+. "$REPO_ROOT/bootstrap/lib/environments.sh"
+# shellcheck source=lib/agent-home.sh
+. "$REPO_ROOT/bootstrap/lib/agent-home.sh"
 # shellcheck source=lib/sandcastle.sh
 . "$REPO_ROOT/bootstrap/lib/sandcastle.sh"
 # shellcheck source=lib/agentq.sh
@@ -53,157 +66,34 @@ info "checkout   $REPO_ROOT"
 info "home       $HOME"
 [ "$DRY_RUN" = 1 ] && info "DRY RUN - nothing is written"
 
-# --------------------------------------------------------------- directories --
-section 'Directories'
-ensure_dir_reported "$HOME/projects"
-ensure_dir_reported "$HOME/.local/bin"
-ensure_dir_reported "$HOME/.config/devbox-router/environments.d"
-
 # ----------------------------------------------------------------- Homebrew --
 section 'Homebrew (host CLI tools)'
-BREW=""
-for candidate in "$(command -v brew 2>/dev/null || true)" /home/linuxbrew/.linuxbrew/bin/brew; do
-    [ -n "$candidate" ] && [ -x "$candidate" ] && { BREW=$candidate; break; }
-done
 if [ "$SKIP_BREW" = 1 ]; then
     info 'skipped (--skip-brew)'
-elif [ -z "$BREW" ]; then
-    warn 'Homebrew is not installed'
-    manual 'Install Homebrew on Bazzite: run "ujust install-brew", then re-run bootstrap/host.sh'
 else
-    # Compare on the basename: "brew list --full-name" prints a tapped package
-    # as "owner/tap/name", while the manifest may name it either way.
-    installed_formula=$("$BREW" list --formula --full-name 2>/dev/null | sed 's|.*/||' || true)
-    installed_cask=$("$BREW" list --cask --full-name 2>/dev/null | sed 's|.*/||' || true)
-    installed_tap=$("$BREW" tap 2>/dev/null || true)
-    while read -r kind name; do
-        case ${kind:-} in
-            ''|'#'*) continue ;;
-        esac
-        [ -n "${name:-}" ] || continue
-        case $kind in
-            tap)
-                if printf '%s\n' "$installed_tap" | grep -qxF "$name"; then
-                    ok "tap $name"
-                else
-                    run "$BREW" tap "$name" && change "tap $name"
-                fi
-                ;;
-            trust)
-                # 'brew trust' is required before a cask from a third-party tap
-                # can be installed. It is safe to repeat.
-                run "$BREW" trust "$name" >/dev/null 2>&1 || true
-                ok "trust $name"
-                ;;
-            formula)
-                if printf '%s\n' "$installed_formula" | grep -qxF "${name##*/}"; then
-                    ok "formula $name"
-                else
-                    run "$BREW" install "$name" && change "formula $name"
-                fi
-                ;;
-            cask)
-                if printf '%s\n' "$installed_cask" | grep -qxF "${name##*/}"; then
-                    ok "cask $name"
-                else
-                    run "$BREW" install --cask "$name" && change "cask $name"
-                fi
-                ;;
-            *) warn "unknown manifest kind '$kind' in manifests/homebrew.txt" ;;
-        esac
-    done < <(sed -e 's/#.*//' "$REPO_ROOT/manifests/homebrew.txt" | awk 'NF')
+    install_homebrew_packages "$REPO_ROOT"
 fi
 
 # ------------------------------------------------------------------ Flatpak --
 section 'Flatpak applications'
 if [ "$SKIP_FLATPAK" = 1 ]; then
     info 'skipped (--skip-flatpak)'
-elif ! have flatpak; then
-    warn 'flatpak is not available'
 else
-    installed_flatpak=$(flatpak list --app --columns=application 2>/dev/null || true)
-    while read -r app; do
-        case ${app:-} in ''|'#'*) continue ;; esac
-        if printf '%s\n' "$installed_flatpak" | grep -qxF "$app"; then
-            ok "$app"
-        else
-            run flatpak install --or-update --noninteractive --user flathub "$app" &&
-                change "$app"
-        fi
-    done < <(sed -e 's/#.*//' "$REPO_ROOT/manifests/flatpaks.txt" | awk 'NF')
+    install_flatpak_apps "$REPO_ROOT"
 fi
 
 # ------------------------------------------------------------ devbox router --
-section 'devbox router (~/.local/bin)'
-for tool in devbox devbox-verify devbox-run web-dev-run; do
-    link_into "$REPO_ROOT/bin/$tool" "$HOME/.local/bin/$tool"
-done
-
-section 'Agent host shims'
-# The shims are generated by the router itself, so their content never drifts
-# from the router that consumes them. 'devbox new-shim' refuses to overwrite.
-for tool in claude codex; do
-    if [ -e "$HOME/.local/bin/$tool" ]; then
-        ok "$HOME/.local/bin/$tool"
-    else
-        run "$REPO_ROOT/bin/devbox" new-shim "$tool" && change "$HOME/.local/bin/$tool"
-    fi
-done
-
-section 'devbox router configuration (~/.config/devbox-router)'
-CFG=$HOME/.config/devbox-router
-link_into "$REPO_ROOT/config/devbox-router/README.md"                    "$CFG/README.md"
-link_into "$REPO_ROOT/config/devbox-router/settings.env"                 "$CFG/settings.env"
-link_into "$REPO_ROOT/config/devbox-router/inference.tsv"                "$CFG/inference.tsv"
-link_into "$REPO_ROOT/config/devbox-router/environments.d/web-dev.env"   "$CFG/environments.d/web-dev.env"
-link_into "$REPO_ROOT/config/devbox-router/environments.d/python-dev.env" "$CFG/environments.d/python-dev.env"
-# repos.tsv holds absolute host paths. It is machine state: seed it once, then
-# leave it to 'devbox assign'.
-install_if_absent "$REPO_ROOT/config/devbox-router/repos.tsv.template" "$CFG/repos.tsv"
+install_devbox_router "$REPO_ROOT"
 
 # ---------------------------------------------------------------- Distrobox --
 section 'Distrobox development environments'
-if ! have distrobox; then
-    warn 'distrobox is not installed'
-    manual 'Install distrobox on the host, then re-run bootstrap/host.sh'
-else
-    for dev_env in web-dev python-dev; do
-        if podman container exists "$dev_env" 2>/dev/null; then
-            ok "container $dev_env already exists (left untouched)"
-        else
-            run distrobox assemble create --file "$REPO_ROOT/distrobox/$dev_env.ini" &&
-                change "created container $dev_env"
-        fi
-    done
-    info 'to recreate a development container deliberately, see docs/recovery.md'
-fi
+for dev_env in web-dev python-dev; do
+    create_development_environment "$REPO_ROOT" "$dev_env"
+done
+info 'to recreate a development container deliberately, see docs/recovery.md'
 
 # ------------------------------------------------------- Codex host settings --
-section 'Codex host preferences (~/.codex/config.toml)'
-# Orca points CODEX_HOME at a HOST path that is bind-mounted into the box, so
-# the host ~/.codex is a real Codex home and needs the shared preferences too.
-ensure_dir "$HOME/.codex"
-if [ "$DRY_RUN" = 1 ]; then
-    info "would merge $REPO_ROOT/config/codex/config.base.toml into $HOME/.codex/config.toml"
-else
-    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
-        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
-fi
-
-section 'Codex host policy and status line'
-# Codex reads its global instructions from $CODEX_HOME/AGENTS.md. The host
-# Codex home therefore needs the same shared policy file as the one inside the
-# container, and the same status line item list.
-link_into "$REPO_ROOT/config/agents/AGENTS.md" "$HOME/.codex/AGENTS.md"
-if [ "$DRY_RUN" = 1 ]; then
-    info 'would apply the shared status line to the host Codex home'
-else
-    SPEC_DIR="$REPO_ROOT/config/agents/statusline" \
-    CODEX_CONFIG="$HOME/.codex/config.toml" \
-    AGENT_BACKUP_DIR="$(backup_dir)" \
-        "$REPO_ROOT/config/agents/statusline/install.sh" --codex-only |
-        sed 's/^/  /'
-fi
+install_host_agent_home "$REPO_ROOT"
 
 # --------------------------------------------------- Sandcastle (agentbox) --
 section 'Agent orchestration (agentbox)'

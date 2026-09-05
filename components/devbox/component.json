@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "devbox",
+  "name": "devbox router",
+  "kind": "tool",
+  "group": "Core tools",
+  "summary": "Routes an interactive command into the development environment that owns a repository.",
+  "requires": [],
+  "capabilities": ["linux", "host"],
+  "unattended": true,
+  "install": ["components/devbox/install.sh"],
+  "doctor": ["components/devbox/doctor.sh"],
+  "verify": ["./verify.sh", "--only", "5"],
+  "manual": [],
+  "state": {
+    "public": [
+      "config/devbox-router/settings.env",
+      "config/devbox-router/inference.tsv",
+      "config/devbox-router/environments.d/"
+    ],
+    "local": ["~/.config/devbox-router/repos.tsv"]
+  }
+}

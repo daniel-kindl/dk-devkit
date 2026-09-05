@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "daniel",
+  "name": "daniel profile",
+  "kind": "profile",
+  "group": "Profiles",
+  "summary": "Daniel's complete workstation, expressed as a composition of reusable components. It holds no credential and no machine identity.",
+  "requires": [
+    "devbox",
+    "agent-home",
+    "agent-skills",
+    "distrobox",
+    "web-dev",
+    "python-dev",
+    "agentbox",
+    "agentq",
+    "repo-labels",
+    "host-cli-tools",
+    "desktop-apps"
+  ],
+  "capabilities": [],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [
+    "Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519.",
+    "Authenticate GitHub on the host: gh auth login --git-protocol ssh.",
+    "Install the Orca desktop app and open it once so it registers ~/.local/bin/orca-ide."
+  ],
+  "state": { "public": ["components/daniel/component.json"], "local": [] }
+}

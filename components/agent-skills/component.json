@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "agent-skills",
+  "name": "third-party agent skills",
+  "kind": "tool",
+  "group": "Core tools",
+  "summary": "Installs the skills in manifests/skills.tsv into the canonical store and refreshes the Codex symlinks.",
+  "requires": [],
+  "capabilities": ["linux", "git"],
+  "unattended": true,
+  "install": ["components/agent-skills/install.sh"],
+  "doctor": ["bin/install-skills", "--check"],
+  "verify": null,
+  "manual": [],
+  "state": {
+    "public": ["manifests/skills.tsv"],
+    "local": ["~/.agents/skills/", "~/.agents/third-party-skills.tsv"]
+  }
+}

@@ -1,0 +1,612 @@
+#!/usr/bin/env python3
+"""Resolve and install a graph of reusable toolkit components.
+
+Run it through install.sh at the top of the checkout. It discovers the
+components in components/*/component.json, resolves the dependency and
+capability closure of an explicit selection, shows the plan, converges the
+components in deterministic order, and verifies only what it selected.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Callable, Iterable, Mapping, Sequence
+
+PROGRAM = "install.sh"
+ROOT = Path(__file__).resolve().parent.parent
+COMPONENT_DIR = ROOT / "components"
+CAPABILITY_MANIFEST = ROOT / "manifests" / "capabilities.json"
+
+KINDS = ("tool", "runtime", "environment", "extras", "profile")
+PROBE_KINDS = ("command", "executable", "uname", "not-container", "any")
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_RESOLVE = 3
+EXIT_CAPABILITY = 4
+EXIT_INSTALL = 5
+EXIT_VERIFY = 6
+
+INSTALL = "INSTALL"
+READY = "ALREADY READY"
+BLOCKED = "BLOCKED"
+COMPOSITION = "COMPOSITION"
+
+
+class ConfigError(ValueError):
+    """A manifest is malformed, or names something that does not exist."""
+
+
+class ResolveError(ValueError):
+    """A selection cannot be resolved into an ordered component graph."""
+
+
+# ------------------------------------------------------------------ model --
+
+
+@dataclasses.dataclass(frozen=True)
+class Capability:
+    id: str
+    summary: str
+    probe: Mapping[str, object]
+
+
+@dataclasses.dataclass(frozen=True)
+class Component:
+    id: str
+    name: str
+    kind: str
+    group: str
+    summary: str
+    requires: tuple[str, ...]
+    capabilities: tuple[str, ...]
+    unattended: bool
+    install: tuple[str, ...] | None
+    doctor: tuple[str, ...] | None
+    verify: tuple[str, ...] | None
+    manual: tuple[str, ...]
+    public_state: tuple[str, ...]
+    local_state: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class Step:
+    component: Component
+    status: str
+    reason: str
+    detail: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class Plan:
+    steps: tuple[Step, ...]
+
+    def of(self, status: str) -> tuple[Step, ...]:
+        return tuple(step for step in self.steps if step.status == status)
+
+    @property
+    def blocked(self) -> tuple[Step, ...]:
+        return self.of(BLOCKED)
+
+    @property
+    def manual(self) -> tuple[str, ...]:
+        seen: list[str] = []
+        for step in self.steps:
+            if step.status == BLOCKED:
+                continue
+            for item in step.component.manual:
+                if item not in seen:
+                    seen.append(item)
+        return tuple(seen)
+
+
+# ----------------------------------------------------------------- loading --
+
+
+def _string_list(value: object, where: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"{where} must be an array of strings")
+    return tuple(value)
+
+
+def _command(value: object, where: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    command = _string_list(value, where)
+    if not command:
+        raise ConfigError(f"{where} must not be an empty command")
+    return command
+
+
+def component_from(document: object, where: str) -> Component:
+    if not isinstance(document, dict):
+        raise ConfigError(f"{where} must be an object")
+    if document.get("version") != 1:
+        raise ConfigError(f"{where} version must be 1")
+
+    identifier = document.get("id")
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise ConfigError(f"{where}.id must be a non-empty string")
+    if identifier != identifier.strip() or "/" in identifier:
+        raise ConfigError(f"{where}.id must be a single trimmed path segment")
+
+    kind = document.get("kind")
+    if kind not in KINDS:
+        raise ConfigError(f"{where}.kind must be one of {', '.join(KINDS)}")
+
+    for field in ("name", "group", "summary"):
+        if not isinstance(document.get(field), str) or not document[field].strip():
+            raise ConfigError(f"{where}.{field} must be a non-empty string")
+
+    unattended = document.get("unattended")
+    if not isinstance(unattended, bool):
+        raise ConfigError(f"{where}.unattended must be true or false")
+
+    requires = _string_list(document.get("requires"), f"{where}.requires")
+    if identifier in requires:
+        raise ConfigError(f"{where} must not require itself")
+    if len(set(requires)) != len(requires):
+        raise ConfigError(f"{where}.requires must not repeat a component")
+
+    state = document.get("state", {})
+    if not isinstance(state, dict):
+        raise ConfigError(f"{where}.state must be an object")
+
+    return Component(
+        id=identifier,
+        name=document["name"],
+        kind=kind,
+        group=document["group"],
+        summary=document["summary"],
+        requires=requires,
+        capabilities=_string_list(document.get("capabilities"), f"{where}.capabilities"),
+        unattended=unattended,
+        install=_command(document.get("install"), f"{where}.install"),
+        doctor=_command(document.get("doctor"), f"{where}.doctor"),
+        verify=_command(document.get("verify"), f"{where}.verify"),
+        manual=_string_list(document.get("manual"), f"{where}.manual"),
+        public_state=_string_list(state.get("public"), f"{where}.state.public"),
+        local_state=_string_list(state.get("local"), f"{where}.state.local"),
+    )
+
+
+def load_components(directory: Path) -> dict[str, Component]:
+    components: dict[str, Component] = {}
+    for manifest in sorted(directory.glob("*/component.json")):
+        where = f"{manifest.parent.name}/component.json"
+        try:
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ConfigError(f"cannot read {where}: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"invalid JSON in {where}: {exc}") from exc
+        component = component_from(document, where)
+        if component.id != manifest.parent.name:
+            raise ConfigError(
+                f"{where} declares id {component.id!r} but lives in {manifest.parent.name!r}"
+            )
+        if component.id in components:
+            raise ConfigError(f"duplicate component id: {component.id}")
+        components[component.id] = component
+
+    for component in components.values():
+        for dependency in component.requires:
+            if dependency not in components:
+                raise ConfigError(
+                    f"{component.id} requires {dependency!r}, which is not a component"
+                )
+    return components
+
+
+def load_capabilities(path: Path) -> dict[str, Capability]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"invalid JSON in {path}: {exc}") from exc
+    if not isinstance(document, dict) or document.get("version") != 1:
+        raise ConfigError("capability manifest version must be 1")
+    raw = document.get("capabilities")
+    if not isinstance(raw, list):
+        raise ConfigError("capability manifest capabilities must be an array")
+
+    capabilities: dict[str, Capability] = {}
+    for index, value in enumerate(raw):
+        where = f"capabilities[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{where} must be an object")
+        identifier = value.get("id")
+        summary = value.get("summary")
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise ConfigError(f"{where}.id must be a non-empty string")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ConfigError(f"{where}.summary must be a non-empty string")
+        probe = value.get("probe")
+        _check_probe(probe, f"{where}.probe")
+        if identifier in capabilities:
+            raise ConfigError(f"duplicate capability id: {identifier}")
+        capabilities[identifier] = Capability(identifier, summary, probe)
+    return capabilities
+
+
+def _check_probe(probe: object, where: str) -> None:
+    if not isinstance(probe, dict):
+        raise ConfigError(f"{where} must be an object")
+    kind = probe.get("kind")
+    if kind not in PROBE_KINDS:
+        raise ConfigError(f"{where}.kind must be one of {', '.join(PROBE_KINDS)}")
+    if kind == "not-container":
+        return
+    value = probe.get("value")
+    if kind == "any":
+        if not isinstance(value, list) or not value:
+            raise ConfigError(f"{where}.value must be a non-empty array of probes")
+        for index, nested in enumerate(value):
+            _check_probe(nested, f"{where}.value[{index}]")
+        return
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{where}.value must be a non-empty string")
+
+
+def check_capability_references(
+    components: Mapping[str, Component], capabilities: Mapping[str, Capability]
+) -> None:
+    for component in components.values():
+        for capability in component.capabilities:
+            if capability not in capabilities:
+                raise ConfigError(
+                    f"{component.id} needs capability {capability!r}, "
+                    "which manifests/capabilities.json does not define"
+                )
+
+
+# ------------------------------------------------------------- detection --
+
+
+@dataclasses.dataclass(frozen=True)
+class Platform:
+    """Everything the probes are allowed to look at, so tests can supply it."""
+
+    which: Callable[[str], str | None]
+    is_executable: Callable[[str], bool]
+    system: str
+    in_container: bool
+
+    @classmethod
+    def detect(cls) -> "Platform":
+        return cls(
+            which=lambda name: shutil.which(name),
+            is_executable=lambda path: os.access(path, os.X_OK),
+            system=platform.system(),
+            in_container=Path("/run/.containerenv").exists() or Path("/.dockerenv").exists(),
+        )
+
+
+def probe_matches(probe: Mapping[str, object], host: Platform) -> bool:
+    kind = probe["kind"]
+    if kind == "command":
+        return host.which(str(probe["value"])) is not None
+    if kind == "executable":
+        return host.is_executable(str(probe["value"]))
+    if kind == "uname":
+        return host.system == probe["value"]
+    if kind == "not-container":
+        return not host.in_container
+    if kind == "any":
+        return any(probe_matches(nested, host) for nested in probe["value"])  # type: ignore[union-attr]
+    raise ConfigError(f"unknown probe kind: {kind!r}")
+
+
+def detect_capabilities(
+    capabilities: Mapping[str, Capability], host: Platform
+) -> frozenset[str]:
+    return frozenset(
+        identifier
+        for identifier, capability in capabilities.items()
+        if probe_matches(capability.probe, host)
+    )
+
+
+# -------------------------------------------------------------- resolution --
+
+
+def closure(
+    components: Mapping[str, Component], selection: Sequence[str]
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Return the reason for every component, and a deterministic install order.
+
+    The reason says why a component is in the plan: it was selected, or another
+    component declared it. Ordering is dependencies first, and ties break on the
+    identifier, so the same selection always produces the same order.
+    """
+    unknown = [name for name in selection if name not in components]
+    if unknown:
+        raise ResolveError(
+            "unknown component: " + ", ".join(sorted(unknown))
+        )
+
+    reasons: dict[str, str] = {}
+    pending = list(dict.fromkeys(selection))
+    for name in pending:
+        reasons[name] = "selected"
+    while pending:
+        current = pending.pop(0)
+        for dependency in components[current].requires:
+            if dependency not in reasons:
+                reasons[dependency] = f"required by {current}"
+                pending.append(dependency)
+
+    order = _topological_order(components, reasons.keys())
+    return reasons, order
+
+
+def _topological_order(
+    components: Mapping[str, Component], names: Iterable[str]
+) -> tuple[str, ...]:
+    included = set(names)
+    remaining = {
+        name: {dep for dep in components[name].requires if dep in included}
+        for name in included
+    }
+    order: list[str] = []
+    while remaining:
+        ready = sorted(name for name, deps in remaining.items() if not deps)
+        if not ready:
+            raise ResolveError(
+                "dependency cycle between components: " + ", ".join(sorted(remaining))
+            )
+        for name in ready:
+            order.append(name)
+            del remaining[name]
+        for deps in remaining.values():
+            deps.difference_update(ready)
+    return tuple(order)
+
+
+# -------------------------------------------------------------- planning --
+
+
+def _doctor_says_ready(component: Component, root: Path) -> bool:
+    if component.doctor is None:
+        return False
+    return _run(component.doctor, root, capture=True).returncode == 0
+
+
+def build_plan(
+    components: Mapping[str, Component],
+    reasons: Mapping[str, str],
+    order: Sequence[str],
+    present: frozenset[str],
+    root: Path,
+    force: bool = False,
+    doctor: Callable[[Component, Path], bool] | None = None,
+) -> Plan:
+    ask = doctor or _doctor_says_ready
+    steps: list[Step] = []
+    blocked: set[str] = set()
+
+    for name in order:
+        component = components[name]
+        missing = tuple(
+            capability for capability in component.capabilities if capability not in present
+        )
+        upstream = tuple(dep for dep in component.requires if dep in blocked)
+        if missing:
+            blocked.add(name)
+            steps.append(Step(component, BLOCKED, reasons[name],
+                              "missing capability: " + ", ".join(missing)))
+            continue
+        if upstream:
+            blocked.add(name)
+            steps.append(Step(component, BLOCKED, reasons[name],
+                              "blocked by: " + ", ".join(upstream)))
+            continue
+        if component.install is None and component.doctor is None:
+            steps.append(Step(component, COMPOSITION, reasons[name],
+                              "nothing to install; it composes other components"))
+            continue
+        if not force and ask(component, root):
+            steps.append(Step(component, READY, reasons[name]))
+            continue
+        if component.install is None:
+            blocked.add(name)
+            steps.append(Step(component, BLOCKED, reasons[name],
+                              "no installer; the platform must provide it"))
+            continue
+        steps.append(Step(component, INSTALL, reasons[name]))
+    return Plan(tuple(steps))
+
+
+def render_plan(plan: Plan) -> str:
+    lines: list[str] = []
+    width = max((len(step.component.id) for step in plan.steps), default=0)
+
+    def block(title: str, steps: Sequence[Step]) -> None:
+        if not steps:
+            return
+        lines.append(title)
+        for step in steps:
+            # Every component says why it is in the plan, so that a dependency
+            # is never a surprise.
+            note = step.detail
+            if step.reason != "selected":
+                note = f"{note} ({step.reason})" if note else step.reason
+            lines.append(f"  {step.component.id.ljust(width)}  {note}".rstrip())
+
+    block(INSTALL, plan.of(INSTALL))
+    block(READY, plan.of(READY))
+    block(COMPOSITION, plan.of(COMPOSITION))
+    block(BLOCKED, plan.blocked)
+    if plan.manual:
+        lines.append("MANUAL ACTION")
+        for item in plan.manual:
+            lines.append(f"  {item}")
+    return "\n".join(lines)
+
+
+def render_catalogue(
+    components: Mapping[str, Component], present: frozenset[str]
+) -> str:
+    lines: list[str] = []
+    groups: dict[str, list[Component]] = {}
+    for component in components.values():
+        groups.setdefault(component.group, []).append(component)
+    width = max((len(name) for name in components), default=0)
+    for group in sorted(groups):
+        lines.append(group)
+        for component in sorted(groups[group], key=lambda item: item.id):
+            missing = [c for c in component.capabilities if c not in present]
+            mark = "  " if not missing else "! "
+            lines.append(f"  {mark}{component.id.ljust(width)}  {component.summary}")
+            if component.requires:
+                lines.append(f"    {' ' * width}  requires: {', '.join(component.requires)}")
+            if missing:
+                lines.append(f"    {' ' * width}  missing capability: {', '.join(missing)}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+# -------------------------------------------------------------- execution --
+
+
+def _run(command: Sequence[str], root: Path, capture: bool = False) -> subprocess.CompletedProcess:
+    resolved = list(command)
+    candidate = root / resolved[0]
+    if candidate.exists():
+        resolved[0] = str(candidate)
+    return subprocess.run(
+        resolved,
+        cwd=root,
+        check=False,
+        capture_output=capture,
+        text=True,
+    )
+
+
+def execute(plan: Plan, root: Path, runner: Callable[..., subprocess.CompletedProcess] | None = None) -> Step | None:
+    """Install every INSTALL step in order. Return the step that failed."""
+    call = runner or _run
+    for step in plan.of(INSTALL):
+        assert step.component.install is not None
+        print(f"\n==> installing {step.component.id}", flush=True)
+        result = call(step.component.install, root)
+        if result.returncode != 0:
+            return dataclasses.replace(step, detail=f"exit {result.returncode}")
+    return None
+
+
+def verify(plan: Plan, root: Path, runner: Callable[..., subprocess.CompletedProcess] | None = None) -> tuple[Step, ...]:
+    """Verify every selected component that is not blocked."""
+    call = runner or _run
+    failed: list[Step] = []
+    for step in plan.steps:
+        if step.status == BLOCKED or step.component.verify is None:
+            continue
+        print(f"\n==> verifying {step.component.id}", flush=True)
+        result = call(step.component.verify, root)
+        if result.returncode != 0:
+            failed.append(dataclasses.replace(step, detail=f"exit {result.returncode}"))
+    return tuple(failed)
+
+
+# ------------------------------------------------------------------- CLI --
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description="Install reusable toolkit components and only what they declare.",
+    )
+    parser.add_argument("--components", default="",
+                        help="comma-separated component identifiers to install")
+    parser.add_argument("--list", action="store_true",
+                        help="list the components and change nothing")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="show the resolved plan and change nothing")
+    parser.add_argument("--force", action="store_true",
+                        help="install a component again even when it is already ready")
+    parser.add_argument("--no-verify", action="store_true",
+                        help="install without verifying the selected components")
+    return parser
+
+
+def _selection(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    try:
+        components = load_components(COMPONENT_DIR)
+        capabilities = load_capabilities(CAPABILITY_MANIFEST)
+        check_capability_references(components, capabilities)
+    except ConfigError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    present = detect_capabilities(capabilities, Platform.detect())
+
+    if args.list:
+        print(render_catalogue(components, present))
+        return EXIT_OK
+
+    selection = _selection(args.components)
+    if not selection:
+        print(f"{PROGRAM}: name the components to install, for example "
+              f"--components devbox,web-dev", file=sys.stderr)
+        print(f"{PROGRAM}: '{PROGRAM} --list' shows every component", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        reasons, order = closure(components, selection)
+    except ResolveError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return EXIT_RESOLVE
+
+    plan = build_plan(components, reasons, order, present, ROOT, force=args.force)
+    print(f"{PROGRAM}: {ROOT}")
+    print(render_plan(plan))
+
+    if args.dry_run:
+        return EXIT_OK
+    if plan.blocked:
+        names = ", ".join(step.component.id for step in plan.blocked)
+        print(f"{PROGRAM}: refusing to install; blocked components: {names}", file=sys.stderr)
+        return EXIT_CAPABILITY
+
+    failure = execute(plan, ROOT)
+    if failure is not None:
+        print(f"{PROGRAM}: component {failure.component.id} failed ({failure.detail})",
+              file=sys.stderr)
+        return EXIT_INSTALL
+
+    if not args.no_verify:
+        failed = verify(plan, ROOT)
+        if failed:
+            names = ", ".join(step.component.id for step in failed)
+            print(f"{PROGRAM}: verification failed: {names}", file=sys.stderr)
+            return EXIT_VERIFY
+
+    print(f"\n{PROGRAM}: {len(plan.of(INSTALL))} installed, "
+          f"{len(plan.of(READY))} already ready")
+    if plan.manual:
+        print("\nManual steps that remain:")
+        for item in plan.manual:
+            print(f"  - {item}")
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

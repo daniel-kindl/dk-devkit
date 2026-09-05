@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "host-cli-tools",
+  "name": "host CLI tools",
+  "kind": "extras",
+  "group": "Personal workstation extras",
+  "summary": "The Homebrew taps, formulae and casks in manifests/homebrew.txt.",
+  "requires": [],
+  "capabilities": ["linux", "host", "homebrew"],
+  "unattended": true,
+  "install": ["components/host-cli-tools/install.sh"],
+  "doctor": null,
+  "verify": ["./verify.sh", "--only", "1"],
+  "manual": [],
+  "state": { "public": ["manifests/homebrew.txt"], "local": [] }
+}

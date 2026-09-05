@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "agent-home",
+  "name": "shared agent policy and status line",
+  "kind": "tool",
+  "group": "Core tools",
+  "summary": "Installs the shared agent policy, the status line and the non-secret client preferences into the host agent home.",
+  "requires": [],
+  "capabilities": ["linux", "host", "python3"],
+  "unattended": true,
+  "install": ["components/agent-home/install.sh"],
+  "doctor": null,
+  "verify": ["./verify.sh", "--only", "4"],
+  "manual": [],
+  "state": {
+    "public": ["config/agents/AGENTS.md", "config/agents/statusline/spec.json"],
+    "local": ["~/.codex/auth.json", "~/.claude.json"]
+  }
+}

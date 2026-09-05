@@ -65,6 +65,14 @@ Edit it only through this repository.
    `<repo>/.agentqueue.json` and the built-in default. Add a generic rule, not
    an exception.
 
+10. **Install a component, not a machine.** New installation behaviour belongs
+    in a component under `components/`, and it asks for a capability that
+    `manifests/capabilities.json` declares, never for a distribution. A
+    component installs what it declares and nothing else. `bootstrap/host.sh`
+    and a component operation must call the same function in `bootstrap/lib/`,
+    so that one step never has two copies. `verify.sh` module 1b checks that,
+    and `docs/components.md` says why.
+
 ## Prose
 
 Use ASD-STE100 as the baseline, in STE-flavored mode, for the documentation,

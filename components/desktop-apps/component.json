@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "desktop-apps",
+  "name": "desktop applications",
+  "kind": "extras",
+  "group": "Personal workstation extras",
+  "summary": "The user Flatpak applications in manifests/flatpaks.txt.",
+  "requires": [],
+  "capabilities": ["linux", "host", "flatpak"],
+  "unattended": true,
+  "install": ["components/desktop-apps/install.sh"],
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "state": { "public": ["manifests/flatpaks.txt"], "local": [] }
+}
