@@ -234,6 +234,41 @@ def classify_agentbox_exit(code: int, output: str) -> Outcome:
 AGENTBOX_SUMMARY_START = "===AGENTBOX_SUMMARY_JSON==="
 AGENTBOX_SUMMARY_END = "===END==="
 
+# The structured progress channel. agentbox and its orchestrator write one
+# line per lifecycle transition:
+#
+#     ===AGENTBOX_EVENT=== {"event": "implement.start", "agent": "claude"}
+#
+# The prefix is exact, and the payload is JSON. Nothing here reads the
+# human-readable prose around it, and nothing here reads model output. A
+# progress display built on prose would report whatever the model happened to
+# say, and the queue would then be showing the agent's opinion of itself.
+AGENTBOX_EVENT_PREFIX = "===AGENTBOX_EVENT==="
+
+
+def parse_agentbox_event(line: str) -> Optional[dict]:
+    """Read one structured progress line, or return ``None``.
+
+    A line that does not carry the exact prefix is ordinary output. A line
+    that carries it but holds no usable JSON object is ignored rather than
+    guessed at: an unreadable event is a missing event, not an event with
+    made-up fields.
+    """
+    import json
+
+    if not line.startswith(AGENTBOX_EVENT_PREFIX):
+        return None
+    payload = line[len(AGENTBOX_EVENT_PREFIX):].strip()
+    if not payload:
+        return None
+    try:
+        event = json.loads(payload)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or not isinstance(event.get("event"), str):
+        return None
+    return event
+
 
 def extract_agentbox_summary(output: str) -> Optional[dict]:
     """Read the JSON summary block that the orchestrator prints.

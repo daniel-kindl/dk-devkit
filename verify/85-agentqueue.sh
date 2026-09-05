@@ -37,6 +37,8 @@ check 'A5 the unit tests exist'              -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-unit.test.py"
 check 'A6 the integration test exists'       -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-integration.test.py"
+check 'A6a the output test exists'           -- \
+    test -f "$REPO_ROOT/verify/probes/agentqueue-output.test.py"
 check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentqueue.md"
 
 if command -v python3 >/dev/null 2>&1; then
@@ -164,6 +166,143 @@ check_contains 'E9 a security failure stops the whole queue' \
 check_contains 'E10 a merge is followed by a rescan' \
     'a merge can unblock' "$(cat "$AQ_LIB/coordinator.py")"
 
+# --- the presentation layer -------------------------------------------------
+#
+# The compact stage view is a display. It must render what the coordinator
+# decided and it must never decide anything, it must never read a credential,
+# and it must never turn a model's prose into a claim about the run.
+
+UI_CODE=$(aq_code_of "$AQ_LIB/ui.py")
+check_not_contains 'P1 the display reaches no GitHub client' 'self.github' "$UI_CODE"
+check_not_contains 'P2 the display reaches no git wrapper'   'self.git' "$UI_CODE"
+check_not_contains 'P3 the display starts no process'        'subprocess' "$UI_CODE"
+check_not_contains 'P4 the display reads no file'            'open(' "$UI_CODE"
+check_contains 'P5 a redirected stream is told apart from a terminal' \
+    'self.tty' "$UI_CODE"
+check_contains 'P6 a control sequence is only written in place' \
+    'if self.in_place:' "$UI_CODE"
+check_contains 'P7 a security failure has a marker of its own' \
+    'Status.SECURITY' "$UI_CODE"
+check_contains 'P8 the failure tail is bounded' 'max_tail_lines' "$UI_CODE"
+
+# The progress channel is an exact prefix and a JSON document. A display built
+# on a pattern against prose would report whatever a model chose to print.
+MODEL_CODE=$(aq_code_of "$AQ_LIB/model.py")
+check_contains 'P9 the progress channel is an exact prefix' \
+    'line.startswith(AGENTBOX_EVENT_PREFIX)' "$MODEL_CODE"
+check_contains 'P10 the progress payload is parsed as JSON' \
+    'json.loads(payload)' "$MODEL_CODE"
+check_not_contains 'P11 no progress is scraped out of prose with a pattern' \
+    're.search' "$(aq_code_of "$AQ_LIB/coordinator.py" "$AQ_LIB/ui.py")"
+
+# The run log is the evidence a compact run does not print. It is written as
+# the child speaks, and only its owner can read it.
+RUNNER_CODE_ALL=$(aq_code_of "$AQ_LIB/runner.py")
+check_contains 'P12 the child stream is written to a log as it arrives' \
+    'handle.write(line)' "$RUNNER_CODE_ALL"
+check_contains 'P13 the run log is readable by its owner only' \
+    '0o600' "$RUNNER_CODE_ALL"
+check_contains 'P14 the queue transcript is readable by its owner only' \
+    '0o600' "$(aq_code_of "$AQ_LIB/cli.py")"
+check_contains 'P15 a dry run writes no transcript' '_NoRunLog' \
+    "$(aq_code_of "$AQ_LIB/cli.py")"
+
+# Two issues at a time means two threads reach the display and the progress
+# bookkeeping. State that is per RUN must be per thread, or one issue reports
+# another's progress, which is a wrong answer rather than a missing one.
+COORD_CODE_ALL=$(aq_code_of "$AQ_LIB/coordinator.py")
+CLI_CODE_ALL=$(aq_code_of "$AQ_LIB/cli.py")
+check_contains 'P15a the phases one agentbox run reported are per thread' \
+    'self._agent_events = threading.local()' "$COORD_CODE_ALL"
+check_contains 'P15b the queue-wide counters are taken under a lock' \
+    'with self._book:' "$COORD_CODE_ALL"
+check_contains 'P15c the JSON stream attributes an event per thread' \
+    'self._local = threading.local()' "$UI_CODE"
+check_contains 'P15d the output modes are one group, --json included' \
+    'level.add_argument("--json"' "$CLI_CODE_ALL"
+check_contains 'P15e the run log serialises its writers' \
+    'self._lock = threading.Lock()' "$CLI_CODE_ALL"
+
+# One terminal and one run log, reached by several worker threads. Every write
+# path of the renderers must sit inside the renderer lock, and a path added
+# later must not be able to forget it. This finds that statically, the way F1
+# finds a write method that skipped the dry-run guard, rather than hoping a
+# timing test happens to catch the interleaving.
+if command -v python3 >/dev/null 2>&1; then
+    unlocked=$(python3 - "$AQ_LIB" <<'LOCKCHECK'
+import ast, os, sys
+
+WRITES = ("self._write(", "self._repaint(", "self._record(",
+          "self.stream.write", "self._finish_pending(")
+LOCKED = ("self._lock", "self._guard")
+
+source = open(os.path.join(sys.argv[1], "ui.py")).read()
+tree = ast.parse(source)
+bad = []
+for klass in tree.body:
+    if not isinstance(klass, ast.ClassDef) or klass.name not in ("StageUi", "JsonUi"):
+        continue
+    for fn in klass.body:
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        guarded = set()
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.With):
+                continue
+            head = (ast.get_source_segment(source, node) or "")[:80]
+            if not any(name in head for name in LOCKED):
+                continue
+            for inner in ast.walk(node):
+                guarded.add(id(inner))
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            call = ast.get_source_segment(source, node) or ""
+            if not call.startswith(WRITES):
+                continue
+            if id(node) not in guarded:
+                bad.append(f"{klass.name}.{fn.name}")
+print(" ".join(sorted(set(bad))))
+LOCKCHECK
+)
+    check_eq 'P15f every renderer write path is inside the renderer lock' \
+        '' "$unlocked"
+else
+    skip 'P15f every renderer write path is inside the renderer lock' 'no python3'
+fi
+
+# The four levels exist, and they are the only four.
+if command -v python3 >/dev/null 2>&1; then
+    check_eq 'P16 the output levels are quiet, compact, verbose and debug' \
+        "('quiet', 'compact', 'verbose', 'debug')" \
+        "$(python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue.ui import LEVELS
+print(LEVELS)" "$REPO_ROOT")"
+    check_eq 'P17 the stage model is the documented one' \
+        'PLAN CLAIM IMPLEMENT CHECK REVIEW IMPORT PUSH PR CI MERGE DONE' \
+        "$(python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue.ui import Stage
+print(' '.join(s.value for s in Stage))" "$REPO_ROOT")"
+else
+    skip 'P16 the output levels are quiet, compact, verbose and debug' 'no python3'
+    skip 'P17 the stage model is the documented one' 'no python3'
+fi
+
+# agentbox publishes the events. The two halves must agree on the vocabulary.
+ORCH_FILE=$REPO_ROOT/config/sandcastle/orchestrate.mjs
+if [ -f "$ORCH_FILE" ]; then
+    check_contains 'P18 the orchestrator publishes the progress channel' \
+        '===AGENTBOX_EVENT===' "$(cat "$ORCH_FILE")"
+    check_contains 'P19 agentbox publishes the host half of it' \
+        '===AGENTBOX_EVENT===' "$(cat "$REPO_ROOT/bin/agentbox")"
+    check_contains 'P20 the coordinator asks for the progress output mode' \
+        '"--agent-output"' "$RUNNER_CODE_ALL"
+    check_contains 'P21 agentbox accepts the output mode' \
+        '--agent-output) agent_output=' "$(cat "$REPO_ROOT/bin/agentbox")"
+fi
+
 # --- a dry run cannot change durable state ---------------------------------
 #
 # Every write method must pass through the guard. A method that forgot it
@@ -235,6 +374,17 @@ if command -v python3 >/dev/null 2>&1; then
                tr '\n' ' ')"
     fi
 
+    out_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-output.test.py" 2>&1) &&
+        out_rc=0 || out_rc=$?
+    out_n=$(printf '%s\n' "$out_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
+    if [ "$out_rc" = 0 ]; then
+        pass "H1a the output tests pass ($out_n tests)"
+    else
+        fail 'H1a the output tests pass' \
+            "$(printf '%s\n' "$out_out" | grep -E '^(FAIL|ERROR):' | head -5 |
+               tr '\n' ' ')"
+    fi
+
     int_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-integration.test.py" 2>&1) &&
         int_rc=0 || int_rc=$?
     int_n=$(printf '%s\n' "$int_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
@@ -247,6 +397,7 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 else
     skip 'H1 the coordinator unit tests pass' 'no python3 on this side'
+    skip 'H1a the output tests pass' 'no python3 on this side'
     skip 'H2 the coordinator integration tests pass' 'no python3 on this side'
 fi
 

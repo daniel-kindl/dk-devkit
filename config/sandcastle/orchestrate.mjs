@@ -45,7 +45,7 @@
 
 import { createSandbox, claudeCode, codex } from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import {
   diffIntegrity,
   git,
@@ -58,6 +58,22 @@ import {
 // --------------------------------------------------------------- utilities --
 
 const log = (msg) => process.stdout.write(`[agentbox] ${msg}\n`);
+
+// The structured progress channel.
+//
+// A coordinator needs to know which phase a run is in, and it must not learn
+// that by reading prose. Every transition below is published as one line:
+//
+//     ===AGENTBOX_EVENT=== {"event":"implement.start","agent":"claude"}
+//
+// The prefix is exact and the payload is JSON, so a reader matches a prefix
+// and parses a document. Nothing a model prints can produce one of these
+// lines with a meaning of its own: the events are emitted by this file, at
+// points this file reaches, and they carry only what this file knows.
+const event = (name, data = {}) =>
+  process.stdout.write(
+    `===AGENTBOX_EVENT=== ${JSON.stringify({ event: name, ...data })}\n`,
+  );
 
 const fail = (msg) => {
   process.stderr.write(`[agentbox] error: ${msg}\n`);
@@ -73,6 +89,27 @@ const shq = (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 // The configuration arrives in a FILE, not in an environment variable and not
 // in an argument: a prompt can be long, and nothing about a run belongs in a
 // process listing.
+
+/** How the agent's own output is handled.
+ *
+ *   "terminal"  Sandcastle renders its interactive terminal UI on stdout.
+ *               This is the default, and it is what a human at a terminal
+ *               running bin/agentbox directly wants to see.
+ *
+ *   "progress"  Sandcastle writes a log file, and this file forwards the
+ *               agent's text and tool calls as plain lines while publishing
+ *               throttled progress events. A coordinator that captures stdout
+ *               asks for this: an interactive UI in a pipe is control codes,
+ *               not evidence, and it carries no iteration number.
+ *
+ * The two modes change WHERE output goes. Neither changes what the agent does,
+ * what is committed, or what is imported.
+ */
+const AGENT_OUTPUT_MODES = ["terminal", "progress"];
+
+/** At most one progress event per this many milliseconds, per phase. A new
+ *  iteration always publishes at once, because that is a real transition. */
+const PROGRESS_INTERVAL_MS = 20_000;
 
 const configFile = process.env.AGENTBOX_CONFIG_FILE;
 if (!configFile) fail("AGENTBOX_CONFIG_FILE is not set");
@@ -98,6 +135,11 @@ try {
 }
 
 // ------------------------------------------ the disposable clone, validated --
+
+cfg.agentOutput = cfg.agentOutput ?? "terminal";
+if (!AGENT_OUTPUT_MODES.includes(cfg.agentOutput)) {
+  fail(`unknown agentOutput: ${cfg.agentOutput}`);
+}
 
 log(`run id           ${cfg.runId}`);
 log(`disposable clone ${cfg.repo}`);
@@ -324,10 +366,16 @@ const tailOf = (result) => {
   return lines.length > TAIL_BYTES ? lines.slice(-TAIL_BYTES) : lines;
 };
 
+const failuresIn = (results) => results.filter((r) => r.exitCode !== 0);
+
 const runChecks = async (sandbox, label) => {
   const results = [];
-  for (const cmd of cfg.checks ?? []) {
+  const all = cfg.checks ?? [];
+  let index = 0;
+  for (const cmd of all) {
+    index += 1;
     log(`${label}: ${cmd}`);
+    event("check.start", { command: cmd, index, total: all.length, label });
     const r = await sandbox.exec(cmd);
     const entry = { command: cmd, exitCode: r.exitCode };
     if (r.exitCode !== 0) {
@@ -336,12 +384,71 @@ const runChecks = async (sandbox, label) => {
     } else {
       log(`${label}: ok`);
     }
+    event("check.done", { command: cmd, exitCode: r.exitCode, index, total: all.length });
     results.push(entry);
   }
+  event("checks.done", {
+    label,
+    total: results.length,
+    failed: failuresIn(results).length,
+  });
   return results;
 };
 
-const failuresIn = (results) => results.filter((r) => r.exitCode !== 0);
+// --------------------------------------------------------- the agent output --
+
+/** The logging option for one agent run, and the progress it publishes.
+ *
+ * In "terminal" mode this is exactly what it always was. In "progress" mode
+ * Sandcastle writes the log to a file inside the disposable clone, and the
+ * callback does two things: it forwards what the agent said as plain lines,
+ * so a captured stdout keeps the same evidence it kept before, and it
+ * publishes a throttled progress event carrying the ITERATION NUMBER, which
+ * is the only place that number exists.
+ */
+const agentLogging = (name, phase, maxIterations) => {
+  if (cfg.agentOutput !== "progress") return { type: "stdout" };
+  const dir = `${cfg.repo}/.sandcastle/logs`;
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* Sandcastle creates it too; a race here is not a failure. */
+  }
+  let lastAt = 0;
+  let lastIteration = 0;
+  let tools = 0;
+  const publish = (iteration, force) => {
+    const now = Date.now();
+    if (!force && now - lastAt < PROGRESS_INTERVAL_MS) return;
+    lastAt = now;
+    lastIteration = iteration;
+    event("agent.progress", {
+      phase,
+      agent: phase === "review" ? cfg.reviewAgent : cfg.agent,
+      iteration,
+      maxIterations,
+      tools,
+    });
+  };
+  return {
+    type: "file",
+    path: `${dir}/${name}.log`,
+    onAgentStreamEvent: (e) => {
+      const iteration = typeof e.iteration === "number" ? e.iteration : lastIteration;
+      if (e.type === "text") {
+        for (const line of String(e.message ?? "").split("\n")) {
+          if (line.trim()) process.stdout.write(`[agent:${name}] ${line}\n`);
+        }
+      } else if (e.type === "toolCall") {
+        tools += 1;
+        process.stdout.write(`[agent:${name}] $ ${e.name} ${e.formattedArgs ?? ""}\n`);
+      } else {
+        return; // "raw" is the debug stream; --agent-output terminal shows it
+      }
+      publish(iteration, iteration !== lastIteration);
+    },
+  };
+};
 
 /** The instruction for one repair turn. Strict, because no human reads it. */
 const fixPrompt = (failures, round, rounds) => {
@@ -460,6 +567,7 @@ try {
     cwd: cfg.repo,
   });
   log(`worktree         ${sandbox.worktreePath}`);
+  event("sandbox.ready", { branch: cfg.branch });
 
   if (cfg.assertIsolation) {
     log("running the isolation probes");
@@ -467,19 +575,29 @@ try {
     for (const r of summary.isolation) {
       log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.name}${r.ok ? "" : ` (${r.detail})`}`);
     }
-    if (summary.isolation.some((r) => !r.ok)) {
+    const failedProbes = summary.isolation.filter((r) => !r.ok);
+    event(failedProbes.length ? "isolation.failed" : "isolation.ok", {
+      probes: summary.isolation.length,
+      failed: failedProbes.length,
+    });
+    if (failedProbes.length > 0) {
       throw new Error("an isolation probe failed; the sandbox is not safe to use");
     }
   }
 
   // ------------------------------------------------------------- implement --
   log(`running the implementer (${cfg.agent} ${cfg.model})`);
+  event("implement.start", {
+    agent: cfg.agent,
+    model: cfg.model,
+    maxIterations: cfg.maxIterations ?? 1,
+  });
   const impl = await sandbox.run({
     name: "implementer",
     agent: agentProvider(cfg.agent, cfg.model, cfg.effort),
     prompt: cfg.prompt,
     maxIterations: cfg.maxIterations ?? 1,
-    logging: { type: "stdout" },
+    logging: agentLogging("implementer", "implement", cfg.maxIterations ?? 1),
     signal: abort.signal,
   });
   summary.implement = {
@@ -488,6 +606,10 @@ try {
     completionSignal: impl.completionSignal ?? null,
   };
   log(`implementer made ${impl.commits.length} commit(s)`);
+  event("implement.done", {
+    commits: impl.commits.length,
+    iterations: impl.iterations.length,
+  });
 
   // -------------------------------------------------- deterministic checks --
   summary.checksAfterImplement = await runChecks(sandbox, "check after implement");
@@ -507,12 +629,17 @@ try {
     log(
       `${failures.length} check(s) failed; repair round ${round} of ${maxFixRounds}`,
     );
+    event("fix.start", {
+      round,
+      maxRounds: maxFixRounds,
+      failed: failures.length,
+    });
     const fix = await sandbox.run({
       name: `fix-${round}`,
       agent: agentProvider(cfg.agent, cfg.model, cfg.effort),
       prompt: fixPrompt(failures, round, maxFixRounds),
       maxIterations: cfg.maxIterations ?? 1,
-      logging: { type: "stdout" },
+      logging: agentLogging(`fix-${round}`, "fix", cfg.maxIterations ?? 1),
       signal: abort.signal,
     });
     summary.fixRounds = round;
@@ -524,6 +651,7 @@ try {
     });
     latestChecks = await runChecks(sandbox, `check after fix ${round}`);
     summary.checksAfterFix.push(...latestChecks);
+    event("fix.done", { round, commits: fix.commits.length });
   }
   if (summary.fixRounds > 0) {
     log(
@@ -534,6 +662,14 @@ try {
   }
 
   // ---------------------------------------------------------------- review --
+  if (!wantsReview) {
+    event("review.skipped", {
+      reason:
+        cfg.reviewAgent === "none"
+          ? "the review agent is none"
+          : "this is not a pipeline run",
+    });
+  }
   if (wantsReview) {
     if (!reviewCredential) {
       log(
@@ -541,14 +677,19 @@ try {
           "The implementation branch is still validated and left for human review.",
       );
       summary.review = { skipped: true, reason: "no credential" };
+      event("review.skipped", {
+        reason: `no ${cfg.reviewAgent} credential`,
+        agent: cfg.reviewAgent,
+      });
     } else {
       log(`running the independent reviewer (${cfg.reviewAgent} ${cfg.reviewModel})`);
+      event("review.start", { agent: cfg.reviewAgent, model: cfg.reviewModel });
       const rev = await sandbox.run({
         name: "reviewer",
         agent: agentProvider(cfg.reviewAgent, cfg.reviewModel, cfg.effort),
         prompt: cfg.reviewPrompt,
         maxIterations: 1,
-        logging: { type: "stdout" },
+        logging: agentLogging("reviewer", "review", 1),
         signal: abort.signal,
       });
       summary.review = {
@@ -556,6 +697,7 @@ try {
         iterations: rev.iterations.length,
         commits: rev.commits.map((c) => c.sha),
       };
+      event("review.done", { commits: rev.commits.length });
       summary.checksAfterReview = await runChecks(sandbox, "check after review");
     }
   }
@@ -604,8 +746,10 @@ try {
     log(`DISPOSABLE CLONE INTEGRITY FAILED: ${violations.length} change(s) outside ${cfg.branch}`);
     for (const v of violations) log(`  ! ${v}`);
     log("The real repository is unaffected: it was never mounted. Nothing will be imported.");
+    event("integrity.failed", { violations: violations.length });
   } else {
     log(`disposable clone integrity: intact (nothing changed outside ${cfg.branch})`);
+    event("integrity.ok", {});
   }
 } catch (err) {
   // Not being able to answer the question is a failure, not a pass.

@@ -18,4 +18,4 @@ holds that authority, and it never hands any part of it to a sandbox.
 See docs/agentqueue.md.
 """
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"

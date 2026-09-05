@@ -34,6 +34,12 @@
 #                            own tip. This is how a repair reaches work that
 #                            is already imported
 #   --max-iterations N       agent iterations, default 1
+#   --agent-output MODE      terminal (default) renders Sandcastle's
+#                            interactive terminal UI on stdout. progress writes
+#                            the agent log to a file inside the disposable
+#                            clone, forwards what the agent said as plain
+#                            lines, and publishes structured progress events. A
+#                            coordinator that captures stdout wants progress
 #   --max-commits N          the import limit, default from the manifest
 #   --allow-merges           accept merge commits in the imported range
 #   --timeout SECONDS        wall-clock limit for the whole run
@@ -121,6 +127,20 @@ fail() {
 
 info() { printf '%s: %s\n' "$PROGRAM" "$1"; }
 warn() { printf '%s: warning: %s\n' "$PROGRAM" "$1" >&2; }
+
+# emit_event - one line on the structured progress channel.
+#
+#     ===AGENTBOX_EVENT=== {"event":"import.done","commits":2,"tip":"ab12..."}
+#
+# The orchestrator publishes the same channel from inside the runner. This is
+# the host half of it: the phases that happen after the container exits.
+#
+# Only a name, a whole number and a hexadecimal object name are ever put in
+# one of these, so nothing here has to escape JSON. A value that needed
+# escaping would mean this function is being used for something it is not for.
+emit_event() {
+    printf '===AGENTBOX_EVENT=== {"event":"%s"%s}\n' "$1" "${2:-}"
+}
 
 REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
 
@@ -1277,6 +1297,7 @@ cmd_run() {
     local timeout=$AGENTBOX_TIMEOUT_SECONDS max_commits=$AGENTBOX_MAX_COMMITS
     local allow_merges=0 ambient=0 continuation=0
     local max_fix_rounds=$AGENTBOX_MAX_FIX_ROUNDS
+    local agent_output=terminal
     local -a checks=()
 
     while [ $# -gt 0 ]; do
@@ -1294,6 +1315,7 @@ cmd_run() {
             --max-fix-rounds) max_fix_rounds=${2:?}; shift 2 ;;
             --continue) continuation=1; shift ;;
             --max-iterations) max_iterations=${2:?}; shift 2 ;;
+            --agent-output) agent_output=${2:?}; shift 2 ;;
             --max-commits) max_commits=${2:?}; shift 2 ;;
             --allow-merges) allow_merges=1; shift ;;
             --timeout) timeout=${2:?}; shift 2 ;;
@@ -1333,6 +1355,10 @@ cmd_run() {
     esac
     case $max_fix_rounds in
         ''|*[!0-9]*) fail 2 "--max-fix-rounds must be a whole number: $max_fix_rounds" ;;
+    esac
+    case $agent_output in
+        terminal|progress) ;;
+        *) fail 2 "--agent-output must be terminal or progress: $agent_output" ;;
     esac
     # A fix round with no check to run is a second agent turn with no evidence.
     # Saying so is better than running it.
@@ -1405,6 +1431,7 @@ cmd_run() {
         REVIEW_MODEL="$review_model" MAX_ITER="$max_iterations" \
         MAX_COMMITS="$max_commits" ALLOW_MERGES="$allow_merges" \
         MAX_FIX="$max_fix_rounds" CONTINUATION="$continuation" \
+        AGENT_OUTPUT="$agent_output" \
         TIMEOUT="$timeout" EFFORT="$effort" IMAGE="$image" \
         ASSERT="$assert_isolation" STATE="$STATE_HOST" \
         GIT_NAME="$AGENTBOX_GIT_NAME" GIT_EMAIL="$AGENTBOX_GIT_EMAIL" \
@@ -1425,6 +1452,7 @@ plan = {
     "reviewModel": os.environ["REVIEW_MODEL"],
     "maxIterations": int(os.environ["MAX_ITER"]),
     "maxFixRounds": int(os.environ["MAX_FIX"]),
+    "agentOutput": os.environ["AGENT_OUTPUT"],
     "continuation": os.environ["CONTINUATION"] == "1",
     "maxCommits": int(os.environ["MAX_COMMITS"]),
     "allowMerges": os.environ["ALLOW_MERGES"] == "1",
@@ -1501,7 +1529,7 @@ print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
     REVIEW_PROMPT="$review_prompt" AGENT="$agent" MODEL="$model" \
     REVIEW_AGENT="$review_agent" REVIEW_MODEL="$review_model" \
     MAX_ITER="$max_iterations" EFFORT="$effort" IMAGE="$image" \
-    MAX_FIX="$max_fix_rounds" \
+    MAX_FIX="$max_fix_rounds" AGENT_OUTPUT="$agent_output" \
     MOUNTS="$mounts_json" ASSERT="$assert_isolation" TIMEOUT="$timeout" \
     HAS_CLAUDE="$( [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] && printf 1 || printf 0 )" \
     HAS_CODEX="$( [ -n "$OPENAI_API_KEY" ] && printf 1 || printf 0 )" \
@@ -1528,6 +1556,7 @@ cfg = {
     "reviewModel": os.environ["REVIEW_MODEL"],
     "maxIterations": int(os.environ["MAX_ITER"]),
     "maxFixRounds": int(os.environ["MAX_FIX"]),
+    "agentOutput": os.environ["AGENT_OUTPUT"],
     "checks": checks,
     "sandboxImage": os.environ["IMAGE"],
     "mounts": json.loads(os.environ["MOUNTS"]),
@@ -1575,6 +1604,7 @@ print(json.dumps(cfg))' > "$RUN_DIR_VIEW/staging/config.json"
             'Nothing was imported.'
     fi
     info 'repository integrity: unchanged during the run'
+    emit_event repository.unchanged
 
     # --- the transfer -------------------------------------------------------
     sanitize_clone
@@ -1593,6 +1623,8 @@ print(json.dumps(cfg))' > "$RUN_DIR_VIEW/staging/config.json"
     info "imported         $IMPORTED_COUNT commit(s) as $branch"
     info "branch tip       $IMPORTED_SHA"
     info 'nothing else in the repository changed'
+    emit_event import.done \
+        ",\"commits\":$IMPORTED_COUNT,\"tip\":\"$IMPORTED_SHA\""
 }
 
 # ------------------------------------------------------------------ selftest --

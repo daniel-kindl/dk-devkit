@@ -50,6 +50,24 @@ class CiResult:
         return self.state
 
 
+def check_progress(state: str, verdict) -> str:
+    """One short, factual line about the checks of one commit.
+
+    It names the state and, at most, the first three checks the state is about.
+    It never estimates how much longer they will take, because nothing here
+    knows that.
+    """
+    names = list(verdict.get("pending") or []) or list(verdict.get("failed") or [])
+    if not names:
+        names = list(verdict.get("missing") or [])
+    if not names:
+        return state
+    shown = ", ".join(names[:3])
+    if len(names) > 3:
+        shown += f" +{len(names) - 3}"
+    return f"{state}: {shown}"
+
+
 def wait_for_checks(
     github,
     sha: str,
@@ -57,8 +75,14 @@ def wait_for_checks(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     emit: Optional[Callable[[str], None]] = None,
+    ui=None,
 ) -> CiResult:
-    """Poll the checks of ``sha`` until they settle, or until the limit."""
+    """Poll the checks of ``sha`` until they settle, or until the limit.
+
+    ``ui`` receives the state of the checks as deterministic progress: the
+    state name and the checks that are still running. It is display only, and
+    it changes no decision below.
+    """
     say = emit or (lambda line: None)
     started = clock()
     last_state = ""
@@ -72,8 +96,10 @@ def wait_for_checks(
         state = str(verdict["state"])
 
         if state != last_state:
-            say(f"    checks for {sha[:12]}: {state}")
+            say(f"checks for {sha[:12]}: {state}")
             last_state = state
+        if ui is not None:
+            ui.stage_detail(check_progress(state, verdict), key=state)
 
         if state in ("passed", "failed"):
             return CiResult(
