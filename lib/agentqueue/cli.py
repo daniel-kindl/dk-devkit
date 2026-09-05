@@ -1,20 +1,20 @@
-"""The agentqueue command line.
+"""The agentq command line.
 
-    agentqueue run    [options]   run the eligible issues
-    agentqueue plan   [options]   what a run would do, and nothing else
-    agentqueue doctor [options]   what is ready, what is missing
-    agentqueue policy [options]   the resolved policy and its source
-    agentqueue init   [options]   write a policy file to start from
+    agentq run    [options]   run the eligible issues
+    agentq plan   [options]   what a run would do, and nothing else
+    agentq doctor [options]   what is ready, what is missing
+    agentq policy [options]   the resolved policy and its source
+    agentq init   [options]   write a policy file to start from
 
 Every command works on ONE repository. It is the current Git working tree,
 so the normal case is to stand in the repository and say nothing:
 
     cd ~/projects/dkkb
-    agentqueue run
+    agentq run
 
 ``--repo PATH`` names another repository, for a run started from elsewhere:
 
-    agentqueue run --repo ~/projects/dkkb
+    agentq run --repo ~/projects/dkkb
 
 The output level of a run, one at a time:
 
@@ -96,7 +96,7 @@ def _repo_root(path: Optional[str]) -> str:
     if root is None:
         message = f"not a Git working tree: {start}"
         if path is None:
-            message += ("\n  run agentqueue inside a repository, or name one"
+            message += ("\n  run agentq inside a repository, or name one"
                         " with --repo PATH")
         raise SystemExit_(EXIT_USAGE, message)
     return root
@@ -125,10 +125,10 @@ def _agent_identities(repo_root: str) -> List[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="agentqueue",
+        prog="agentq",
         description="Run a GitHub implementation backlog with unattended agents.",
     )
-    parser.add_argument("--version", action="version", version=f"agentqueue {VERSION}")
+    parser.add_argument("--version", action="version", version=f"agentq {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def output(p):
@@ -191,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="write a policy file to start from")
     common(init)
     init.add_argument("--local", action="store_true",
-                      help="write to ~/.config/agentqueue instead of the repository")
+                      help="write to the local coordinator config instead of the repository")
     init.add_argument("--force", action="store_true")
     return parser
 
@@ -246,7 +246,7 @@ def cmd_policy(args, install_root: str) -> int:
 def cmd_doctor(args, install_root: str) -> int:
     repo_root, git, owner, name, pol = _load(args, install_root)
     rc = EXIT_OK
-    print("agentqueue doctor\n")
+    print("agentq doctor\n")
     print(f"  repository         {repo_root}")
     print(f"  GitHub             {owner}/{name}")
     print(f"  base branch        {pol.baseBranch}")
@@ -254,7 +254,7 @@ def cmd_doctor(args, install_root: str) -> int:
 
     transport = GhTransport()
     if not transport.available():
-        print("  gh                 NOT FOUND (agentqueue runs inside web-dev)")
+        print("  gh                 NOT FOUND (agentq runs inside web-dev)")
         rc = EXIT_NOT_READY
     else:
         code, out, _ = transport.run(["auth", "status"])
@@ -286,7 +286,7 @@ def cmd_doctor(args, install_root: str) -> int:
     print(f"  reviewPolicy       {pol.reviewPolicy}"
           f"  (merge without review: {pol.merge_is_permitted_without_review()})")
     print(f"  checks             {', '.join(pol.checks) or '(none)'}")
-    print("\nagentqueue: " + ("ready" if rc == EXIT_OK else "not ready"))
+    print("\nagentq: " + ("ready" if rc == EXIT_OK else "not ready"))
     return rc
 
 
@@ -313,13 +313,13 @@ def cmd_init(args, install_root: str) -> int:
     else:
         target = os.path.join(repo_root, ".agentqueue.json")
     if os.path.exists(target) and not args.force:
-        print(f"agentqueue: {target} exists already. Pass --force to replace it.")
+        print(f"agentq: {target} exists already. Pass --force to replace it.")
         return EXIT_USAGE
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(template, handle, indent=2)
         handle.write("\n")
-    print(f"agentqueue: wrote {target}")
+    print(f"agentq: wrote {target}")
     print("Review it, then turn autoMerge on when the policy is what you want.")
     return EXIT_OK
 
@@ -445,7 +445,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
     )
 
     for line in (
-        f"agentqueue {VERSION}",
+        f"agentq {VERSION}",
         f"  repository   {owner}/{name}  ({repo_root})",
         f"  base         {pol.baseBranch}",
         f"  label        {pol.issueLabel}",
@@ -509,15 +509,15 @@ def main(argv: Optional[List[str]] = None, install_root: str = "") -> int:
         if args.command == "run":
             return cmd_run(args, install_root, dry_run=bool(args.dry_run))
     except policy_mod.PolicyError as exc:
-        sys.stderr.write(f"agentqueue: {exc}\n")
+        sys.stderr.write(f"agentq: {exc}\n")
         return EXIT_POLICY
     except SystemExit_ as exc:
-        sys.stderr.write(f"agentqueue: {exc.message}\n")
+        sys.stderr.write(f"agentq: {exc.message}\n")
         return exc.code
     except GitError as exc:
-        sys.stderr.write(f"agentqueue: {exc}\n")
+        sys.stderr.write(f"agentq: {exc}\n")
         return EXIT_USAGE
     except KeyboardInterrupt:
-        sys.stderr.write("agentqueue: interrupted\n")
+        sys.stderr.write("agentq: interrupted\n")
         return EXIT_DEFECT
     return EXIT_USAGE
