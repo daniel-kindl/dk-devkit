@@ -41,7 +41,7 @@ ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/python-
 check_eq 'distrobox/python-dev.ini repeats the package manifest' \
     "$(printf '%s\n' $python_packages | sort | tr '\n' ' ')" "$ini_packages"
 
-for command_name in git gh jq curl sqlite gcc g++ make pkg-config; do
+for command_name in git gh jq curl sqlite3 gcc g++ make pkg-config; do
     check "python-dev command is available: $command_name" -- \
         python_box_sh "command -v '$command_name' >/dev/null"
 done
