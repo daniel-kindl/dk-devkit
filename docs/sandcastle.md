@@ -130,12 +130,15 @@ That is an image change, so `SANDBOX_TAG` moves with it. Run `agentbox build`
 before the next run; a run against an image that does not exist stops with exit
 code 4 and says so.
 
-One untracked file is left over that `agentbox` should NOT remove. `pnpm
-install` writes `pnpm-lock.yaml`, and a repository that does not commit its
-lockfile leaves that file untracked, which is enough on its own for Sandcastle
-to preserve the worktree. That is the repository's own gap. The preserved
-worktree is harmless either way: it lives inside the run directory, the host
-reads the branch and not the worktree, `sanitize_clone` removes
+A second untracked file can survive this, and `agentbox` should NOT remove it.
+`pnpm install` writes `pnpm-lock.yaml`, so a repository that does not commit
+its lockfile can leave that one file untracked, which is enough on its own for
+Sandcastle to preserve the worktree. That is the repository's own gap. The run
+that verified this fix did not reproduce it - only the store was left behind
+the first time - so treat it as a case to expect rather than a certainty.
+
+A preserved worktree is harmless either way: it lives inside the run directory,
+the host reads the branch and not the worktree, `sanitize_clone` removes
 `.git/worktrees` before anything is imported, and the whole run directory is
 removed at the end.
 
