@@ -10,8 +10,12 @@ merge, then choose the next issue.
 `agentqueue` is that missing half. One command drains a backlog:
 
 ```bash
-agentqueue drain --repo ~/projects/dkkb
+cd ~/projects/dkkb
+agentqueue drain --repo .
 ```
+
+The command runs on the host. The coordinator runs inside `web-dev`. See
+[Where it runs, and where you type it](#where-it-runs-and-where-you-type-it).
 
     agentbox     one issue,  no GitHub authority,  stops at a local branch
     agentqueue   the queue,  all GitHub authority, pushes, merges, rescans
@@ -382,6 +386,9 @@ The prompt names no credential and no credential path. A unit test asserts that.
 
 ## The commands
 
+Run them from a host terminal. `PATH` may be relative, and `.` is the usual
+choice, because the working directory travels with the command.
+
 ```bash
 agentqueue drain  --repo PATH [options]   drain the backlog
 agentqueue plan   --repo PATH             the plan, an alias of drain --dry-run
@@ -436,11 +443,78 @@ method skipped the guard.
 | 4 | a security or integrity failure stopped the queue |
 | 5 | the machine is not ready |
 
-## Where it runs
+## Where it runs, and where you type it
 
-Inside the `web-dev` container. That is where `gh` is installed, where the host
-ssh-agent socket is reachable, and where `podman-remote` reaches the host
-engine. The host has no `gh` and, by rule, no Node toolchain.
+The coordinator runs **inside the `web-dev` container**. That is where `gh` is
+installed, where the host ssh-agent socket is reachable, and where
+`podman-remote` reaches the host engine. The host has no `gh` and, by rule, no
+Node toolchain.
+
+You type the command **on the host**, in a normal terminal:
+
+```bash
+cd ~/projects/dkkb
+agentqueue plan  --repo .
+agentqueue drain --repo .
+```
+
+`~/.local/bin/agentqueue` on the host is a devbox router shim, the same kind of
+file as the `claude` and `codex` shims. It holds no runtime, no state and no
+credential. `bootstrap/host.sh` generates it with
+
+    devbox new-shim agentqueue --env web-dev --print
+
+and the environment name comes from `AGENTQUEUE_ENVIRONMENT` in
+`manifests/agentqueue.env`. The whole shim is one line of routing:
+
+    exec "$router" exec web-dev --cwd "$PWD" -- agentqueue "$@"
+
+### What the delegation preserves
+
+| Property | How |
+| --- | --- |
+| the working directory | `--cwd "$PWD"`. The router maps the host path to the container path, so `~/projects/dkkb` becomes `/workspace/dkkb` |
+| `--repo .` | the coordinator resolves `.` against the **translated** directory, so it means the same repository |
+| the arguments | `"$@"` to the router, positional arguments to the container, `exec "$@"` inside it. Spaces, quotes and newlines survive |
+| the exit status | every step is an `exec`, so no process sits between the coordinator and your shell |
+| Ctrl-C | the interrupt reaches the coordinator, the shell sees 130, and nothing is left running inside the container |
+| the environment | the shim assigns nothing and exports nothing. What the coordinator sees is what `devbox exec` gives it |
+
+`devbox exec` is pinned to one environment on purpose. The coordinator is
+installed in exactly one place, so the working directory decides which
+repository it works on, and never where it runs. A repository that the router
+would route to `rust-dev` still gets the coordinator from `web-dev`.
+
+### The recursion guard
+
+The shim refuses to run inside a container and exits 8. Two things make that
+enough:
+
+- the shim itself tests `/run/.containerenv`, `/.dockerenv` and
+  `$DEVBOX_ACTIVE_ENV`
+- the router strips the host `~/.local/bin` from the container `PATH`, so
+  `agentqueue` inside `web-dev` is the real program, not the shim
+
+Inside the container the direct call keeps working, and it is the same command:
+
+```bash
+devbox exec web-dev -- agentqueue plan --repo ~/projects/dkkb
+```
+
+### The exit codes a router adds
+
+The shim can fail before the coordinator starts. Those failures come from the
+router, and they do not collide with the coordinator exit codes in the table
+below, except for the shared meaning of 2 (a usage error):
+
+| Code | Meaning |
+| --- | --- |
+| 5 | the environment is not configured on this machine |
+| 6 | the Distrobox container is missing |
+| 8 | the shim was started inside a container |
+| 127 | `agentqueue` is not installed inside the environment; run `bootstrap/web-dev.sh` |
+
+### The runtime
 
 `agentqueue` is written in Python with the standard library only, so it needs
 nothing that the base system does not already provide. It calls
@@ -478,6 +552,13 @@ finish that call, and nothing is pushed or merged afterwards.
   merge call. The queue reports that and asks for a human. It does not try to
   work around it.
 - Nothing schedules a drain. `agentqueue drain` runs when a human starts it.
+- **`kill -TERM` against the host process is not a clean stop.** Ctrl-C in the
+  terminal is: `bin/devbox-verify` checks that the coordinator ends and that
+  nothing survives inside the container. A `SIGTERM` sent to the host-side
+  process id ends that process and leaves the coordinator running inside
+  `web-dev`, because `podman exec` does not forward it. This is a property of
+  `distrobox enter`, and it is the same for `devbox exec`, `devbox run` and the
+  `claude` and `codex` shims. Stop a drain with Ctrl-C.
 
 ## Related documents
 

@@ -65,6 +65,8 @@ This step:
 - installs the Flatpak applications in `manifests/flatpaks.txt`
 - links `devbox`, `devbox-verify`, `devbox-run` and `web-dev-run` into `~/.local/bin`
 - generates the `claude` and `codex` shims with `devbox new-shim`
+- generates the `agentqueue` shim, pinned to the environment that
+  `manifests/agentqueue.env` names
 - links the router configuration into `~/.config/devbox-router`
 - seeds an empty `repos.tsv`, and never overwrites an existing one
 - creates the `web-dev` container from `distrobox/web-dev.ini`
@@ -148,16 +150,25 @@ See `docs/sandcastle.md`.
 
 ## 8b. Prepare the backlog coordinator, if you want an unattended drain
 
-`bootstrap/web-dev.sh` already installed `agentqueue` inside the container. It
-lives there and not on the host, because it needs `gh` and the forwarded
-ssh-agent.
+`bootstrap/web-dev.sh` installed the coordinator inside the container, and
+`bootstrap/host.sh` installed the `agentqueue` command on the host. The
+coordinator lives in the container because it needs `gh` and the forwarded
+ssh-agent; the host command is a router shim that delegates to it.
 
 It needs no credential of its own. It uses the `gh` sign-in from step 6 and the
 SSH key from step 2, and it never writes either to disk.
 
 ```bash
+cd ~/projects/dkkb
+agentqueue doctor --repo .
+agentqueue plan   --repo .
+```
+
+The explicit form still works, and it is the one to reach for when the shim
+itself is what you doubt:
+
+```bash
 devbox exec web-dev -- agentqueue doctor --repo ~/projects/dkkb
-devbox exec web-dev -- agentqueue plan   --repo ~/projects/dkkb
 ```
 
 `plan` reads GitHub and changes nothing. It prints which issues are runnable
@@ -216,6 +227,8 @@ run them again.
 | A client rewrote its own status line | `~/.agents/statusline/install.sh` |
 | Routing resolves the wrong environment | `devbox doctor` |
 | An unattended agent run fails to start | `agentbox doctor` |
+| `agentqueue: command not found` on the host | run `bootstrap/host.sh`; the shim lives in `~/.local/bin` |
+| `agentqueue` exits 127 | the runtime is missing in the container; run `bootstrap/web-dev.sh` |
 | A backlog drain will not start | `agentqueue doctor --repo <path>` |
 | The queue merged nothing, and every issue looks blocked | `agentqueue plan --repo <path>` |
 | An issue is stuck with `agent-in-progress` | the claim goes stale on its own; `agentqueue plan` reports it |

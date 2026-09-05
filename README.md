@@ -41,9 +41,15 @@ It is a separate program because it holds the GitHub authority that a sandbox
 must never get. Read [docs/agentqueue.md](docs/agentqueue.md).
 
 ```bash
-agentqueue plan  --repo ~/projects/dkkb    # what it would do, changes nothing
-agentqueue drain --repo ~/projects/dkkb    # do it
+cd ~/projects/dkkb
+agentqueue plan  --repo .    # what it would do, changes nothing
+agentqueue drain --repo .    # do it
 ```
+
+You type that on the host. The coordinator runs inside `web-dev`, where `gh`
+and the forwarded ssh-agent are, and the host `agentqueue` is a router shim
+that carries the working directory across. It works the same way the `claude`
+and `codex` commands do.
 
 Read [docs/architecture.md](docs/architecture.md) for the full picture.
 
