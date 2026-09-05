@@ -1,0 +1,24 @@
+# Distribution packages required inside the python-dev container.
+#
+# This file is the source of truth. distrobox/python-dev.ini repeats the list
+# because the INI format cannot read a file. bootstrap/python-dev.sh converges
+# an existing container from this manifest, and verify/25-python-dev.sh checks
+# that the two declarations stay equal.
+
+# Repository and GitHub tooling.
+git
+jq
+gh
+curl
+
+# Local SQLite inspection. Application persistence libraries remain project
+# dependencies and are not installed globally here.
+sqlite
+
+# Small native-build baseline for Python packages that do not provide a wheel.
+# Project-specific native libraries still belong to the project or a later
+# environment capability when evidence shows they are needed.
+gcc
+gcc-c++
+make
+pkgconf-pkg-config
