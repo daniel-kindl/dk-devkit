@@ -376,7 +376,7 @@ is a larger exposure than an independent review is worth.
 
 | Control | What it does |
 | --- | --- |
-| `--timeout SECONDS` | wall-clock limit for the whole run; `AGENTBOX_TIMEOUT_SECONDS` sets the default. `timeout --kill-after=30s` bounds the control plane, and the orchestrator aborts the agent a minute earlier so the sandbox can still be destroyed cleanly |
+| `--timeout SECONDS` | wall-clock limit for the whole run; `AGENTBOX_TIMEOUT_SECONDS` sets the default. `timeout --foreground --kill-after=30s` bounds the control plane, and the orchestrator aborts the agent a minute earlier so the sandbox can still be destroyed cleanly |
 | branch lock | two runs cannot claim the same branch of the same repository. A lock whose run directory is gone, or which is older than the run could be, is broken once and reported |
 | `--max-commits N` | the import bound |
 | `--allow-merges` | accepts merge commits in the imported range |
@@ -386,6 +386,20 @@ is a larger exposure than an independent review is worth.
 
 `--max-iterations` bounds the number of agent turns; `--timeout` bounds how
 long they may take in total.
+
+### The control plane does not read the terminal
+
+`podman run` gets no `-i`, and its stdin is `/dev/null`. The orchestrator reads
+nothing from stdin, and a podman client that reads the terminal from a
+**background** process group takes `SIGTTIN`. Podman forwards that signal to the
+container rather than stopping, which livelocks its attach loop: it stops
+draining the container's stdout, and the orchestrator blocks on its next write.
+The run then looks like a hang at teardown until the wall-clock limit kills it.
+
+A background process group is the normal case here — `agentbox ... &` puts the
+client in one, and so does `timeout`, which runs its child in its own group
+unless `--foreground` says otherwise. `agentbox` passes `--foreground` as well,
+so an interrupt still reaches the client.
 
 ## What never enters a sandbox
 

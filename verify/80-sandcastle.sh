@@ -302,7 +302,16 @@ check_contains 'G14 the redaction values are exported, not passed as arguments' 
 # --- runtime controls -------------------------------------------------------
 
 check_contains 'H1 the run has a wall-clock limit' \
-    'timeout --kill-after=30s "$timeout"' "$AB_CODE"
+    'timeout --foreground --kill-after=30s "$timeout"' "$AB_CODE"
+# "-i" makes the podman client read the terminal. From a background process
+# group that takes SIGTTIN, which livelocks the attach loop and stalls the
+# container's stdout. Nothing writes to the control plane's stdin.
+check_not_contains 'H1a the control plane does not read the terminal' \
+    'run --rm -i' "$AB_CODE"
+check_contains 'H1b the control plane stdin is /dev/null' \
+    '</dev/null 2>&1 | redact' "$AB_CODE"
+check_contains 'H1c the wall-clock limit keeps the client in this process group' \
+    'timeout --foreground' "$AB_CODE"
 check_contains 'H2 a branch can only be claimed by one run' 'take_lock' "$AB_CODE"
 check_contains 'H3 a stale lock is broken, not obeyed' \
     'breaking a stale lock' "$AB_CODE"

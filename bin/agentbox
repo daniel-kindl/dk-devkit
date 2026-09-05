@@ -890,9 +890,23 @@ run_in_runner() {
 
     RUNNER_NAME="agentbox-runner-$$-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
 
+    # No "-i", and stdin comes from /dev/null.
+    #
+    # The orchestrator reads nothing from stdin, and "-i" makes the podman
+    # client read the terminal. A client that reads the terminal from a
+    # BACKGROUND process group takes SIGTTIN, and podman forwards that to the
+    # container instead of stopping, which livelocks its attach loop: it stops
+    # draining the container's stdout, and the orchestrator blocks on its next
+    # write. The run then looks like a hang at teardown until the wall-clock
+    # limit kills it. A background process group is the normal case here, both
+    # for "agentbox ... &" and for "timeout", which puts its child in one.
+    #
+    # --foreground keeps the client in this shell's process group, so an
+    # interrupt still reaches it. Both halves are needed: either one alone
+    # leaves a way to reach the terminal.
     set +e
-    timeout --kill-after=30s "$timeout" \
-        "$PODMAN_BIN" run --rm -i \
+    timeout --foreground --kill-after=30s "$timeout" \
+        "$PODMAN_BIN" run --rm \
         --name "$RUNNER_NAME" \
         --userns=keep-id \
         --security-opt label=disable \
@@ -905,7 +919,7 @@ run_in_runner() {
         -v "$RUN_DIR_HOST/staging/$script:/opt/workstation/sandcastle/$script:ro" \
         -w "$CLONE_HOST" \
         "$RUNNER_REF" \
-        "/opt/workstation/sandcastle/$script" 2>&1 | redact
+        "/opt/workstation/sandcastle/$script" </dev/null 2>&1 | redact
     rc=${PIPESTATUS[0]}
     set -e
     return "$rc"
