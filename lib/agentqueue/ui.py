@@ -356,7 +356,7 @@ class StageUi(NullUi):
     def run_header(self, version, slug, runnable, parallel, run_id, log_path=""):
         plural = "" if runnable == 1 else "s"
         shape = "sequential" if parallel <= 1 else f"{parallel} at a time"
-        head = f"agentqueue {version}"
+        head = f"agentq {version}"
         sub = f"{slug} {self.dot} {runnable} runnable issue{plural} {self.dot} {shape}"
         with self._lock:
             self._record(head)

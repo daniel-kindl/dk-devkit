@@ -7,7 +7,7 @@ gives the same answer on every machine.
 
     python3 verify/probes/agentqueue-unit.test.py
 
-verify/85-agentqueue.sh runs this file, and it fails the module on any error.
+verify/85-agentq.sh runs this file, and it fails the module on any error.
 """
 
 from __future__ import annotations

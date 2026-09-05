@@ -7,7 +7,7 @@ case below therefore gives the same answer on every machine.
 
     python3 verify/probes/agentqueue-output.test.py
 
-verify/85-agentqueue.sh runs this file, and it fails the module on any error.
+verify/85-agentq.sh runs this file, and it fails the module on any error.
 
 What is proved here:
 
@@ -43,7 +43,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_ROOT, "lib"))
 
 import agentqueue_fakes as fakes  # noqa: E402
-from agentqueue import ui as ui_mod  # noqa: E402
+from agentqueue import VERSION, ui as ui_mod  # noqa: E402
 from agentqueue.coordinator import Coordinator  # noqa: E402
 from agentqueue.model import (  # noqa: E402
     AGENTBOX_EVENT_PREFIX,
@@ -225,7 +225,7 @@ class TestCompactOutput(unittest.TestCase):
     def test_the_header_states_the_repository_and_the_shape(self):
         harness = Harness(script=[green()])
         harness.run()
-        self.assertIn("agentqueue 0.2.0", harness.lines[0])
+        self.assertIn(f"agentq {VERSION}", harness.lines[0])
         self.assertIn("acme/widget · 1 runnable issue · sequential", harness.text)
 
     def test_the_issue_carries_its_position_and_its_title(self):
