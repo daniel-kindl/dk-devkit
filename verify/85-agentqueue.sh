@@ -521,13 +521,9 @@ else
               printf 'missing'), not this checkout"
 fi
 
-# The host spelling of this checkout. Only the host side can run the shim, and
-# the host does not know the /workspace spelling.
-AQ_CHECKOUT=$REPO_ROOT
-case $REPO_ROOT in
-    /workspace/*) AQ_CHECKOUT=$HOST_HOME/projects/${REPO_ROOT#/workspace/} ;;
-    /run/host/*)  AQ_CHECKOUT=${REPO_ROOT#/run/host} ;;
-esac
+# The host spelling of this checkout, from verify/lib.sh. Only the host side
+# can run the shim.
+AQ_CHECKOUT=$HOST_REPO_ROOT
 
 # --- the pin is configuration, not a constant in a script -------------------
 
@@ -540,6 +536,25 @@ fi
 check "K2 the environment $AQ_ENV is configured for the router" -- \
     test -f "$REPO_ROOT/config/devbox-router/environments.d/$AQ_ENV.env"
 
+# The options whose value is a host directory. They are configuration, like the
+# environment, so the installer and this module build one shim text from one
+# pair of manifest values and cannot disagree about it.
+AQ_MAPS=$(sed -n 's/^AGENTQUEUE_HOST_PATH_OPTIONS=//p' "$AQ_MANIFEST" |
+          head -1 | tr -d '"'"'"' \t\r')
+AQ_SHIM_ARGS=(agentqueue --env "$AQ_ENV")
+if [ -n "$AQ_MAPS" ]; then
+    while IFS= read -r aq_opt; do
+        [ -n "$aq_opt" ] && AQ_SHIM_ARGS+=(--map-path "$aq_opt")
+    done < <(printf '%s\n' "$AQ_MAPS" | tr ',' '\n')
+fi
+AQ_SHIM_ARGS+=(--print)
+
+case ,$AQ_MAPS, in
+    *,--repo,*) pass 'K2a the manifest maps --repo, the option that names a repository' ;;
+    *) fail 'K2a the manifest maps --repo, the option that names a repository' \
+            "AGENTQUEUE_HOST_PATH_OPTIONS is [$AQ_MAPS]" ;;
+esac
+
 # --- the shim is installed, and it is what the router generates today -------
 
 if on_host test -x "$AQ_SHIM"; then
@@ -550,8 +565,13 @@ else
 fi
 
 aq_shim_now=$(on_host cat "$AQ_SHIM" 2>/dev/null || true)
-aq_shim_want=$("$REPO_ROOT/bin/devbox" new-shim agentqueue --env "$AQ_ENV" --print 2>/dev/null || true)
-if [ -z "$aq_shim_now" ]; then
+aq_shim_want=$("$REPO_ROOT/bin/devbox" new-shim "${AQ_SHIM_ARGS[@]}" 2>/dev/null || true)
+if [ "$AQ_LIVE" != 1 ]; then
+    # The installed shim was generated from another checkout, so comparing it
+    # with this one answers about the wrong file. K5 below still reads the
+    # generated text, and the L checks exercise it.
+    skip 'K4 the installed shim is exactly what the router generates' "$AQ_STALE"
+elif [ -z "$aq_shim_now" ]; then
     fail 'K4 the installed shim is exactly what the router generates' \
         'the shim is missing or unreadable'
 elif [ "$aq_shim_now" = "$aq_shim_want" ]; then
@@ -561,14 +581,31 @@ else
         'it has drifted; re-run bootstrap/host.sh'
 fi
 
+# K5 and the checks below read the text the router generates from THIS
+# checkout, so they answer about the code under review on any machine.
+aq_shim_now=${aq_shim_want:-$aq_shim_now}
+
 # --- it holds no runtime and no credential ----------------------------------
 #
 # A host shim is a router entry point. The host has no gh, no Node toolchain
 # and no model credential, and this file must not be the thing that changes
 # that.
 
+aq_mapflags=''
+for aq_opt in "${AQ_SHIM_ARGS[@]}"; do
+    case $aq_opt in
+        --print|--env|"$AQ_ENV"|agentqueue|--map-path) continue ;;
+        *) aq_mapflags="$aq_mapflags --map-path $aq_opt" ;;
+    esac
+done
 check_contains 'K5 the shim delegates through the devbox router' \
-    "exec \"\$router\" exec $AQ_ENV --cwd \"\$PWD\" -- agentqueue \"\$@\"" "$aq_shim_now"
+    "exec \"\$router\" exec $AQ_ENV --cwd \"\$PWD\"$aq_mapflags -- agentqueue \"\$@\"" \
+    "$aq_shim_now"
+
+# The mapping is the router's, not the shim's. The shim names the option and
+# the router owns the translation, so the shim still holds no logic.
+check_contains 'K5a the shim asks the router to translate --repo' \
+    '--map-path --repo' "$aq_shim_now"
 check_not_contains 'K6 the shim contains no Python runtime' 'python' "$aq_shim_now"
 for aq_needle in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY \
                  OPENAI_API_KEY SSH_AUTH_SOCK secrets.env id_ed25519; do
@@ -633,6 +670,84 @@ else
 fi
 check_not_contains 'L12 the host path never crosses the boundary as an argument' \
     "argv[2]=$HOST_HOME" "$aq_out"
+
+# --- an explicit --repo carries a HOST path, and it must arrive translated ---
+#
+# The reported defect. The user types a host path, the tool reads it inside the
+# container, and only the working directory used to cross over translated. The
+# router now translates the value of the options the manifest names, so the
+# documented explicit override works from a host terminal without the user
+# knowing a single container path.
+#
+# These checks build their own shim from THIS checkout and route it through
+# THIS checkout's router, because a regression check must answer about the code
+# under review. The installed pair may be older - a worktree, or a machine that
+# bootstrap has not refreshed - and K4 reports that separately.
+
+aq_gen=$(host_sh 'mktemp 2>/dev/null' 2>/dev/null || true)
+aq_gen_ok=0
+case $aq_gen in
+    /*) if host_sh "'$AQ_CHECKOUT/bin/devbox' new-shim ${AQ_SHIM_ARGS[*]} > '$aq_gen' &&
+                    chmod 0755 -- '$aq_gen'" >/dev/null 2>&1; then aq_gen_ok=1; fi ;;
+esac
+
+if [ "$aq_gen_ok" = 1 ]; then
+    aq_gsh() {
+        host_sh "cd $1 && DEVBOX_BIN='$AQ_CHECKOUT/bin/devbox' DEVBOX_DRY_RUN=1 '$aq_gen' $2" 2>&1
+    }
+
+    # Under the workspace: ~/projects/<name> is /workspace/<name> inside.
+    aq_out=$(aq_gsh "~" "run --repo '$HOST_HOME/projects/a repo'")
+    check_contains 'L13 a host path under the workspace arrives as a workspace path' \
+        'argv[3]=/workspace/a repo' "$aq_out"
+    check_not_contains 'L14 the host spelling does not survive the crossing' \
+        "argv[3]=$HOST_HOME/projects" "$aq_out"
+
+    # Outside the workspace: every Distrobox mounts the host root at /run/host.
+    aq_outside=$(on_host realpath -m /var/tmp/a-repo 2>/dev/null || printf '/var/tmp/a-repo')
+    aq_out=$(aq_gsh "~" "run --repo '$aq_outside'")
+    check_contains 'L15 a host path outside the workspace arrives through /run/host' \
+        "argv[3]=/run/host$aq_outside" "$aq_out"
+
+    # The equals form is the same option, translated the same way.
+    aq_out=$(aq_gsh "~" "run --repo='$aq_outside'")
+    check_contains 'L16 the --repo=PATH form is translated too' \
+        "argv[2]=--repo=/run/host$aq_outside" "$aq_out"
+
+    # A relative value is NOT translated. It resolves against the working
+    # directory, and the working directory already crossed over translated, so
+    # translating it here would resolve it twice.
+    aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo .")
+    check_contains 'L17 a relative --repo still crosses over verbatim' \
+        'argv[3]=.' "$aq_out"
+
+    # Only the named option is translated. Another argument that happens to
+    # look like a path is not the router's business.
+    aq_out=$(aq_gsh "~" "run --label '$HOST_HOME/projects/x'")
+    check_contains 'L18 an option the manifest does not name is untouched' \
+        "argv[3]=$HOST_HOME/projects/x" "$aq_out"
+
+    # A quoted path keeps its spaces and its quotes through the translation.
+    aq_out=$(aq_gsh "~" "run --repo \"\$HOME/projects/a b\" --label \"c'd\"")
+    check_contains 'L19 a translated path keeps a space' 'argv[3]=/workspace/a b' "$aq_out"
+    check_contains 'L20 an argument after it still survives' "argv[5]=c'd" "$aq_out"
+
+    host_sh "rm -f -- '$aq_gen'" >/dev/null 2>&1 || true
+else
+    [ -n "$aq_gen" ] && host_sh "rm -f -- '$aq_gen'" >/dev/null 2>&1
+    for aq_name in \
+        'L13 a host path under the workspace arrives as a workspace path' \
+        'L14 the host spelling does not survive the crossing' \
+        'L15 a host path outside the workspace arrives through /run/host' \
+        'L16 the --repo=PATH form is translated too' \
+        'L17 a relative --repo still crosses over verbatim' \
+        'L18 an option the manifest does not name is untouched' \
+        'L19 a translated path keeps a space' \
+        'L20 an argument after it still survives'
+    do
+        skip "$aq_name" "could not generate a shim from $AQ_CHECKOUT on the host"
+    done
+fi
 
 # --- argv survives verbatim -------------------------------------------------
 
@@ -732,6 +847,15 @@ if on_host test -x "$AQ_SHIM" && [ "$AQ_LIVE" = 1 ]; then
             skip 'O9 no --repo works from a subdirectory too' 'no lib/agentqueue'
             skip 'O10 a subdirectory resolves to the top of the tree' 'see O9'
         fi
+
+        # The documented explicit override, with the ABSOLUTE host path the
+        # shell produces from "--repo ~/projects/dkkb". It must reach the same
+        # repository as "--repo ." does, from a directory that is not it.
+        aq_abs=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy --repo '$AQ_CHECKOUT'" 2>&1)
+        aq_rc=$?
+        check_eq 'O11 an absolute host path under the workspace works' '0' "$aq_rc"
+        check_eq 'O12 it resolves the same repository --repo . resolves' \
+            "$aq_out" "$aq_abs"
     else
         skip 'O5 --repo . works from a repository on the host' \
              "no host checkout with an origin remote at $AQ_CHECKOUT"
@@ -740,6 +864,39 @@ if on_host test -x "$AQ_SHIM" && [ "$AQ_LIVE" = 1 ]; then
         skip 'O8 it resolves the same repository --repo . resolves' 'see O5'
         skip 'O9 no --repo works from a subdirectory too' 'see O5'
         skip 'O10 a subdirectory resolves to the top of the tree' 'see O5'
+        skip 'O11 an absolute host path under the workspace works' 'see O5'
+        skip 'O12 it resolves the same repository --repo . resolves' 'see O5'
+    fi
+
+    # The other half of the mapping. A host path OUTSIDE the workspace has no
+    # /workspace spelling, so it crosses over through /run/host. Nothing on
+    # this machine is guaranteed to be a repository there, so this check makes
+    # a disposable one under a temporary directory and removes it again. It
+    # touches no configuration and no repository a human owns.
+    aq_tmp=$(host_sh 'mktemp -d 2>/dev/null' 2>/dev/null || true)
+    case $aq_tmp in
+        /*) aq_made=1 ;;
+        *)  aq_made=0 ;;
+    esac
+    if [ "$aq_made" = 1 ] && host_sh "
+        set -e
+        git init --quiet -b main '$aq_tmp/repo'
+        cd '$aq_tmp/repo'
+        git remote add origin git@github.com:example/outside.git
+        : > README.md
+        git add -A
+        git -c user.name=V -c user.email=v@example.invalid commit --quiet -m first
+    " >/dev/null 2>&1; then
+        aq_out=$(host_sh "cd ~ && '$AQ_SHIM' policy --repo '$aq_tmp/repo'" 2>&1); aq_rc=$?
+        check_eq 'O13 an absolute host path outside the workspace works' '0' "$aq_rc"
+        check_contains 'O14 it resolved the repository behind that host path' \
+            'example/outside' "$aq_out"
+        host_sh "rm -rf -- '$aq_tmp'" >/dev/null 2>&1 || true
+    else
+        [ "$aq_made" = 1 ] && host_sh "rm -rf -- '$aq_tmp'" >/dev/null 2>&1
+        skip 'O13 an absolute host path outside the workspace works' \
+             'could not make a disposable repository on the host'
+        skip 'O14 it resolved the repository behind that host path' 'see O13'
     fi
 else
     aq_why=$AQ_STALE
@@ -760,7 +917,11 @@ else
         'O7 no --repo works from a repository on the host' \
         'O8 it resolves the same repository --repo . resolves' \
         'O9 no --repo works from a subdirectory too' \
-        'O10 a subdirectory resolves to the top of the tree'
+        'O10 a subdirectory resolves to the top of the tree' \
+        'O11 an absolute host path under the workspace works' \
+        'O12 it resolves the same repository --repo . resolves' \
+        'O13 an absolute host path outside the workspace works' \
+        'O14 it resolved the repository behind that host path'
     do
         skip "$aq_name" "${aq_why:-no host shim}"
     done

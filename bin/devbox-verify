@@ -371,6 +371,46 @@ expect_contains 'O8 a relative path reaches the tool unchanged' $'argv[1]=--repo
 expect_contains 'O9 argv keeps a dot'    $'argv[2]=.' "$out"
 expect_contains 'O10 argv keeps a space' $'argv[3]=a b' "$out"
 
+# --map-path: a named option whose value is a host DIRECTORY.
+#
+# The working directory always crossed the boundary translated. An argument did
+# not, so a tool that takes a directory saw a host path that does not exist
+# inside the container. --map-path is the general fix, and it is opt-in: a shim
+# asks for it by naming the option, and the router does the translation it
+# already does for --cwd.
+
+mkshim mapped --env verify-alt --map-path --repo
+expect_contains 'O19 a mapped shim names the option in its route line' \
+    '--map-path --repo' "$(cat "$SHIMS/mapped")"
+expect_eq 'O20 a mapped shim is reproducible too' \
+    "$(dbx new-shim mapped --env verify-alt --map-path --repo --print 2>/dev/null)" \
+    "$(cat "$SHIMS/mapped")"
+
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim mapped --repo "$PROJECTS/a b" 2>&1)
+expect_contains 'O21 a host path under the workspace is translated' \
+    $'argv[2]=/workspace/a b' "$out"
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim mapped --repo /var/tmp/x 2>&1)
+expect_contains 'O22 a host path outside the workspace goes through /run/host' \
+    $'argv[2]=/run/host/var/tmp/x' "$out"
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim mapped --repo=/var/tmp/x 2>&1)
+expect_contains 'O23 the --opt=VALUE form is translated too' \
+    $'argv[1]=--repo=/run/host/var/tmp/x' "$out"
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim mapped --repo . 2>&1)
+expect_contains 'O24 a relative value is left alone' $'argv[2]=.' "$out"
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim mapped --other /var/tmp/x 2>&1)
+expect_contains 'O25 an option that was not named is left alone' \
+    $'argv[2]=/var/tmp/x' "$out"
+out=$(cd "$PROJECTS" && DEVBOX_DRY_RUN=1 runshim env --repo /var/tmp/x 2>&1)
+expect_contains 'O26 a shim without --map-path translates nothing' \
+    $'argv[2]=/var/tmp/x' "$out"
+
+# --map-path is meaningful for a pinned shim only, and it wants an option name.
+out=$(DEVBOX_SHIM_DIR=$SHIMS "$DEVBOX" new-shim unpinned --map-path --repo 2>&1); rc=$?
+expect_rc 'O27 --map-path without --env is refused' 2 "$rc" "$out"
+out=$(DEVBOX_SHIM_DIR=$SHIMS "$DEVBOX" new-shim bad --env verify-alt --map-path repo 2>&1)
+rc=$?
+expect_rc 'O28 --map-path wants a long option name' 2 "$rc" "$out"
+
 # The recursion guard: a host shim must never run inside a container.
 out=$(DEVBOX_ACTIVE_ENV=verify-alt runshim env 2>&1); rc=$?
 expect_rc 'O11 a pinned shim refuses inside an environment' 8 "$rc" "$out"

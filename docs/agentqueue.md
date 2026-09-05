@@ -413,7 +413,13 @@ worktree resolves to its own top rather than to the main one.
 
 ```bash
 agentqueue run --repo ~/projects/dkkb
+agentqueue run --repo /srv/checkouts/other
 ```
+
+You type a HOST path there, and the coordinator reads it inside the container.
+The router translates it, exactly as it translates the working directory, so
+neither form asks you to know a container path. `--map-path` in the generated
+shim is what asks for that; `manifests/agentqueue.env` names the options.
 
 The queue never guesses. A directory that is not inside a Git working tree is
 a usage error, exit 2, and it names the directory it refused:
@@ -727,12 +733,13 @@ agentqueue run
 file as the `claude` and `codex` shims. It holds no runtime, no state and no
 credential. `bootstrap/host.sh` generates it with
 
-    devbox new-shim agentqueue --env web-dev --print
+    devbox new-shim agentqueue --env web-dev --map-path --repo --print
 
-and the environment name comes from `AGENTQUEUE_ENVIRONMENT` in
-`manifests/agentqueue.env`. The whole shim is one line of routing:
+and both the environment name and the translated options come from
+`manifests/agentqueue.env`: `AGENTQUEUE_ENVIRONMENT` and
+`AGENTQUEUE_HOST_PATH_OPTIONS`. The whole shim is one line of routing:
 
-    exec "$router" exec web-dev --cwd "$PWD" -- agentqueue "$@"
+    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentqueue "$@"
 
 ### What the delegation preserves
 
@@ -740,7 +747,7 @@ and the environment name comes from `AGENTQUEUE_ENVIRONMENT` in
 | --- | --- |
 | the working directory | `--cwd "$PWD"`. The router maps the host path to the container path, so `~/projects/dkkb` becomes `/workspace/dkkb` |
 | the repository | the shim resolves none. The coordinator resolves it on the far side, from the **translated** directory, so standing in `~/projects/dkkb` reaches `/workspace/dkkb`. A shim that resolved it first would hand over a host path that does not exist inside the container |
-| `--repo PATH` | passed through unchanged, and resolved against the translated directory in the same way |
+| `--repo PATH` | an absolute value is a HOST path, so the router translates it the same way it translates the working directory: `~/projects/dkkb` becomes `/workspace/dkkb`, and a path outside the workspace becomes `/run/host/...`. A relative value crosses over unchanged, because it resolves against the working directory, which already crossed over translated |
 | the arguments | `"$@"` to the router, positional arguments to the container, `exec "$@"` inside it. Spaces, quotes and newlines survive |
 | the exit status | every step is an `exec`, so no process sits between the coordinator and your shell |
 | Ctrl-C | the interrupt reaches the coordinator, the shell sees 130, and nothing is left running inside the container |
@@ -764,7 +771,7 @@ enough:
 Inside the container the direct call keeps working, and it is the same command:
 
 ```bash
-devbox exec web-dev -- agentqueue plan --repo ~/projects/dkkb
+devbox exec web-dev --cwd ~/projects/dkkb -- agentqueue plan
 ```
 
 ### The exit codes a router adds

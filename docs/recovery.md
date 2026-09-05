@@ -168,7 +168,7 @@ The explicit form still works, and it is the one to reach for when the shim
 itself is what you doubt:
 
 ```bash
-devbox exec web-dev -- agentqueue doctor --repo ~/projects/dkkb
+devbox exec web-dev --cwd ~/projects/dkkb -- agentqueue doctor
 ```
 
 `plan` reads GitHub and changes nothing. It prints which issues are runnable

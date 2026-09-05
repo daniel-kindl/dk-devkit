@@ -152,6 +152,16 @@ else
 fi
 export HOST_HOME HOST_HOME_VIEW
 
+# HOST_REPO_ROOT is this checkout, spelled as the HOST spells it. Only the host
+# can run a host shim or the host-side router, and the host does not know the
+# /workspace spelling.
+HOST_REPO_ROOT=$REPO_ROOT
+case $REPO_ROOT in
+    /workspace/*) HOST_REPO_ROOT=$HOST_HOME/projects/${REPO_ROOT#/workspace/} ;;
+    /run/host/*)  HOST_REPO_ROOT=${REPO_ROOT#/run/host} ;;
+esac
+export HOST_REPO_ROOT
+
 # BOX_HOME is the isolated HOME of the web-dev container.
 BOX_HOME=${WORKSTATION_BOX_HOME:-$HOST_HOME/.local/share/distrobox-homes/$BOX_NAME}
 export BOX_HOME

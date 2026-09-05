@@ -80,6 +80,8 @@ workspace".
     devbox new-env rust-dev --box rust-dev --workspace ~/projects:/workspace
     devbox new-shim gemini           add a host shim for another agent CLI
     devbox new-shim aq --env web-dev add a host shim pinned to one environment
+    devbox new-shim aq --env web-dev --map-path --repo
+                                     ... and translate the value of --repo
     devbox new-shim aq --print       print the shim text instead of writing it
 
 Exit codes: 2 usage, 3 not a repository, 4 unresolved, 5 environment not
@@ -105,6 +107,17 @@ working directory still crosses the boundary, so a relative path such as
 `--repo .` keeps its meaning, and a command that resolves its repository from
 the working directory resolves it against the translated one. Only the
 destination is fixed.
+
+An ABSOLUTE path in an argument is a different case. The user types it on the
+host, the tool reads it inside the container, and argv used to cross over
+untouched. `--map-path` names the option that carries such a path:
+
+    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentqueue "$@"
+
+The router then translates that value the way it translates the working
+directory: under the workspace it becomes the workspace path, and anywhere else
+it becomes `/run/host/...`. A relative value is left alone, and an option the
+shim did not name is left alone. The option is repeatable and needs `--env`.
 
 Both kinds refuse to run inside a container and exit 8, and the router strips
 this directory from the container `PATH`, so a shim can never call itself.

@@ -11,17 +11,27 @@ if [ "$RUN_DEVBOX" != 1 ]; then
     return 0 2>/dev/null || exit 0
 fi
 
+# The suite and the router come from THIS checkout when the host can reach it,
+# so a branch is verified by its own code. On a bootstrapped machine the
+# installed files are that same checkout, so nothing changes there. The
+# installed pair is the fallback, and 50-routing.sh is what reports a machine
+# whose links have drifted.
 verify_bin=$HOST_HOME/.local/bin/devbox-verify
-if ! on_host test -x "$verify_bin"; then
+verify_env=''
+if on_host test -x "$HOST_REPO_ROOT/bin/devbox-verify" &&
+   on_host test -x "$HOST_REPO_ROOT/bin/devbox"; then
+    verify_bin=$HOST_REPO_ROOT/bin/devbox-verify
+    verify_env="DEVBOX_BIN='$HOST_REPO_ROOT/bin/devbox' "
+elif ! on_host test -x "$verify_bin"; then
     fail 'devbox-verify is installed on the host' 'run bootstrap/host.sh'
     return 0 2>/dev/null || exit 0
 fi
 
 flag=''
 [ "$DEVBOX_FULL" = 1 ] || flag='--fast'
-printf '  %srunning %s %s%s\n' "$DIM" "$verify_bin" "$flag" "$RESET"
+printf '  %srunning %s%s %s%s\n' "$DIM" "$verify_env" "$verify_bin" "$flag" "$RESET"
 
-out=$(host_sh "'$verify_bin' $flag" 2>&1)
+out=$(host_sh "$verify_env'$verify_bin' $flag" 2>&1)
 rc=$?
 printf '%s\n' "$out" | sed 's/^/  | /'
 
