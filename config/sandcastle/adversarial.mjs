@@ -40,6 +40,10 @@ const git = (repo, args) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 const shq = (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 
+/** Sandcastle sets a git identity in the sandbox as part of run(). This file
+ *  never calls run(), so it carries its own. */
+const GIT_IDENTITY = "-c user.name=agentbox -c user.email=agentbox@localhost";
+
 const configFile = process.env.AGENTBOX_CONFIG_FILE;
 if (!configFile) {
   process.stderr.write("[adversarial] error: AGENTBOX_CONFIG_FILE is not set\n");
@@ -110,8 +114,8 @@ try {
   // writes the value a ref already holds would prove nothing.
   log("making one legitimate commit inside the sandbox");
   const commit = await sandbox.exec(
-    "printf 'adversarial\\n' > AGENTBOX_ADVERSARIAL.txt && " +
-      "git add AGENTBOX_ADVERSARIAL.txt && git commit -q -m 'agentbox adversarial selftest' && " +
+    "printf 'adversarial\\n' > AGENTBOX_ADVERSARIAL.txt && git add AGENTBOX_ADVERSARIAL.txt && " +
+      `git ${GIT_IDENTITY} commit -q -m 'agentbox adversarial selftest' && ` +
       "git rev-parse HEAD",
   );
   record("the sandbox produced a legitimate commit", commit.exitCode === 0,

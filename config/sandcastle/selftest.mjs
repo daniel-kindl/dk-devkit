@@ -26,6 +26,10 @@ const git = (repo, args) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 const shq = (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 
+/** Sandcastle sets a git identity in the sandbox as part of run(). This file
+ *  never calls run(), so it carries its own. */
+const GIT_IDENTITY = "-c user.name=agentbox -c user.email=agentbox@localhost";
+
 const configFile = process.env.AGENTBOX_CONFIG_FILE;
 if (!configFile) {
   process.stderr.write("[selftest] error: AGENTBOX_CONFIG_FILE is not set\n");
@@ -73,6 +77,11 @@ const PROBES = [
    "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && echo clean || echo MISSING"],
   ["the git directory belongs to the disposable clone",
    `case "$(git rev-parse --path-format=absolute --git-common-dir)" in ${shq(cfg.repo)}/*) echo clean ;; *) echo LEAK ;; esac`],
+  // A sandbox image built before the credential shim existed would pass every
+  // probe above and still take its credential from the environment. This is
+  // what says the image is the one this checkout describes.
+  ["the credential shim is in front of the agent CLIs",
+   'test "$(command -v claude)" = /opt/agents/bin/claude && test "$(command -v codex)" = /opt/agents/bin/codex && echo clean || echo STALE_IMAGE'],
 ];
 
 if ((cfg.mounts ?? []).some((m) => m.sandboxPath === "/opt/agents/skills")) {
@@ -131,10 +140,13 @@ try {
   // One ordinary commit, so the host side has a real result to validate and
   // import. Everything up to here proved what the sandbox cannot reach; this
   // proves the path that a real run takes.
+  // The identity is explicit. Sandcastle configures one inside the sandbox as
+  // part of run(), which drives an agent; createSandbox() and exec() do not,
+  // so a bare "git commit" here would fail with "unable to auto-detect email".
   log("making one commit inside the sandbox");
   const commit = await sandbox.exec(
     "printf 'selftest\\n' > AGENTBOX_SELFTEST.txt && git add AGENTBOX_SELFTEST.txt && " +
-      "git commit -q -m 'agentbox selftest' && git rev-parse HEAD",
+      `git ${GIT_IDENTITY} commit -q -m 'agentbox selftest' && git rev-parse HEAD`,
   );
   record("the sandbox produced a commit", commit.exitCode === 0,
     `${commit.stdout}${commit.stderr}`.trim().split("\n").pop() ?? "");

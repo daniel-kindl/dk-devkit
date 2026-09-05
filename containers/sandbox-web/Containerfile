@@ -74,9 +74,11 @@ RUN set -eux; \
 # first on PATH from here on, so the shim runs before the real CLI does, reads
 # the mounted credential file, and execs the real CLI with the value exported
 # in that process alone.
-COPY bin/agent-cli-shim /opt/agents/bin/agent-cli-shim
+# COPY writes as root whatever the current USER is, so the ownership has to be
+# stated here: a later RUN as "agent" cannot chmod a root-owned file.
+COPY --chown=agent:agent --chmod=0755 bin/agent-cli-shim /opt/agents/bin/agent-cli-shim
 RUN set -eux; \
-    chmod 0755 /opt/agents/bin/agent-cli-shim; \
+    test -x /opt/agents/bin/agent-cli-shim; \
     ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/claude; \
     ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/codex
 ENV PATH=/opt/agents/bin:/home/agent/.local/bin:$PATH

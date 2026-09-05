@@ -157,6 +157,22 @@ check_contains 'D6 the orchestrator probes every forbidden path' \
     'is absent from the sandbox' "$ORCH"
 check_contains 'D7 the orchestrator checks the git directory is the clone' \
     'the git directory belongs to the disposable clone' "$ORCH"
+# A sandbox image built before the credential shim existed would pass every
+# other probe and still take its credential from the environment.
+check_contains 'D8 the orchestrator refuses a stale sandbox image' \
+    'STALE_IMAGE' "$ORCH"
+check_contains 'D9 the selftest refuses a stale sandbox image' \
+    'STALE_IMAGE' "$SELF"
+# COPY writes as root whatever the current USER is, so the shim needs an
+# explicit owner: a later RUN as "agent" cannot chmod a root-owned file.
+check_contains 'D10 the credential shim is copied with an explicit owner' \
+    'COPY --chown=agent:agent' \
+    "$(code_of "$REPO_ROOT/containers/sandbox-web/Containerfile")"
+# createSandbox() and exec() do no in-sandbox git identity setup; run() does.
+check_contains 'D11 the selftest commit carries its own git identity' \
+    'user.email=agentbox@localhost' "$SELF"
+check_contains 'D12 the adversarial commit carries its own git identity' \
+    'user.email=agentbox@localhost' "$ADV"
 
 # --- the agent cannot reach main --------------------------------------------
 
@@ -315,6 +331,10 @@ check_contains 'H11 a --check with a newline is rejected' \
 out=$("$AB" run --repo "$REPO_ROOT" --branch agent/verify-timeout \
           --prompt-file "$SC_DIR/review-prompt.md" --timeout 5 --dry-run 2>&1 || true)
 check_contains 'H12 a too-short timeout is rejected' 'at least 60 seconds' "$out"
+
+out=$("$AB" selftest --timeout 5 2>&1 || true)
+check_contains 'H13 the selftest also takes a wall-clock limit' \
+    'at least 60 seconds' "$out"
 
 # --- a dry run works on a machine that is not set up yet --------------------
 #

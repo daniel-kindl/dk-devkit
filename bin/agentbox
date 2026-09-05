@@ -43,6 +43,7 @@
 #                            is created when this is absent
 #   --adversarial            the sandbox attacks its git directory on purpose,
 #                            and the run proves the real repository did not move
+#   --timeout SECONDS        wall-clock limit, default 600
 #   --image IMAGE            overrides the sandbox image
 #   --keep-run-dir           keep the per-run scratch directory
 #
@@ -1507,17 +1508,22 @@ make_throwaway_repo() {
 }
 
 cmd_selftest() {
-    local repo='' image='' adversarial=0 script=selftest.mjs
+    local repo='' image='' adversarial=0 script=selftest.mjs timeout=600
     while [ $# -gt 0 ]; do
         case $1 in
             --repo) repo=${2:?--repo needs a path}; shift 2 ;;
             --image) image=${2:?}; shift 2 ;;
             --adversarial) adversarial=1; script=adversarial.mjs; shift ;;
+            --timeout) timeout=${2:?--timeout needs seconds}; shift 2 ;;
             --keep-run-dir) KEEP_RUN_DIR=1; shift ;;
             *) fail 2 "selftest: unknown option: $1" ;;
         esac
     done
     image=${image:-$SANDBOX_REF}
+    case $timeout in
+        ''|*[!0-9]*) fail 2 "--timeout must be a whole number of seconds: $timeout" ;;
+    esac
+    [ "$timeout" -ge 60 ] || fail 2 '--timeout must be at least 60 seconds'
 
     require_podman
     podman_ image exists "$RUNNER_REF" 2>/dev/null ||
@@ -1541,7 +1547,7 @@ cmd_selftest() {
 
     BRANCH=agent/selftest-$run_id
     require_agent_branch "$BRANCH"
-    take_lock "$REAL_REPO_HOST" "$BRANCH" 1800
+    take_lock "$REAL_REPO_HOST" "$BRANCH" "$timeout"
 
     local base_sha
     base_sha=$(git -C "$REAL_REPO_VIEW" rev-parse --verify HEAD^{commit})
@@ -1600,10 +1606,13 @@ print(json.dumps({
 }))' > "$RUN_DIR_VIEW/staging/config.json"
 
     local rc=0
-    run_in_runner "$script" "$RUN_DIR_HOST/staging/config.json" 1800 || rc=$?
+    run_in_runner "$script" "$RUN_DIR_HOST/staging/config.json" "$timeout" || rc=$?
     printf '\n'
     if [ "$rc" = 0 ]; then
         self_pass 'the sandbox lifecycle completed'
+    elif [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+        self_fail 'the sandbox lifecycle completed' \
+            "it passed the ${timeout}s limit; raise it with --timeout"
     else
         self_fail 'the sandbox lifecycle completed' "exit $rc"
     fi

@@ -308,6 +308,16 @@ const assertIsolation = async (sandbox) => {
         `case "$(git rev-parse --path-format=absolute --git-common-dir)" in ` +
         `${shq(cfg.repo)}/*) echo clean ;; *) echo LEAK ;; esac`,
     },
+    {
+      // A sandbox image built before the credential shim existed would pass
+      // every probe above and still take its credential from the environment.
+      // This is what says the image is the one this checkout describes.
+      name: "the credential shim is in front of the agent CLIs",
+      cmd:
+        'test "$(command -v claude)" = /opt/agents/bin/claude && ' +
+        'test "$(command -v codex)" = /opt/agents/bin/codex ' +
+        "&& echo clean || echo STALE_IMAGE",
+    },
   ];
 
   // The whole point of the redesign: none of these paths exists in here.
