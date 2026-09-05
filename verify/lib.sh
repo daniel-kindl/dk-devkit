@@ -63,6 +63,16 @@ check_contains() {
     esac
 }
 
+# check_not_contains <name> <needle> <haystack>
+check_not_contains() {
+    local name=$1 needle=$2 hay=$3
+    case $hay in
+        *"$needle"*) fail "$name" "expected NOT to contain: [$needle]" \
+                          "actual: ${hay//$'\n'/ | }" ;;
+        *) pass "$name" ;;
+    esac
+}
+
 # check_link <name> <link> <expected target>
 #
 # The comparison uses "-ef" (same device and inode), not string equality: the
