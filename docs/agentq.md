@@ -1,4 +1,4 @@
-# The GitHub backlog coordinator (agentqueue)
+# The GitHub backlog coordinator (agentq)
 
 ## What this adds
 
@@ -7,41 +7,41 @@ validated `agent/*` branch. Everything after that was manual: write a prompt
 file, start a run, push the branch, open a pull request, wait for the checks,
 merge, then choose the next issue.
 
-`agentqueue` is that missing half. One command runs a backlog:
+`agentq` is that missing half. One command runs a backlog:
 
 ```bash
 cd ~/projects/dkkb
-agentqueue run
+agentq run
 ```
 
 The command runs on the host. The coordinator runs inside `web-dev`. See
 [Where it runs, and where you type it](#where-it-runs-and-where-you-type-it).
 
     agentbox     one issue,  no GitHub authority,  stops at a local branch
-    agentqueue   the queue,  all GitHub authority, pushes, merges, rescans
+    agentq   the queue,  all GitHub authority, pushes, merges, rescans
 
 ## The boundary, again
 
 This is the section that decides every other design choice. The workstation
 already keeps unattended model output away from anything that authenticates.
-`agentqueue` adds GitHub authority to the picture, so the boundary has to be
+`agentq` adds GitHub authority to the picture, so the boundary has to be
 stated once more, with the new part in it.
 
 | Component | Trust | Holds |
 | --- | --- | --- |
-| `agentqueue` | trusted, runs on this side | `gh` authentication, the host ssh-agent, the right to push, open a pull request and merge |
+| `agentq` | trusted, runs on this side | `gh` authentication, the host ssh-agent, the right to push, open a pull request and merge |
 | `agentbox` | trusted host-side driver | the disposable clone, the import validation, no GitHub credential |
 | the Sandcastle sandbox | **untrusted** | a model credential, a disposable clone, a network. Nothing else |
 
 A sandbox receives no GitHub token, no SSH key, no ssh-agent socket and no
 Podman socket. It cannot push, cannot open a pull request and cannot merge,
-because it holds nothing that authenticates to GitHub. `agentqueue` adds
+because it holds nothing that authenticates to GitHub. `agentq` adds
 nothing to a sandbox: it hands `agentbox` a repository path, a branch name, a
 prompt **file** and a set of limits, and `agentbox` decides what reaches the
 container.
 
 `verify.sh` module 8b proves the separation statically. It fails if
-`agentqueue` ever names `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`, the
+`agentq` ever names `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`, the
 agentbox credential file, or an environment for the agentbox process. It also
 fails if the prompt builder ever names a model credential.
 
@@ -339,7 +339,7 @@ deliberately.
 
 ### A policy for an autonomous run
 
-`agentqueue init` writes a starting point into the repository you stand in. A
+`agentq init` writes a starting point into the repository you stand in. A
 repository that should run without waiting for a human review needs this:
 
 ```json
@@ -361,6 +361,28 @@ repository that should run without waiting for a human review needs this:
 `mergeWithoutReview: true` is the line that says "the deterministic checks and
 the GitHub checks are enough for this repository". It is a choice, and it
 belongs in a tracked file where a human can see it.
+
+## Durable identifiers across the rename
+
+The rename in 0.3.0 was a clean break for the command and the product name. It
+was deliberately not a rename of the identifiers that durable state is written
+under, because renaming those would have made existing enrolment, evidence and
+recovery unreadable for no gain:
+
+| Identifier | What would break if it moved |
+| --- | --- |
+| `.agentqueue.json` | every enrolled repository would need a policy migration |
+| `AGENTQUEUE_*` | machine-local configuration would stop being read |
+| `~/.local/share/agentqueue` | the evidence of past runs would be orphaned |
+| `~/.config/agentqueue` | machine-local policy for a repository that cannot carry a tracked file would be lost |
+| `lib/agentqueue`, `config/agentqueue` | an internal path, with no user-facing meaning |
+| `<!-- agentqueue:claim v1 -->`, `<!-- agentqueue:release v1 -->` | a live claim would be invisible, and a stale one unrecoverable |
+
+The markers are the sharpest case. They are a protocol, not prose: a run that
+was interrupted before the rename must still be recognised as stale by a run
+that happens after it. See [Claiming](#claiming).
+
+Everything a human reads says `agentq`.
 
 ## Prompt construction
 
@@ -389,12 +411,16 @@ The prompt names no credential and no credential path. A unit test asserts that.
 Run them from a host terminal.
 
 ```bash
-agentqueue run    [options]   run the eligible issues
-agentqueue plan   [options]   the plan, an alias of run --dry-run
-agentqueue doctor [options]   what is ready, what is missing
-agentqueue policy [--json]    the resolved policy and its sources
-agentqueue init   [--local]   write a policy file to start from
+agentq run    [options]   run the eligible issues
+agentq plan   [options]   the plan, an alias of run --dry-run
+agentq doctor [options]   what is ready, what is missing
+agentq policy [--json]    the resolved policy and its sources
+agentq init   [--local]   write a policy file to start from
 ```
+
+The command was called `agentqueue` until version 0.3.0. The old name is a
+clean break, not an alias: `bootstrap/host.sh` removes the obsolete entry
+point, and nothing falls back to it.
 
 ### Which repository
 
@@ -403,7 +429,7 @@ stand in. The normal case says nothing at all:
 
 ```bash
 cd ~/projects/dkkb
-agentqueue run
+agentq run
 ```
 
 A subdirectory resolves to the top of the same working tree, and a linked
@@ -412,10 +438,10 @@ worktree resolves to its own top rather than to the main one.
 `--repo PATH` names another repository, for a run started from somewhere else:
 
 ```bash
-agentqueue run --repo ~/projects/dkkb
-agentqueue run --repo=~/projects/dkkb
-agentqueue run --repo /srv/checkouts/other
-agentqueue run --repo ../other
+agentq run --repo ~/projects/dkkb
+agentq run --repo=~/projects/dkkb
+agentq run --repo /srv/checkouts/other
+agentq run --repo ../other
 ```
 
 You type a HOST path there, and the coordinator reads it inside the container.
@@ -431,8 +457,8 @@ The queue never guesses. A directory that is not inside a Git working tree is
 a usage error, exit 2, and it names the directory it refused:
 
 ```text
-agentqueue: not a Git working tree: /workspace
-  run agentqueue inside a repository, or name one with --repo PATH
+agentq: not a Git working tree: /workspace
+  run agentq inside a repository, or name one with --repo PATH
 ```
 
 Options for `run`:
@@ -456,7 +482,7 @@ Options for `run`:
 
 ### The dry run
 
-`agentqueue plan` reads GitHub and changes nothing. It prints one line per
+`agentq plan` reads GitHub and changes nothing. It prints one line per
 issue and the order the scheduler would use:
 
 ```
@@ -481,7 +507,7 @@ therefore a **compact stage view**: one line per stage of one issue, and
 nothing else.
 
 ```text
-agentqueue 0.2.0
+agentq 0.3.0
 daniel-kindl/dkkb · 2 runnable issues · sequential
 
 [1/2] #86 Implement entry-selection module
@@ -507,7 +533,7 @@ becomes a line with `✓`, and the next stage takes its place:
 The run ends with one line per issue and the counts:
 
 ```text
-agentqueue complete
+agentq complete
 
   ✓ #86 → PR #90 merged
   ✓ #87 → PR #91 merged
@@ -640,7 +666,7 @@ queue:
   ⚠ SECURITY         the branch diff matches a credential pattern; nothing was pushed
     a security or integrity failure, not a failing test
 
-agentqueue stopped
+agentq stopped
 
   ⚠ THE QUEUE STOPPED: #86: the branch diff matches a credential pattern ...
   This is a security or integrity failure, not a failing test. Read the run
@@ -652,11 +678,11 @@ The exit code is 4, as it always was.
 ### The four levels, and JSON
 
 ```bash
-agentqueue run             # compact stage output, the default
-agentqueue run --verbose   # the stages and the coordinator's notes
-agentqueue run --debug     # everything, raw agentbox stream included
-agentqueue run --quiet     # failures and the final summary only
-agentqueue run --json      # one JSON object per event
+agentq run             # compact stage output, the default
+agentq run --verbose   # the stages and the coordinator's notes
+agentq run --debug     # everything, raw agentbox stream included
+agentq run --quiet     # failures and the final summary only
+agentq run --json      # one JSON object per event
 ```
 
 | Level | What reaches the terminal |
@@ -731,21 +757,21 @@ You type the command **on the host**, in a normal terminal:
 
 ```bash
 cd ~/projects/dkkb
-agentqueue plan
-agentqueue run
+agentq plan
+agentq run
 ```
 
-`~/.local/bin/agentqueue` on the host is a devbox router shim, the same kind of
+`~/.local/bin/agentq` on the host is a devbox router shim, the same kind of
 file as the `claude` and `codex` shims. It holds no runtime, no state and no
 credential. `bootstrap/host.sh` generates it with
 
-    devbox new-shim agentqueue --env web-dev --map-path --repo --print
+    devbox new-shim agentq --env web-dev --map-path --repo --print
 
 and both the environment name and the translated options come from
 `manifests/agentqueue.env`: `AGENTQUEUE_ENVIRONMENT` and
 `AGENTQUEUE_HOST_PATH_OPTIONS`. The whole shim is one line of routing:
 
-    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentqueue "$@"
+    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentq "$@"
 
 ### What the delegation preserves
 
@@ -772,12 +798,12 @@ enough:
 - the shim itself tests `/run/.containerenv`, `/.dockerenv` and
   `$DEVBOX_ACTIVE_ENV`
 - the router strips the host `~/.local/bin` from the container `PATH`, so
-  `agentqueue` inside `web-dev` is the real program, not the shim
+  `agentq` inside `web-dev` is the real program, not the shim
 
 Inside the container the direct call keeps working, and it is the same command:
 
 ```bash
-devbox exec web-dev --cwd ~/projects/dkkb -- agentqueue plan
+devbox exec web-dev --cwd ~/projects/dkkb -- agentq plan
 ```
 
 ### The exit codes a router adds
@@ -791,11 +817,11 @@ below, except for the shared meaning of 2 (a usage error):
 | 5 | the environment is not configured on this machine |
 | 6 | the Distrobox container is missing |
 | 8 | the shim was started inside a container |
-| 127 | `agentqueue` is not installed inside the environment; run `bootstrap/web-dev.sh` |
+| 127 | `agentq` is not installed inside the environment; run `bootstrap/web-dev.sh` |
 
 ### The runtime
 
-`agentqueue` is written in Python with the standard library only, so it needs
+`agentq` is written in Python with the standard library only, so it needs
 nothing that the base system does not already provide. It calls
 `<checkout>/bin/agentbox` directly, so the two halves can never be different
 versions.
@@ -846,7 +872,7 @@ lock, and the tests force a real overlap to prove the blocks arrive whole.
 - A merge queue, a required approval or a `CODEOWNERS` rule will refuse the
   merge call. The queue reports that and asks for a human. It does not try to
   work around it.
-- Nothing schedules a run. `agentqueue run` runs when a human starts it.
+- Nothing schedules a run. `agentq run` runs when a human starts it.
 - **`kill -TERM` against the host process is not a clean stop.** Ctrl-C in the
   terminal is: `bin/devbox-verify` checks that the coordinator ends and that
   nothing survives inside the container. A `SIGTERM` sent to the host-side

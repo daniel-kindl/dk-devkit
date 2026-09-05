@@ -40,7 +40,7 @@ def render_summary(report, policy) -> List[str]:
 
     lines = [
         "",
-        "== agentqueue summary ==",
+        "== agentq summary ==",
         f"  issues completed          {report.count(Outcome.SUCCESS)}",
         f"  pull requests merged      {report.merged}",
         f"  issues blocked            {len(blocked)}",

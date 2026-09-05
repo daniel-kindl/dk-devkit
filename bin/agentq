@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""agentq - the trusted GitHub backlog coordinator.
+
+    agentq run                       # the current repository
+    agentq run --repo ~/projects/dkkb
+
+It selects runnable issues, drives bin/agentbox against disposable clones,
+pushes validated branches, opens pull requests, waits for checks, and merges
+only when policy permits. Then it looks again because a merge can unblock the
+next issue.
+
+The sandbox that runs model output holds no GitHub credential, no SSH key and
+no Podman socket. This program holds the trusted coordinator authority and
+hands none of it to a sandbox.
+"""
+
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+_ROOT = os.path.dirname(_HERE)
+sys.path.insert(0, os.path.join(_ROOT, "lib"))
+
+# The Python package name is a deliberately preserved internal identifier.
+from agentqueue.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main(install_root=_ROOT))

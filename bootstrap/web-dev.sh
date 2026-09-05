@@ -12,7 +12,7 @@
 #   * wires the shared agent configuration into ~/.agents, ~/.claude and ~/.codex
 #   * installs the Orca bridge wrappers and sync-agent-skills
 #   * installs the third-party skills in manifests/skills.tsv
-#   * installs the agentqueue backlog coordinator runtime, which needs gh
+#   * installs the agentq backlog coordinator runtime, which needs gh
 #   * applies the shared status line specification
 #
 # What it never does:
@@ -23,8 +23,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
-# shellcheck source=lib/agentqueue.sh
-. "$REPO_ROOT/bootstrap/lib/agentqueue.sh"
+# shellcheck source=lib/agentq.sh
+. "$REPO_ROOT/bootstrap/lib/agentq.sh"
 
 SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
@@ -85,9 +85,6 @@ else
 fi
 
 section 'Shell integration'
-# The stock Fedora ~/.bashrc already sources ~/.bashrc.d/*. Only add the
-# fragment when nvm is not configured yet, so an existing inline block in
-# ~/.bashrc is preserved and nvm is never loaded twice.
 if grep -q 'NVM_DIR' "$HOME/.bashrc" 2>/dev/null; then
     ok '~/.bashrc already loads nvm (left unchanged)'
 else
@@ -100,7 +97,6 @@ section "Node $NODE_VERSION, Corepack $COREPACK_VERSION, pnpm $PNPM_VERSION"
 if [ "$DRY_RUN" = 1 ]; then
     info "would install Node $NODE_VERSION, corepack@$COREPACK_VERSION and pnpm@$PNPM_VERSION"
 else
-    # One login-style subshell: nvm is a shell function, not an executable.
     toolchain_report=$(
         set -euo pipefail
         export NVM_DIR="$NVM_DIR"
@@ -171,12 +167,11 @@ link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca-ide"
 link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca"
 
 # --------------------------------------------- the GitHub backlog coordinator --
-section 'GitHub backlog coordinator (agentqueue)'
+section 'GitHub backlog coordinator (agentq)'
 # The runtime lives here and not on the host, because it needs gh and the
 # forwarded ssh-agent, and both are reachable from inside this container.
-# bootstrap/host.sh installs a shim of the same name on the host, which
-# delegates here through the devbox router.
-install_agentqueue "$REPO_ROOT" "$LINK_ROOT"
+# bootstrap/host.sh installs a shim of the same name on the host.
+install_agentq "$REPO_ROOT" "$LINK_ROOT"
 
 # ------------------------------------------------------- third-party skills --
 section 'Third-party skills'

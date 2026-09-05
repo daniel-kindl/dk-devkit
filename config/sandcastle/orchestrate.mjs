@@ -778,7 +778,7 @@ summary.checksPassed =
   allChecks.length === 0 ? null : allChecks.every((c) => c.exitCode === 0);
 const failedChecks = allChecks.filter((c) => c.exitCode !== 0);
 
-// The consumer of this summary is bin/agentqueue, and it needs exactly two
+// The consumer of this summary is bin/agentq, and it needs exactly two
 // things: whether the checks pass now, and what to put in a repair prompt if
 // they do not. Both are published here, so the reader never has to guess
 // which of the per-phase arrays is the current one.

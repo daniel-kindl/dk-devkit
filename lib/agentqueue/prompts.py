@@ -273,7 +273,7 @@ def pull_request_body(
 ## What this is
 
 An unattended implementation of issue #{issue.number}, produced by `agentbox`
-and delivered by `agentqueue`.
+and delivered by `agentq`.
 
 The agent worked in a disposable clone inside a sandbox. It held no GitHub
 credential, no SSH key and no Podman socket. It could not push this branch and
@@ -290,16 +290,16 @@ The GitHub checks of this pull request are the gate that decides the merge.
 
 ## Provenance
 
-- agentqueue run `{run_id}`
+- agentq run `{run_id}`
 - base commit `{base_commit[:12]}`
 - every commit is authored by the neutral sandbox identity, not by a person
 
-See `docs/agentqueue.md` in the workstation repository for the pipeline.
+See `docs/agentq.md` in the workstation repository for the pipeline.
 """
 
 
 def needs_human_comment(run_id: str, reason: str, detail: str) -> str:
-    return f"""**agentqueue** stopped work on this issue and asks for a human.
+    return f"""**agentq** stopped work on this issue and asks for a human.
 
 **Reason:** {reason}
 
@@ -308,5 +308,5 @@ def needs_human_comment(run_id: str, reason: str, detail: str) -> str:
 The queue continues with other issues. Remove the label this comment added
 when the issue is ready for another unattended attempt.
 
-_agentqueue run `{run_id}`_
+_agentq run `{run_id}`_
 """

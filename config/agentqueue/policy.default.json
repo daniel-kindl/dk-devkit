@@ -1,6 +1,6 @@
 {
   "$comment": [
-    "Built-in queue policy. bin/agentqueue loads this file first, then overlays",
+    "Built-in queue policy. bin/agentq loads this file first, then overlays",
     "the repository policy on top of it. A repository policy therefore only has",
     "to state what it changes.",
     "",
@@ -10,7 +10,7 @@
     "cannot carry the file yet, ~/.config/agentqueue/repos/<owner>--<name>.json",
     "holds the same document as machine state.",
     "",
-    "See docs/agentqueue.md for the full reference."
+    "See docs/agentq.md for the full reference."
   ],
 
   "version": 1,

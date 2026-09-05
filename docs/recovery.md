@@ -65,8 +65,9 @@ This step:
 - installs the Flatpak applications in `manifests/flatpaks.txt`
 - links `devbox`, `devbox-verify`, `devbox-run` and `web-dev-run` into `~/.local/bin`
 - generates the `claude` and `codex` shims with `devbox new-shim`
-- generates the `agentqueue` shim, pinned to the environment that
-  `manifests/agentqueue.env` names
+- generates the `agentq` shim, pinned to the environment that the internal
+  `manifests/agentqueue.env` manifest names
+- removes the obsolete installed `agentqueue` entry point
 - links the router configuration into `~/.config/devbox-router`
 - seeds an empty `repos.tsv`, and never overwrites an existing one
 - creates the `web-dev` container from `distrobox/web-dev.ini`
@@ -88,6 +89,7 @@ This step:
 - wires `~/.agents`, `~/.claude` and `~/.codex` to the shared policy and skills
 - installs the Orca bridge wrappers and `sync-agent-skills`
 - installs the 43 skills in `manifests/skills.tsv`, then runs `sync-agent-skills`
+- installs the real `agentq` coordinator runtime
 - applies the shared status line to both clients
 
 ## 6. MANUAL: authenticate GitHub
@@ -150,35 +152,36 @@ See `docs/sandcastle.md`.
 
 ## 8b. Prepare the backlog coordinator, if you want an unattended run
 
-`bootstrap/web-dev.sh` installed the coordinator inside the container, and
-`bootstrap/host.sh` installed the `agentqueue` command on the host. The
-coordinator lives in the container because it needs `gh` and the forwarded
-ssh-agent; the host command is a router shim that delegates to it.
+`bootstrap/web-dev.sh` installs the coordinator inside the container, and
+`bootstrap/host.sh` installs the `agentq` command on the host. The coordinator
+lives in the container because it needs `gh` and the forwarded ssh-agent; the
+host command is a router shim that delegates to it.
 
 It needs no credential of its own. It uses the `gh` sign-in from step 6 and the
 SSH key from step 2, and it never writes either to disk.
 
 ```bash
 cd ~/projects/dkkb
-agentqueue doctor
-agentqueue plan
+agentq doctor
+agentq plan
 ```
 
 The explicit form still works, and it is the one to reach for when the shim
 itself is what you doubt:
 
 ```bash
-devbox exec web-dev --cwd ~/projects/dkkb -- agentqueue doctor
+devbox exec web-dev --cwd ~/projects/dkkb -- agentq doctor
 ```
 
 `plan` reads GitHub and changes nothing. It prints which issues are runnable
 and which are blocked, and it ends with the count of attempted mutations, which
 must be zero.
 
-A repository opts in to an automatic merge in its own tracked
-`.agentqueue.json`. `agentqueue init` writes a starting point into the
-repository you stand in.
-Read `docs/agentqueue.md` before turning `autoMerge` on.
+A repository opts in to an automatic merge in its existing tracked
+`.agentqueue.json` policy. `agentq init` writes a starting point into the
+repository you stand in. The policy filename is retained as a durable format
+identifier; the supported command is `agentq`.
+Read `docs/agentq.md` before turning `autoMerge` on.
 
 ## 9. MANUAL: install and register Orca
 
@@ -228,11 +231,11 @@ run them again.
 | A client rewrote its own status line | `~/.agents/statusline/install.sh` |
 | Routing resolves the wrong environment | `devbox doctor` |
 | An unattended agent run fails to start | `agentbox doctor` |
-| `agentqueue: command not found` on the host | run `bootstrap/host.sh`; the shim lives in `~/.local/bin` |
-| `agentqueue` exits 127 | the runtime is missing in the container; run `bootstrap/web-dev.sh` |
-| A backlog run will not start | `agentqueue doctor` |
-| The queue merged nothing, and every issue looks blocked | `agentqueue plan` |
-| An issue is stuck with `agent-in-progress` | the claim goes stale on its own; `agentqueue plan` reports it |
+| `agentq: command not found` on the host | run `bootstrap/host.sh`; the shim lives in `~/.local/bin` |
+| `agentq` exits 127 | the runtime is missing in the container; run `bootstrap/web-dev.sh` |
+| A backlog run will not start | `agentq doctor` |
+| The queue merged nothing, and every issue looks blocked | `agentq plan` |
+| An issue is stuck with `agent-in-progress` | the claim goes stale on its own; `agentq plan` reports it |
 | A sandbox container, lock or run directory was left behind | `agentbox clean`, or `agentbox clean --all` |
 | The agent images are stale | `agentbox build --force` |
 | The container is broken beyond repair | see below |

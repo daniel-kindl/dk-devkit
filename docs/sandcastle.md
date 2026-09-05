@@ -242,14 +242,14 @@ keeps the run directory for inspection.
 | devbox + purpose-specific Distroboxes | the interactive development runtime | this repository |
 | Sandcastle behind `agentbox` | unattended and parallel agent orchestration | this repository |
 | Podman | the local sandbox provider | the host |
-| `agentqueue` | the trusted GitHub authority: issues, push, pull requests, merge | this repository |
+| `agentq` | the trusted GitHub authority: issues, push, pull requests, merge | this repository |
 | GitHub | durable issue, pull request and CI state | remote |
 
 `agentbox` stops at the branch. It never pushes, so GitHub only ever sees what
-a human, or `agentqueue`, decides to send. `agentqueue` is a separate program
+a human, or `agentq`, decides to send. `agentq` is a separate program
 for exactly that reason: the half that holds a GitHub credential and the half
 that runs model output are not the same process, and neither is a sandbox.
-See [agentqueue.md](agentqueue.md).
+See [agentq.md](agentq.md).
 
 ## Why the control plane is not a Distrobox
 
@@ -318,7 +318,7 @@ so the client and the API server agree.
 it needs a client there for the same reason. The Bazzite host needs no package
 for this - `podman` is part of the base image - so the requirement is easy to
 miss, and it was: `web-dev` declared only `git`, `jq` and `gh`, and the first
-`agentqueue` run stopped with
+`agentq` run stopped with
 
     agentbox: no Podman client found
 
@@ -647,8 +647,8 @@ is why `--agent-output progress` selects that mode.
 
 The channel is additive. It changes nothing an existing reader depends on:
 `===AGENTBOX_SUMMARY_JSON===` and every exit code are what they were.
-`bin/agentqueue` renders these events as its compact stage view; see
-[agentqueue.md](agentqueue.md).
+`bin/agentq` renders these events as its compact stage view; see
+[agentq.md](agentq.md).
 
 ### The control plane does not read the terminal
 
@@ -755,8 +755,8 @@ agentbox pipeline \
   --check 'npm test'
 ```
 
-`bin/agentqueue` drives all of this from a GitHub backlog, and it is the only
-component that holds a GitHub credential. See [agentqueue.md](agentqueue.md).
+`bin/agentq` drives all of this from a GitHub backlog, and it is the only
+component that holds a GitHub credential. See [agentq.md](agentq.md).
 
 `agentbox help` lists every option.
 

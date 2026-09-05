@@ -356,7 +356,7 @@ class StageUi(NullUi):
     def run_header(self, version, slug, runnable, parallel, run_id, log_path=""):
         plural = "" if runnable == 1 else "s"
         shape = "sequential" if parallel <= 1 else f"{parallel} at a time"
-        head = f"agentqueue {version}"
+        head = f"agentq {version}"
         sub = f"{slug} {self.dot} {runnable} runnable issue{plural} {self.dot} {shape}"
         with self._lock:
             self._record(head)
@@ -785,7 +785,7 @@ def render_compact_summary(ui, report, policy) -> List[str]:
     arrow = getattr(ui, "arrow", _ARROW_ASCII)
 
     stopped = bool(report.stopped_for_security)
-    lines = ["", "agentqueue stopped" if stopped else "agentqueue complete", ""]
+    lines = ["", "agentq stopped" if stopped else "agentq complete", ""]
 
     status_of = {
         Outcome.SUCCESS: Status.OK,

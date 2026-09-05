@@ -15,11 +15,11 @@
 #   * creates the web-dev and python-dev Distroboxes when they are absent
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
 #   * installs the agentbox CLI and prepares its credential file location
-#   * installs the agentqueue host shim, which delegates into the container
+#   * installs the agentq host shim, which delegates into the container
 #
 # What it never does:
 #   * install a Node, npm, Python, or uv toolchain on the host
-#   * install the agentqueue runtime on the host: the host gets the shim only
+#   * install the agentq runtime on the host: the host gets the shim only
 #   * touch an existing development container
 #   * write any credential
 #   * overwrite live devbox repository assignments
@@ -29,8 +29,8 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 . "$REPO_ROOT/bootstrap/lib/common.sh"
 # shellcheck source=lib/sandcastle.sh
 . "$REPO_ROOT/bootstrap/lib/sandcastle.sh"
-# shellcheck source=lib/agentqueue.sh
-. "$REPO_ROOT/bootstrap/lib/agentqueue.sh"
+# shellcheck source=lib/agentq.sh
+. "$REPO_ROOT/bootstrap/lib/agentq.sh"
 
 SKIP_FLATPAK=0
 SKIP_BREW=0
@@ -226,12 +226,12 @@ else
 fi
 
 # ------------------------------------------- the GitHub backlog coordinator --
-section 'GitHub backlog coordinator host entry point (agentqueue)'
+section 'GitHub backlog coordinator host entry point (agentq)'
 # The coordinator itself stays inside the container: it needs gh and the
 # forwarded ssh-agent, and the host keeps no Node toolchain. The host gets the
 # COMMAND, as a router shim that carries the working directory across and holds
-# no credential of its own. See docs/agentqueue.md.
-install_agentqueue_host_shim "$REPO_ROOT"
+# no credential of its own. See docs/agentq.md.
+install_agentq_host_shim "$REPO_ROOT"
 
 # ---------------------------------------------------------------------- Orca --
 section 'Orca'

@@ -1,38 +1,28 @@
-# 8b. The GitHub backlog coordinator (agentqueue)
+# 8b. The GitHub backlog coordinator (agentq)
 #
-# agentqueue is the TRUSTED half of the unattended pipeline. It holds the
+# agentq is the TRUSTED half of the unattended pipeline. It holds the
 # authority a sandbox never gets: it reads issues, pushes branches, opens pull
 # requests and merges them. These checks prove that the authority stays on this
 # side of the boundary, and that the coordinator cannot reach past its own
 # namespace.
-#
-#   no GitHub credential is ever handed to agentbox or to a sandbox
-#   the coordinator pushes and deletes only inside the agent/ namespace
-#   every write method is guarded, so a dry run cannot change durable state
-#   the shipped policy defaults refuse an automatic merge until it is chosen
-#
-# The last group runs the real unit tests and the real integration test. The
-# integration test makes a bare remote and a working clone in a temporary
-# directory and removes both.
 
-section '8b. GitHub backlog coordinator (agentqueue)'
+section '8b. GitHub backlog coordinator (agentq)'
 
-AQ=$REPO_ROOT/bin/agentqueue
+AQ=$REPO_ROOT/bin/agentq
 AQ_LIB=$REPO_ROOT/lib/agentqueue
 
-# code_of is defined in verify/80-sandcastle.sh, which always runs first. A
-# local copy keeps this module usable with "--only 85".
+# The Python package/config schema retain historical internal identifiers.
 aq_code_of() {
     sed -E '/^[[:space:]]*(#|"""|\*)/d' "$@"
 }
 
 # --- the pieces exist -------------------------------------------------------
 
-check 'A1 agentqueue is executable'          -- test -x "$AQ"
-check 'A2 the package is present'            -- test -d "$AQ_LIB"
+check 'A1 agentq is executable'              -- test -x "$AQ"
+check 'A2 the internal package is present'   -- test -d "$AQ_LIB"
 check 'A3 the default policy exists'         -- \
     test -f "$REPO_ROOT/config/agentqueue/policy.default.json"
-check 'A4 the manifest exists'               -- test -f "$REPO_ROOT/manifests/agentqueue.env"
+check 'A4 the internal manifest exists'      -- test -f "$REPO_ROOT/manifests/agentqueue.env"
 check 'A5 the unit tests exist'              -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-unit.test.py"
 check 'A6 the integration test exists'       -- \
@@ -41,7 +31,8 @@ check 'A6a the output test exists'           -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-output.test.py"
 check 'A6b the command surface test exists'  -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-cli.test.py"
-check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentqueue.md"
+check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentq.md"
+check 'A7a the obsolete command is absent'   -- test ! -e "$REPO_ROOT/bin/agentqueue"
 
 if command -v python3 >/dev/null 2>&1; then
     check 'A8 every module compiles' -- \
@@ -55,7 +46,7 @@ import sys; sys.path.insert(0, sys.argv[1] + '/lib')
 from agentqueue import policy
 policy.load('/nonexistent', sys.argv[1] + '/config/agentqueue/policy.default.json')
 " "$REPO_ROOT"
-    check 'A11 the CLI reports its version' -- "$AQ" --version
+    check 'A11 the CLI reports the agentq version' -- "$AQ" --version
 else
     skip 'A8 every module compiles' 'no python3 on this side'
     skip 'A9 the default policy is valid JSON' 'no python3 on this side'
@@ -90,26 +81,20 @@ if [ -f "$AQ_MANIFEST" ]; then
 fi
 
 # --- the credential boundary ------------------------------------------------
-#
-# This is the reason the two tools are separate programs. agentqueue holds the
-# GitHub authority and agentbox holds none of it. Every check below removes one
-# way that could stop being true.
 
 AQ_CODE=$(aq_code_of "$AQ_LIB"/*.py "$AQ")
 
-check_not_contains 'C1 agentqueue never exports GH_TOKEN' 'GH_TOKEN' "$AQ_CODE"
-check_not_contains 'C2 agentqueue never exports GITHUB_TOKEN' 'GITHUB_TOKEN' "$AQ_CODE"
-check_not_contains 'C3 agentqueue never reads the gh token out of gh' \
+check_not_contains 'C1 agentq never exports GH_TOKEN' 'GH_TOKEN' "$AQ_CODE"
+check_not_contains 'C2 agentq never exports GITHUB_TOKEN' 'GITHUB_TOKEN' "$AQ_CODE"
+check_not_contains 'C3 agentq never reads the gh token out of gh' \
     'auth token' "$AQ_CODE"
-check_not_contains 'C4 agentqueue never reads the credential file agentbox uses' \
+check_not_contains 'C4 agentq never reads the credential file agentbox uses' \
     'secrets.env' "$AQ_CODE"
-check_not_contains 'C5 agentqueue never forwards the ssh-agent socket to a run' \
+check_not_contains 'C5 agentq never forwards the ssh-agent socket to a run' \
     'SSH_AUTH_SOCK=' "$AQ_CODE"
-check_not_contains 'C6 agentqueue never passes an environment to agentbox' \
+check_not_contains 'C6 agentq never passes an environment to agentbox' \
     'env=' "$(aq_code_of "$AQ_LIB/runner.py")"
 
-# The agentbox command line is built in one place. It must carry the repository,
-# the branch, the prompt file and the limits, and nothing else.
 RUNNER_CODE=$(aq_code_of "$AQ_LIB/runner.py")
 check_contains 'C7 agentbox is driven through its own CLI' '"pipeline",' "$RUNNER_CODE"
 check_contains 'C8 the prompt reaches agentbox as a file' \
@@ -119,7 +104,6 @@ check_contains 'C10 the import bound is passed on' '"--max-commits"' "$RUNNER_CO
 check_contains 'C11 the in-sandbox repair loop is bounded' \
     '"--max-fix-rounds"' "$RUNNER_CODE"
 
-# A prompt is written for a sandbox to read. It must never name a credential.
 PROMPT_CODE=$(cat "$AQ_LIB/prompts.py")
 for needle in 'CLAUDE_CODE_OAUTH_TOKEN' 'ANTHROPIC_API_KEY' 'OPENAI_API_KEY'; do
     check_not_contains "C12 the prompt builder never names $needle" \
@@ -139,8 +123,6 @@ check_not_contains 'D4 the coordinator never force-pushes' '"--force"' "$GITOPS_
 check_not_contains 'D5 the coordinator never rewrites history' '"rebase"' "$GITOPS_CODE"
 check_not_contains 'D5a it never resets the working tree' '"reset"' "$GITOPS_CODE"
 check_not_contains 'D6 the coordinator never commits' '"commit"' "$GITOPS_CODE"
-# New work always starts from the remote-tracking ref, so a checked-out base
-# branch is never moved under the user.
 check_contains 'D7 new work is based on the remote-tracking ref' \
     'refs/remotes/origin/' "$(cat "$AQ_LIB/coordinator.py")"
 
@@ -169,10 +151,6 @@ check_contains 'E10 a merge is followed by a rescan' \
     'a merge can unblock' "$(cat "$AQ_LIB/coordinator.py")"
 
 # --- the presentation layer -------------------------------------------------
-#
-# The compact stage view is a display. It must render what the coordinator
-# decided and it must never decide anything, it must never read a credential,
-# and it must never turn a model's prose into a claim about the run.
 
 UI_CODE=$(aq_code_of "$AQ_LIB/ui.py")
 check_not_contains 'P1 the display reaches no GitHub client' 'self.github' "$UI_CODE"
@@ -187,8 +165,6 @@ check_contains 'P7 a security failure has a marker of its own' \
     'Status.SECURITY' "$UI_CODE"
 check_contains 'P8 the failure tail is bounded' 'max_tail_lines' "$UI_CODE"
 
-# The progress channel is an exact prefix and a JSON document. A display built
-# on a pattern against prose would report whatever a model chose to print.
 MODEL_CODE=$(aq_code_of "$AQ_LIB/model.py")
 check_contains 'P9 the progress channel is an exact prefix' \
     'line.startswith(AGENTBOX_EVENT_PREFIX)' "$MODEL_CODE"
@@ -197,8 +173,6 @@ check_contains 'P10 the progress payload is parsed as JSON' \
 check_not_contains 'P11 no progress is scraped out of prose with a pattern' \
     're.search' "$(aq_code_of "$AQ_LIB/coordinator.py" "$AQ_LIB/ui.py")"
 
-# The run log is the evidence a compact run does not print. It is written as
-# the child speaks, and only its owner can read it.
 RUNNER_CODE_ALL=$(aq_code_of "$AQ_LIB/runner.py")
 check_contains 'P12 the child stream is written to a log as it arrives' \
     'handle.write(line)' "$RUNNER_CODE_ALL"
@@ -209,9 +183,6 @@ check_contains 'P14 the queue transcript is readable by its owner only' \
 check_contains 'P15 a dry run writes no transcript' '_NoRunLog' \
     "$(aq_code_of "$AQ_LIB/cli.py")"
 
-# Two issues at a time means two threads reach the display and the progress
-# bookkeeping. State that is per RUN must be per thread, or one issue reports
-# another's progress, which is a wrong answer rather than a missing one.
 COORD_CODE_ALL=$(aq_code_of "$AQ_LIB/coordinator.py")
 CLI_CODE_ALL=$(aq_code_of "$AQ_LIB/cli.py")
 check_contains 'P15a the phases one agentbox run reported are per thread' \
@@ -225,11 +196,6 @@ check_contains 'P15d the output modes are one group, --json included' \
 check_contains 'P15e the run log serialises its writers' \
     'self._lock = threading.Lock()' "$CLI_CODE_ALL"
 
-# One terminal and one run log, reached by several worker threads. Every write
-# path of the renderers must sit inside the renderer lock, and a path added
-# later must not be able to forget it. This finds that statically, the way F1
-# finds a write method that skipped the dry-run guard, rather than hoping a
-# timing test happens to catch the interleaving.
 if command -v python3 >/dev/null 2>&1; then
     unlocked=$(python3 - "$AQ_LIB" <<'LOCKCHECK'
 import ast, os, sys
@@ -273,7 +239,6 @@ else
     skip 'P15f every renderer write path is inside the renderer lock' 'no python3'
 fi
 
-# The four levels exist, and they are the only four.
 if command -v python3 >/dev/null 2>&1; then
     check_eq 'P16 the output levels are quiet, compact, verbose and debug' \
         "('quiet', 'compact', 'verbose', 'debug')" \
@@ -292,7 +257,6 @@ else
     skip 'P17 the stage model is the documented one' 'no python3'
 fi
 
-# agentbox publishes the events. The two halves must agree on the vocabulary.
 ORCH_FILE=$REPO_ROOT/config/sandcastle/orchestrate.mjs
 if [ -f "$ORCH_FILE" ]; then
     check_contains 'P18 the orchestrator publishes the progress channel' \
@@ -306,10 +270,6 @@ if [ -f "$ORCH_FILE" ]; then
 fi
 
 # --- a dry run cannot change durable state ---------------------------------
-#
-# Every write method must pass through the guard. A method that forgot it
-# would change GitHub during a dry run, and the check below finds that
-# statically rather than after the fact.
 
 if command -v python3 >/dev/null 2>&1; then
     unguarded=$(python3 - "$AQ_LIB" <<'PY'
@@ -344,9 +304,6 @@ else
 fi
 
 # --- the shipped defaults are conservative ---------------------------------
-#
-# A repository opts in to an automatic merge. It is never the default, and a
-# merge with no independent review is never an accident.
 
 DEFAULTS=$REPO_ROOT/config/agentqueue/policy.default.json
 if command -v python3 >/dev/null 2>&1 && [ -f "$DEFAULTS" ]; then
@@ -372,8 +329,7 @@ if command -v python3 >/dev/null 2>&1; then
         pass "H1 the coordinator unit tests pass ($unit_n tests)"
     else
         fail 'H1 the coordinator unit tests pass' \
-            "$(printf '%s\n' "$unit_out" | grep -E '^(FAIL|ERROR):' | head -5 |
-               tr '\n' ' ')"
+            "$(printf '%s\n' "$unit_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 
     out_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-output.test.py" 2>&1) &&
@@ -383,8 +339,7 @@ if command -v python3 >/dev/null 2>&1; then
         pass "H1a the output tests pass ($out_n tests)"
     else
         fail 'H1a the output tests pass' \
-            "$(printf '%s\n' "$out_out" | grep -E '^(FAIL|ERROR):' | head -5 |
-               tr '\n' ' ')"
+            "$(printf '%s\n' "$out_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 
     cli_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-cli.test.py" 2>&1) &&
@@ -394,8 +349,7 @@ if command -v python3 >/dev/null 2>&1; then
         pass "H1b the command surface tests pass ($cli_n tests)"
     else
         fail 'H1b the command surface tests pass' \
-            "$(printf '%s\n' "$cli_out" | grep -E '^(FAIL|ERROR):' | head -5 |
-               tr '\n' ' ')"
+            "$(printf '%s\n' "$cli_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 
     int_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-integration.test.py" 2>&1) &&
@@ -405,8 +359,7 @@ if command -v python3 >/dev/null 2>&1; then
         pass "H2 the coordinator integration tests pass ($int_n tests)"
     else
         fail 'H2 the coordinator integration tests pass' \
-            "$(printf '%s\n' "$int_out" | grep -E '^(FAIL|ERROR):' | head -5 |
-               tr '\n' ' ')"
+            "$(printf '%s\n' "$int_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 else
     skip 'H1 the coordinator unit tests pass' 'no python3 on this side'
@@ -436,19 +389,11 @@ fi
 check 'J1 no repository policy file is tracked here' -- \
     test ! -e "$REPO_ROOT/.agentqueue.json"
 
-# --- the removed command stays removed --------------------------------------
-#
-# "drain" became "run". It is not an alias, not deprecated, not hidden and not
-# a compatibility path, so the name must not survive anywhere a user reads or
-# a parser looks. The behavioural proof is in agentqueue-cli.test.py; this is
-# the static one, and it also covers the documentation the tests cannot read.
-#
-# The probes are excluded on purpose: they name the removed command in order
-# to prove that it is refused.
+# --- removed command names stay removed ------------------------------------
 
 aq_stale=$(grep -rIln --exclude-dir=.git --exclude-dir=__pycache__ \
     --exclude-dir=.worktrees --exclude='agentqueue-cli.test.py' \
-    --exclude='85-agentqueue.sh' -e 'agentqueue drain' -e 'cmd_drain' \
+    --exclude='85-agentq.sh' -e 'agentq drain' -e 'agentqueue drain' -e 'cmd_drain' \
     -- "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/docs" "$REPO_ROOT/config" \
        "$REPO_ROOT/manifests" "$REPO_ROOT/verify" "$REPO_ROOT/README.md" \
        "$REPO_ROOT/AGENTS.md" 2>/dev/null | tr '\n' ' ')
@@ -472,10 +417,11 @@ assert found == {'run', 'plan', 'doctor', 'policy', 'init'}, found
 " "$REPO_ROOT"
     check 'J4 the help advertises run and never drain' -- \
         python3 -c "
-import io, sys, contextlib
+import sys
 sys.path.insert(0, sys.argv[1] + '/lib')
 from agentqueue.cli import build_parser
 text = build_parser().format_help()
+assert 'agentq' in text, text
 assert 'run' in text, text
 assert 'drain' not in text.lower(), text
 " "$REPO_ROOT"
@@ -485,47 +431,21 @@ else
 fi
 
 # --- the host entry point ---------------------------------------------------
-#
-# The coordinator runs inside a container, because it needs gh and the
-# forwarded ssh-agent. The COMMAND must still work from a normal host terminal:
-#
-#     cd ~/projects/dkkb
-#     agentqueue run
-#
-# The host side is a devbox router shim and nothing else. These checks prove
-# that it exists, that it delegates, that it carries the working directory and
-# the arguments across unchanged, that the exit status comes back, that it
-# cannot call itself, and that it adds nothing to the environment it delegates
-# to.
 
-section '8c. agentqueue host entry point'
+section '8c. agentq host entry point'
 
 AQ_ENV=$(sed -n 's/^AGENTQUEUE_ENVIRONMENT=//p' "$AQ_MANIFEST" | head -1 | tr -d '"'"'"' \t\r')
-AQ_SHIM=$HOST_HOME/.local/bin/agentqueue
+AQ_SHIM=$HOST_HOME/.local/bin/agentq
 AQ_DEVBOX=$HOST_HOME/.local/bin/devbox
-
-# The checks that ENTER the container run the coordinator this machine has
-# installed, and that is a link into ONE checkout. When it is not the checkout
-# under test - a linked worktree, or a branch that bootstrap has not seen - a
-# behaviour check would report the installed version instead of the change, so
-# it is skipped with that reason rather than answering about the wrong file.
-# The comparison is "-ef", the same device and inode, and not string equality:
-# the same file has several valid spellings here (/workspace and ~/projects,
-# /home and /var/home, /run/host/... from inside the container).
-AQ_LINK=$BOX_HOME/.local/bin/agentqueue
-if [ -e "$AQ_LINK" ] && [ "$AQ_LINK" -ef "$REPO_ROOT/bin/agentqueue" ]; then
+AQ_LINK=$BOX_HOME/.local/bin/agentq
+if [ -e "$AQ_LINK" ] && [ "$AQ_LINK" -ef "$REPO_ROOT/bin/agentq" ]; then
     AQ_LIVE=1; AQ_STALE=''
 else
     AQ_LIVE=0
-    AQ_STALE="the installed coordinator is $(readlink -f "$AQ_LINK" 2>/dev/null ||
-              printf 'missing'), not this checkout"
+    AQ_STALE="the installed coordinator is $(readlink -f "$AQ_LINK" 2>/dev/null || printf 'missing'), not this checkout"
 fi
 
-# The host spelling of this checkout, from verify/lib.sh. Only the host side
-# can run the shim.
 AQ_CHECKOUT=$HOST_REPO_ROOT
-
-# --- the pin is configuration, not a constant in a script -------------------
 
 if [ -n "$AQ_ENV" ]; then
     pass "K1 the manifest names the environment that owns the runtime ($AQ_ENV)"
@@ -536,12 +456,9 @@ fi
 check "K2 the environment $AQ_ENV is configured for the router" -- \
     test -f "$REPO_ROOT/config/devbox-router/environments.d/$AQ_ENV.env"
 
-# The options whose value is a host directory. They are configuration, like the
-# environment, so the installer and this module build one shim text from one
-# pair of manifest values and cannot disagree about it.
 AQ_MAPS=$(sed -n 's/^AGENTQUEUE_HOST_PATH_OPTIONS=//p' "$AQ_MANIFEST" |
           head -1 | tr -d '"'"'"' \t\r')
-AQ_SHIM_ARGS=(agentqueue --env "$AQ_ENV")
+AQ_SHIM_ARGS=(agentq --env "$AQ_ENV")
 if [ -n "$AQ_MAPS" ]; then
     while IFS= read -r aq_opt; do
         [ -n "$aq_opt" ] && AQ_SHIM_ARGS+=(--map-path "$aq_opt")
@@ -555,21 +472,16 @@ case ,$AQ_MAPS, in
             "AGENTQUEUE_HOST_PATH_OPTIONS is [$AQ_MAPS]" ;;
 esac
 
-# --- the shim is installed, and it is what the router generates today -------
-
 if on_host test -x "$AQ_SHIM"; then
-    pass 'K3 the host command ~/.local/bin/agentqueue exists and is executable'
+    pass 'K3 the host command ~/.local/bin/agentq exists and is executable'
 else
-    fail 'K3 the host command ~/.local/bin/agentqueue exists and is executable' \
+    fail 'K3 the host command ~/.local/bin/agentq exists and is executable' \
         'run bootstrap/host.sh'
 fi
 
 aq_shim_now=$(on_host cat "$AQ_SHIM" 2>/dev/null || true)
 aq_shim_want=$("$REPO_ROOT/bin/devbox" new-shim "${AQ_SHIM_ARGS[@]}" 2>/dev/null || true)
 if [ "$AQ_LIVE" != 1 ]; then
-    # The installed shim was generated from another checkout, so comparing it
-    # with this one answers about the wrong file. K5 below still reads the
-    # generated text, and the L checks exercise it.
     skip 'K4 the installed shim is exactly what the router generates' "$AQ_STALE"
 elif [ -z "$aq_shim_now" ]; then
     fail 'K4 the installed shim is exactly what the router generates' \
@@ -581,29 +493,18 @@ else
         'it has drifted; re-run bootstrap/host.sh'
 fi
 
-# K5 and the checks below read the text the router generates from THIS
-# checkout, so they answer about the code under review on any machine.
 aq_shim_now=${aq_shim_want:-$aq_shim_now}
-
-# --- it holds no runtime and no credential ----------------------------------
-#
-# A host shim is a router entry point. The host has no gh, no Node toolchain
-# and no model credential, and this file must not be the thing that changes
-# that.
 
 aq_mapflags=''
 for aq_opt in "${AQ_SHIM_ARGS[@]}"; do
     case $aq_opt in
-        --print|--env|"$AQ_ENV"|agentqueue|--map-path) continue ;;
+        --print|--env|"$AQ_ENV"|agentq|--map-path) continue ;;
         *) aq_mapflags="$aq_mapflags --map-path $aq_opt" ;;
     esac
 done
 check_contains 'K5 the shim delegates through the devbox router' \
-    "exec \"\$router\" exec $AQ_ENV --cwd \"\$PWD\"$aq_mapflags -- agentqueue \"\$@\"" \
+    "exec \"\$router\" exec $AQ_ENV --cwd \"\$PWD\"$aq_mapflags -- agentq \"\$@\"" \
     "$aq_shim_now"
-
-# The mapping is the router's, not the shim's. The shim names the option and
-# the router owns the translation, so the shim still holds no logic.
 check_contains 'K5a the shim asks the router to translate --repo' \
     '--map-path --repo' "$aq_shim_now"
 check_not_contains 'K6 the shim contains no Python runtime' 'python' "$aq_shim_now"
@@ -612,9 +513,6 @@ for aq_needle in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY
     check_not_contains "K7 the shim never names $aq_needle" "$aq_needle" "$aq_shim_now"
 done
 
-# Nothing is exported, and the only assignment is the router path. A shim that
-# set a variable would change the environment of the delegated process, and
-# "the shim adds nothing" would stop being true.
 aq_assignments=$(printf '%s\n' "$aq_shim_now" |
     grep -oE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' |
     tr -d ' \t' | sort -u | tr '\n' ' ')
@@ -627,25 +525,13 @@ if [ -x "$REPO_ROOT/bin/scan-secrets" ]; then
         fail 'K9 the shim carries no credential' 'bin/scan-secrets reported a finding'
 fi
 
-# --- it delegates, and it carries the working directory across --------------
-#
-# DEVBOX_DRY_RUN makes the router print the plan instead of entering the
-# container, so these checks start nothing.
-
 aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' plan --repo ." 2>&1)
 check_contains "L1 the shim delegates into $AQ_ENV" "env=$AQ_ENV" "$aq_out"
-check_contains 'L2 it is an explicit pin, not repository resolution' \
-    'source=explicit' "$aq_out"
-check_contains 'L3 ~/projects maps to the workspace inside the container' \
-    'guest_cwd=/workspace' "$aq_out"
-check_contains 'L4 argv[0] is the coordinator, not the shim' \
-    'argv[0]=agentqueue' "$aq_out"
+check_contains 'L2 it is an explicit pin, not repository resolution' 'source=explicit' "$aq_out"
+check_contains 'L3 ~/projects maps to the workspace inside the container' 'guest_cwd=/workspace' "$aq_out"
+check_contains 'L4 argv[0] is the coordinator, not the shim' 'argv[0]=agentq' "$aq_out"
 check_contains 'L5 the --repo option reaches the coordinator' 'argv[2]=--repo' "$aq_out"
 
-# The reported defect, as a path mapping: a repository under ~/projects on the
-# host is the same repository under /workspace in the container. The name below
-# is an example, not a configured repository: 'devbox path' maps a path whether
-# or not it exists, and the space proves the mapping is not word-split.
 check_eq 'L6 a host repository path maps to the shared workspace path' \
     '/workspace/a repo' \
     "$(on_host "$AQ_DEVBOX" path "$AQ_ENV" "$HOST_HOME/projects/a repo" 2>&1)"
@@ -653,14 +539,9 @@ check_eq 'L7 a directory outside the workspace maps through /run/host' \
     "/run/host$(on_host realpath -m "$HOST_HOME/.config" 2>/dev/null)" \
     "$(on_host "$AQ_DEVBOX" path "$AQ_ENV" "$HOST_HOME/.config" 2>&1)"
 
-# The shim resolves NO repository. It carries the working directory across the
-# boundary and the coordinator resolves the repository on the far side, from
-# the TRANSLATED directory. A shim that resolved it here would hand over a host
-# path that does not exist inside the container.
 aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' run" 2>&1)
 check_contains 'L8 a run without --repo still delegates' "env=$AQ_ENV" "$aq_out"
-check_contains 'L9 the translated directory is what crosses over' \
-    'guest_cwd=/workspace' "$aq_out"
+check_contains 'L9 the translated directory is what crosses over' 'guest_cwd=/workspace' "$aq_out"
 check_contains 'L10 argv is the command alone' 'argv[1]=run' "$aq_out"
 if printf '%s\n' "$aq_out" | grep -q '^argv\[2\]='; then
     fail 'L11 the shim adds no --repo of its own' \
@@ -671,24 +552,10 @@ fi
 check_not_contains 'L12 the host path never crosses the boundary as an argument' \
     "argv[2]=$HOST_HOME" "$aq_out"
 
-# --- an explicit --repo carries a HOST path, and it must arrive translated ---
-#
-# The reported defect. The user types a host path, the tool reads it inside the
-# container, and only the working directory used to cross over translated. The
-# router now translates the value of the options the manifest names, so the
-# documented explicit override works from a host terminal without the user
-# knowing a single container path.
-#
-# These checks build their own shim from THIS checkout and route it through
-# THIS checkout's router, because a regression check must answer about the code
-# under review. The installed pair may be older - a worktree, or a machine that
-# bootstrap has not refreshed - and K4 reports that separately.
-
 aq_gen=$(host_sh 'mktemp 2>/dev/null' 2>/dev/null || true)
 aq_gen_ok=0
 case $aq_gen in
-    /*) if host_sh "'$AQ_CHECKOUT/bin/devbox' new-shim ${AQ_SHIM_ARGS[*]} > '$aq_gen' &&
-                    chmod 0755 -- '$aq_gen'" >/dev/null 2>&1; then aq_gen_ok=1; fi ;;
+    /*) if host_sh "'$AQ_CHECKOUT/bin/devbox' new-shim ${AQ_SHIM_ARGS[*]} > '$aq_gen' && chmod 0755 -- '$aq_gen'" >/dev/null 2>&1; then aq_gen_ok=1; fi ;;
 esac
 
 if [ "$aq_gen_ok" = 1 ]; then
@@ -696,55 +563,33 @@ if [ "$aq_gen_ok" = 1 ]; then
         host_sh "cd $1 && DEVBOX_BIN='$AQ_CHECKOUT/bin/devbox' DEVBOX_DRY_RUN=1 '$aq_gen' $2" 2>&1
     }
 
-    # Under the workspace: ~/projects/<name> is /workspace/<name> inside.
     aq_out=$(aq_gsh "~" "run --repo '$HOST_HOME/projects/a repo'")
-    check_contains 'L13 a host path under the workspace arrives as a workspace path' \
-        'argv[3]=/workspace/a repo' "$aq_out"
-    check_not_contains 'L14 the host spelling does not survive the crossing' \
-        "argv[3]=$HOST_HOME/projects" "$aq_out"
+    check_contains 'L13 a host path under the workspace arrives as a workspace path' 'argv[3]=/workspace/a repo' "$aq_out"
+    check_not_contains 'L14 the host spelling does not survive the crossing' "argv[3]=$HOST_HOME/projects" "$aq_out"
 
-    # Outside the workspace: every Distrobox mounts the host root at /run/host.
     aq_outside=$(on_host realpath -m /var/tmp/a-repo 2>/dev/null || printf '/var/tmp/a-repo')
     aq_out=$(aq_gsh "~" "run --repo '$aq_outside'")
-    check_contains 'L15 a host path outside the workspace arrives through /run/host' \
-        "argv[3]=/run/host$aq_outside" "$aq_out"
+    check_contains 'L15 a host path outside the workspace arrives through /run/host' "argv[3]=/run/host$aq_outside" "$aq_out"
 
-    # The equals form is the same option, translated the same way.
     aq_out=$(aq_gsh "~" "run --repo='$aq_outside'")
-    check_contains 'L16 the --repo=PATH form is translated too' \
-        "argv[2]=--repo=/run/host$aq_outside" "$aq_out"
+    check_contains 'L16 the --repo=PATH form is translated too' "argv[2]=--repo=/run/host$aq_outside" "$aq_out"
 
-    # A relative value resolves against the HOST working directory and is then
-    # mapped. It cannot cross over untouched: the two trees do not have the
-    # same shape at the workspace root, so a '..' that escapes it would name a
-    # different directory on each side.
     aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo .")
-    check_contains 'L17 a relative --repo resolves against the working directory' \
-        'argv[3]=/workspace' "$aq_out"
+    check_contains 'L17 a relative --repo resolves against the working directory' 'argv[3]=/workspace' "$aq_out"
     aq_home_canon=$(on_host realpath -m "$HOST_HOME" 2>/dev/null || printf '%s' "$HOST_HOME")
     aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo ..")
-    check_contains 'L21 a relative --repo that escapes the workspace is translated' \
-        "argv[3]=/run/host$aq_home_canon" "$aq_out"
+    check_contains 'L21 a relative --repo that escapes the workspace is translated' "argv[3]=/run/host$aq_home_canon" "$aq_out"
 
-    # The shell expands '--repo ~/x' but leaves '--repo=~/x' alone, so the
-    # router expands it, against the HOST home and not the isolated box home.
     aq_out=$(aq_gsh "~" "run --repo='~/projects/a repo'")
-    check_contains 'L22 a tilde in the --repo=PATH form expands against the host home' \
-        'argv[2]=--repo=/workspace/a repo' "$aq_out"
+    check_contains 'L22 a tilde in the --repo=PATH form expands against the host home' 'argv[2]=--repo=/workspace/a repo' "$aq_out"
 
-    # argv is carried as an array, so an argument that holds a newline stays
-    # one argument instead of becoming two.
     aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo . --label \$'a\\nb'")
     aq_argv_max=$(printf '%s\n' "$aq_out" | sed -n 's/^argv\[\([0-9]*\)\]=.*/\1/p' | sort -n | tail -1)
     check_eq 'L23 an argument that holds a newline stays one argument' 5 "$aq_argv_max"
 
-    # Only the named option is translated. Another argument that happens to
-    # look like a path is not the router's business.
     aq_out=$(aq_gsh "~" "run --label '$HOST_HOME/projects/x'")
-    check_contains 'L18 an option the manifest does not name is untouched' \
-        "argv[3]=$HOST_HOME/projects/x" "$aq_out"
+    check_contains 'L18 an option the manifest does not name is untouched' "argv[3]=$HOST_HOME/projects/x" "$aq_out"
 
-    # A quoted path keeps its spaces and its quotes through the translation.
     aq_out=$(aq_gsh "~" "run --repo \"\$HOME/projects/a b\" --label \"c'd\"")
     check_contains 'L19 a translated path keeps a space' 'argv[3]=/workspace/a b' "$aq_out"
     check_contains 'L20 an argument after it still survives' "argv[5]=c'd" "$aq_out"
@@ -769,8 +614,6 @@ else
     done
 fi
 
-# --- argv survives verbatim -------------------------------------------------
-
 aq_out=$(host_sh "cd '$HOST_HOME/projects' && DEVBOX_DRY_RUN=1 '$AQ_SHIM' run --repo 'a b' --label \"c'd\" --base 'e\"f'" 2>&1)
 # --repo is a mapped path option, so 'a b' resolves against the host working
 # directory and crosses over as a workspace path. The space must survive that.
@@ -778,109 +621,71 @@ check_contains 'M1 an argument with a space survives'  'argv[3]=/workspace/a b' 
 check_contains 'M2 an argument with a quote survives'  "argv[5]=c'd" "$aq_out"
 check_contains 'M3 an argument with a double quote survives' 'argv[7]=e"f' "$aq_out"
 
-# --- the recursion guard ----------------------------------------------------
-#
-# The host shim must never be the thing that runs inside the container. Two
-# defences: the shim refuses when it detects an environment, and the router
-# strips the host shim directory from the container PATH.
-
 aq_rc=0
 host_sh "DEVBOX_ACTIVE_ENV=$AQ_ENV '$AQ_SHIM' --version" >/dev/null 2>&1 || aq_rc=$?
 check_eq 'N1 the shim refuses inside an environment (exit 8)' '8' "$aq_rc"
 
 if [ "$IN_CONTAINER" = 1 ]; then
     aq_rc=0
-    "$HOST_HOME_VIEW/.local/bin/agentqueue" --version >/dev/null 2>&1 || aq_rc=$?
-    check_eq 'N2 the shim refuses when it is run inside the container (exit 8)' \
-        '8' "$aq_rc"
+    "$HOST_HOME_VIEW/.local/bin/agentq" --version >/dev/null 2>&1 || aq_rc=$?
+    check_eq 'N2 the shim refuses when it is run inside the container (exit 8)' '8' "$aq_rc"
 
-    aq_path=$(bash -lc 'command -v agentqueue' 2>/dev/null || true)
+    aq_path=$(bash -lc 'command -v agentq' 2>/dev/null || true)
     case $aq_path in
         "$HOST_HOME_VIEW"/.local/bin/*)
-            fail 'N3 agentqueue inside the container is the real command' \
-                 "the host shim is on PATH here: $aq_path" ;;
-        '') fail 'N3 agentqueue inside the container is the real command' \
-                 'not on PATH; run bootstrap/web-dev.sh' ;;
-        *)  pass "N3 agentqueue inside the container is the real command ($aq_path)" ;;
+            fail 'N3 agentq inside the container is the real command' "the host shim is on PATH here: $aq_path" ;;
+        '') fail 'N3 agentq inside the container is the real command' 'not on PATH; run bootstrap/web-dev.sh' ;;
+        *)  pass "N3 agentq inside the container is the real command ($aq_path)" ;;
     esac
 else
     skip 'N2 the shim refuses when it is run inside the container' 'host side'
-    skip 'N3 agentqueue inside the container is the real command' 'host side'
+    skip 'N3 agentq inside the container is the real command' 'host side'
 fi
-
-# --- the exit status and the resolved repository come back ------------------
-#
-# These enter the container for real. They read nothing from GitHub and they
-# change nothing: "policy" resolves files, and a directory that is not a Git
-# working tree is refused before anything else happens.
 
 if on_host test -x "$AQ_SHIM" && [ "$AQ_LIVE" = 1 ]; then
     aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' policy --repo ." 2>&1); aq_rc=$?
     check_eq 'O1 a usage failure inside the container exits 2 on the host' '2' "$aq_rc"
-    check_contains 'O2 --repo . resolved against the translated directory' \
-        'not a Git working tree: /workspace' "$aq_out"
+    check_contains 'O2 --repo . resolved against the translated directory' 'not a Git working tree: /workspace' "$aq_out"
 
-    # The same directory, with no --repo at all. The coordinator resolves it
-    # from the working directory the router translated, so it refuses the same
-    # container path and not the host one.
     aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' policy" 2>&1); aq_rc=$?
     check_eq 'O2a no --repo outside a repository exits 2 as well' '2' "$aq_rc"
-    check_contains 'O2b it names the translated directory, not the host one' \
-        'not a Git working tree: /workspace' "$aq_out"
-    check_contains 'O2c it says how to name a repository elsewhere' \
-        '--repo' "$aq_out"
-    check_not_contains 'O2d the host spelling never appears in the refusal' \
-        "$HOST_HOME/projects" "$aq_out"
+    check_contains 'O2b it names the translated directory, not the host one' 'not a Git working tree: /workspace' "$aq_out"
+    check_contains 'O2c it says how to name a repository elsewhere' '--repo' "$aq_out"
+    check_not_contains 'O2d the host spelling never appears in the refusal' "$HOST_HOME/projects" "$aq_out"
 
-    # The removed command. It is not an alias, not deprecated and not hidden,
-    # so the parser refuses it the way it refuses any unknown word.
     aq_out=$(host_sh "cd '$HOST_HOME/projects' && '$AQ_SHIM' drain" 2>&1); aq_rc=$?
     check_eq 'O2e drain is rejected as an unknown command (exit 2)' '2' "$aq_rc"
-    check_contains 'O2f the refusal names the commands that do exist' \
-        'invalid choice' "$aq_out"
+    check_contains 'O2f the refusal names the commands that do exist' 'invalid choice' "$aq_out"
 
     aq_out=$(host_sh "'$AQ_SHIM' --version" 2>&1); aq_rc=$?
     check_eq 'O3 a success inside the container exits 0 on the host' '0' "$aq_rc"
-    check_contains 'O4 the version comes from the coordinator, not the shim' \
-        'agentqueue ' "$aq_out"
+    check_contains 'O4 the version comes from the coordinator, not the shim' 'agentq ' "$aq_out"
 
-    if on_host test -e "$AQ_CHECKOUT/.git" &&
-       host_sh "git -C '$AQ_CHECKOUT' remote get-url origin" >/dev/null 2>&1; then
+    if on_host test -e "$AQ_CHECKOUT/.git" && host_sh "git -C '$AQ_CHECKOUT' remote get-url origin" >/dev/null 2>&1; then
         aq_out=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy --repo ." 2>&1); aq_rc=$?
         check_eq 'O5 --repo . works from a repository on the host' '0' "$aq_rc"
         check_contains 'O6 it resolved this repository' 'repository' "$aq_out"
 
-        # The point of the issue: standing in the repository is enough. The
-        # answer must be the same one --repo . gives, through the same shim
-        # and the same path translation.
         aq_bare=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy" 2>&1); aq_rc=$?
         check_eq 'O7 no --repo works from a repository on the host' '0' "$aq_rc"
-        check_eq 'O8 it resolves the same repository --repo . resolves' \
-            "$aq_out" "$aq_bare"
+        check_eq 'O8 it resolves the same repository --repo . resolves' "$aq_out" "$aq_bare"
 
-        # And from a subdirectory of it, which --repo . could not do.
         if on_host test -d "$AQ_CHECKOUT/lib/agentqueue"; then
             aq_sub=$(host_sh "cd '$AQ_CHECKOUT/lib/agentqueue' && '$AQ_SHIM' policy" 2>&1)
             aq_rc=$?
             check_eq 'O9 no --repo works from a subdirectory too' '0' "$aq_rc"
-            check_eq 'O10 a subdirectory resolves to the top of the tree' \
-                "$aq_out" "$aq_sub"
+            check_eq 'O10 a subdirectory resolves to the top of the tree' "$aq_out" "$aq_sub"
         else
-            skip 'O9 no --repo works from a subdirectory too' 'no lib/agentqueue'
+            skip 'O9 no --repo works from a subdirectory too' 'no internal lib/agentqueue'
             skip 'O10 a subdirectory resolves to the top of the tree' 'see O9'
         fi
 
-        # The documented explicit override, with the ABSOLUTE host path the
-        # shell produces from "--repo ~/projects/dkkb". It must reach the same
-        # repository as "--repo ." does, from a directory that is not it.
         aq_abs=$(host_sh "cd '$AQ_CHECKOUT' && '$AQ_SHIM' policy --repo '$AQ_CHECKOUT'" 2>&1)
         aq_rc=$?
         check_eq 'O11 an absolute host path under the workspace works' '0' "$aq_rc"
-        check_eq 'O12 it resolves the same repository --repo . resolves' \
-            "$aq_out" "$aq_abs"
+        check_eq 'O12 it resolves the same repository --repo . resolves' "$aq_out" "$aq_abs"
     else
-        skip 'O5 --repo . works from a repository on the host' \
-             "no host checkout with an origin remote at $AQ_CHECKOUT"
+        skip 'O5 --repo . works from a repository on the host' "no host checkout with an origin remote at $AQ_CHECKOUT"
         skip 'O6 it resolved this repository' 'see O5'
         skip 'O7 no --repo works from a repository on the host' 'see O5'
         skip 'O8 it resolves the same repository --repo . resolves' 'see O5'
@@ -890,11 +695,6 @@ if on_host test -x "$AQ_SHIM" && [ "$AQ_LIVE" = 1 ]; then
         skip 'O12 it resolves the same repository --repo . resolves' 'see O5'
     fi
 
-    # The other half of the mapping. A host path OUTSIDE the workspace has no
-    # /workspace spelling, so it crosses over through /run/host. Nothing on
-    # this machine is guaranteed to be a repository there, so this check makes
-    # a disposable one under a temporary directory and removes it again. It
-    # touches no configuration and no repository a human owns.
     aq_tmp=$(host_sh 'mktemp -d 2>/dev/null' 2>/dev/null || true)
     case $aq_tmp in
         /*) aq_made=1 ;;
@@ -911,13 +711,11 @@ if on_host test -x "$AQ_SHIM" && [ "$AQ_LIVE" = 1 ]; then
     " >/dev/null 2>&1; then
         aq_out=$(host_sh "cd ~ && '$AQ_SHIM' policy --repo '$aq_tmp/repo'" 2>&1); aq_rc=$?
         check_eq 'O13 an absolute host path outside the workspace works' '0' "$aq_rc"
-        check_contains 'O14 it resolved the repository behind that host path' \
-            'example/outside' "$aq_out"
+        check_contains 'O14 it resolved the repository behind that host path' 'example/outside' "$aq_out"
         host_sh "rm -rf -- '$aq_tmp'" >/dev/null 2>&1 || true
     else
         [ "$aq_made" = 1 ] && host_sh "rm -rf -- '$aq_tmp'" >/dev/null 2>&1
-        skip 'O13 an absolute host path outside the workspace works' \
-             'could not make a disposable repository on the host'
+        skip 'O13 an absolute host path outside the workspace works' 'could not make a disposable repository on the host'
         skip 'O14 it resolved the repository behind that host path' 'see O13'
     fi
 else

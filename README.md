@@ -33,28 +33,29 @@ disposable clone of the repository. The real repository is never mounted, and
 only validated commits are imported onto an `agent/` branch. It never pushes.
 Read [docs/sandcastle.md](docs/sandcastle.md).
 
-`agentqueue` carries that result the rest of the way. One command runs a
+`agentq` carries that result the rest of the way. One command runs a
 GitHub backlog: it picks a runnable issue, drives `agentbox`, pushes the
 validated branch, opens the pull request, waits for the checks, merges when
 every gate passes, and looks again, because a merge can unblock the next issue.
 It is a separate program because it holds the GitHub authority that a sandbox
-must never get. Read [docs/agentqueue.md](docs/agentqueue.md).
+must never get. Read [docs/agentq.md](docs/agentq.md).
 
 ```bash
 cd ~/projects/dkkb
-agentqueue plan               # what it would do, changes nothing
-agentqueue run                # do it
-agentqueue run --verbose      # more detail
-agentqueue run --debug        # the raw agentbox stream
-agentqueue run --quiet        # failures and the summary only
+agentq plan               # what it would do, changes nothing
+agentq run                # do it
+agentq run --verbose      # more detail
+agentq run --debug        # the raw agentbox stream
+agentq run --quiet        # failures and the summary only
 ```
 
 Every command works on the repository you stand in. `--repo PATH` names
 another one, for a run started from somewhere else.
 
 A run prints a compact stage view: which issue, which stage, how long, and
-what happened. The full transcript of every run is kept under
-`~/.local/share/agentqueue/runs/`, so a quiet terminal costs no evidence.
+what happened. The full transcript of every run is kept under the historical
+internal state path `~/.local/share/agentqueue/runs/`, so a quiet terminal costs
+no evidence.
 
 ```text
 [1/2] #86 Implement entry-selection module
@@ -63,9 +64,9 @@ what happened. The full transcript of every run is kept under
 ```
 
 You type that on the host. The coordinator runs inside `web-dev`, where `gh`
-and the forwarded ssh-agent are, and the host `agentqueue` is a router shim
-that carries the working directory across. It works the same way the `claude`
-and `codex` commands do.
+and the forwarded ssh-agent are, and the host `agentq` is a router shim that
+carries the working directory across. It works the same way the `claude` and
+`codex` commands do.
 
 Read [docs/architecture.md](docs/architecture.md) for the full picture.
 
@@ -118,11 +119,11 @@ to see what a run would change.
 | `config/devbox-router/` | The router configuration and inference rules |
 | `config/claude/`, `config/codex/` | Non-secret client preferences |
 | `config/web-dev/` | Files that belong to the container: shell fragment, Orca bridge |
-| `bin/` | The router, `agentbox`, `agentqueue`, the verification suites and the other tools |
-| `lib/agentqueue/` | The backlog coordinator, Python with the standard library only |
+| `bin/` | The router, `agentbox`, `agentq`, the verification suites and the other tools |
+| `lib/agentqueue/` | The backlog coordinator implementation; the package name is a stable internal identifier |
 | `containers/` | The Containerfiles for the agent control plane and its sandboxes |
 | `config/sandcastle/` | The orchestration programs that run inside the control plane |
-| `config/agentqueue/` | The built-in queue policy that a repository overlays |
+| `config/agentqueue/` | The built-in queue policy; the path is a stable internal identifier |
 | `verify/` | The verification modules that `./verify.sh` runs |
 | `docs/` | Architecture, bootstrap, recovery, and the secret policy |
 | `.devbox` | The router declaration: this repository is edited in `web-dev` |

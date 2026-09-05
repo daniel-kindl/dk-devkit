@@ -47,15 +47,15 @@ Edit it only through this repository.
    checks each of these, `agentbox selftest --adversarial` proves them on a
    live machine, and `docs/sandcastle.md` says why.
 
-8. **Keep the GitHub authority on the trusted side.** `bin/agentqueue` holds
+8. **Keep the GitHub authority on the trusted side.** `bin/agentq` holds
    the `gh` sign-in, the ssh-agent and the right to push, open a pull request
    and merge. `bin/agentbox` holds none of them, and a sandbox holds nothing
    that authenticates to GitHub. Never give a sandbox a GitHub credential,
    never read a token into `lib/agentqueue`, and never let the coordinator
    write outside the `agent/` namespace. `verify.sh` module 8b checks each of
-   these, and `docs/agentqueue.md` says why.
+   these, and `docs/agentq.md` says why.
 
-   The host `agentqueue` command is a router shim and must stay one. It holds
+   The host `agentq` command is a router shim and must stay one. It holds
    no runtime, no state and no credential, and it delegates to the environment
    that `manifests/agentqueue.env` names. `verify.sh` module 8c checks that.
 
