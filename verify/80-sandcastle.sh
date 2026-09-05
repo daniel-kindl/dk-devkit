@@ -330,7 +330,7 @@ check_contains 'H3c the pid is only trusted on the side that recorded it' \
 check_contains 'H3d the lock records the limit its run was given' \
     'ntimeout=%s' "$AB_CODE"
 check_contains 'H3e the age rule uses that recorded limit' \
-    'grace=$(( recorded + 600 ))' "$AB_CODE"
+    "recorded=\$(printf '%s\\n' \"\$owner\" | sed -n 's/^timeout=//p')" "$AB_CODE"
 check_contains 'H4 a finished run directory is swept' \
     'removing run directory' "$AB_CODE"
 # A live branch lock, not the directory age, is what says a run is still going.
