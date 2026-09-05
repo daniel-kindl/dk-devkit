@@ -498,8 +498,8 @@ lock_host_id() { printf '%s:%s' "$(uname -n)" "$IN_CONTAINER"; }
 # its run directory alive and the run directory kept the lock alive, and
 # neither could ever be swept.
 lock_is_stale() {
-    local dir=$1 grace=${2:-$(( AGENTBOX_TIMEOUT_SECONDS + 600 ))}
-    local owner run_dir dir_view host pid started now
+    local dir=$1 fallback=${2:-$(( AGENTBOX_TIMEOUT_SECONDS + 600 ))}
+    local owner run_dir dir_view host pid started now recorded grace
 
     owner=$(cat -- "$dir/owner" 2>/dev/null) || return 0
     [ -n "$owner" ] || return 0
@@ -516,6 +516,15 @@ lock_is_stale() {
     if [ -n "$host" ] && [ "$host" = "$(lock_host_id)" ] && [ -n "$pid" ]; then
         kill -0 "$pid" 2>/dev/null || return 0
     fi
+
+    # The run records the limit it was given, so the age rule can use the
+    # right number instead of assuming the manifest maximum. A lock written by
+    # an earlier version records none, and falls back to that maximum.
+    recorded=$(printf '%s\n' "$owner" | sed -n 's/^timeout=//p')
+    case $recorded in
+        ''|*[!0-9]*) grace=$fallback ;;
+        *) grace=$(( recorded + 600 )) ;;
+    esac
 
     started=$(printf '%s\n' "$owner" | sed -n 's/^started=//p')
     now=$(date +%s)
@@ -548,9 +557,9 @@ take_lock() {
     fi
 
     LOCK_DIR=$dir
-    printf 'repo=%s\nbranch=%s\nrunDir=%s\nstarted=%s\npid=%s\nhost=%s\n' \
+    printf 'repo=%s\nbranch=%s\nrunDir=%s\nstarted=%s\npid=%s\nhost=%s\ntimeout=%s\n' \
         "$repo" "$branch" "$RUN_DIR_HOST" "$(date +%s)" "$$" "$(lock_host_id)" \
-        > "$dir/owner"
+        "$timeout" > "$dir/owner"
 }
 
 # --------------------------------------------- git against the disposable clone --

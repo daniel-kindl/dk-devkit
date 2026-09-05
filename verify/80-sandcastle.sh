@@ -325,6 +325,12 @@ check_contains 'H3b a lock whose process is gone is stale' \
 # exists in both namespaces and names two different processes.
 check_contains 'H3c the pid is only trusted on the side that recorded it' \
     '"$host" = "$(lock_host_id)"' "$AB_CODE"
+# The age rule has to use the limit the run was actually given, not the
+# manifest maximum, or a short run holds its branch far longer than it ran.
+check_contains 'H3d the lock records the limit its run was given' \
+    'ntimeout=%s' "$AB_CODE"
+check_contains 'H3e the age rule uses that recorded limit' \
+    'grace=$(( recorded + 600 ))' "$AB_CODE"
 check_contains 'H4 a finished run directory is swept' \
     'removing run directory' "$AB_CODE"
 # A live branch lock, not the directory age, is what says a run is still going.
