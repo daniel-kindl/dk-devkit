@@ -8,6 +8,8 @@
 //
 // What these tests exist to hold in place:
 //
+//   * a worktree Sandcastle preserves reports WHAT was left uncommitted, and
+//     an untracked directory of any size stays one line
 //   * a clone prepared the way bin/agentbox prepares one carries the neutral
 //     agent identity, and that identity is part of the baseline
 //   * an unchanged identity is NOT a violation
@@ -31,7 +33,10 @@ import { after, describe, it } from "node:test";
 import {
   diffIntegrity,
   missingIdentity,
+  PRESERVED_STATUS_LIMIT,
+  preservedWorktreeLines,
   snapshotIntegrity,
+  worktreeStatus,
 } from "../../config/sandcastle/clone-integrity.mjs";
 
 // The identity bin/agentbox sets. It is read from the manifest rather than
@@ -223,5 +228,90 @@ describe("everything else the comparison covers", () => {
       git(repo, "update-ref", AGENT_REF, "HEAD");
     });
     assert.deepEqual(violations, []);
+  });
+});
+
+// --------------------------------------------------- the preserved worktree --
+//
+// Sandcastle preserves a worktree it cannot remove cleanly. bin/agentbox then
+// removes the whole run directory, so the path in the message is gone before a
+// human reads the log. worktreeStatus is what turns "uncommitted changes" into
+// the list of files, and these tests hold that behaviour in place.
+//
+// The list must stay bounded. The first real run left 18448 untracked files in
+// the worktree, and a report that printed one line each would be useless.
+
+/** A linked worktree, made the way Sandcastle makes one. */
+const makeWorktree = (repo, branch) => {
+  const path = join(scratch, `worktree-${counter++}`);
+  git(repo, "worktree", "add", "--quiet", "-b", branch, path);
+  return path;
+};
+
+describe("the preserved worktree report", () => {
+  it("is empty for a clean worktree", () => {
+    const repo = makeClone();
+    assert.deepEqual(worktreeStatus(makeWorktree(repo, "agent/clean")), []);
+  });
+
+  it("names an untracked file", () => {
+    const repo = makeClone();
+    const wt = makeWorktree(repo, "agent/lockfile");
+    writeFileSync(join(wt, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    assert.deepEqual(worktreeStatus(wt), ["?? pnpm-lock.yaml"]);
+  });
+
+  it("names a modified tracked file", () => {
+    const repo = makeClone();
+    const wt = makeWorktree(repo, "agent/modified");
+    writeFileSync(join(wt, "a.txt"), "two\n");
+    assert.deepEqual(worktreeStatus(wt), [" M a.txt"]);
+  });
+
+  it("collapses an untracked directory to one entry whatever it holds", () => {
+    const repo = makeClone();
+    const wt = makeWorktree(repo, "agent/store");
+    const store = join(wt, ".pnpm-store", "v11", "files");
+    mkdirSync(store, { recursive: true });
+    for (let i = 0; i < 200; i++) writeFileSync(join(store, `f${i}`), "x");
+    assert.deepEqual(worktreeStatus(wt), ["?? .pnpm-store/"]);
+  });
+
+  it("reports the worktree it is given, not the clone it came from", () => {
+    const repo = makeClone();
+    const wt = makeWorktree(repo, "agent/isolated");
+    writeFileSync(join(repo, "only-in-the-clone"), "x\n");
+    assert.deepEqual(worktreeStatus(wt), []);
+  });
+
+  it("throws rather than calling an unreadable worktree clean", () => {
+    assert.throws(() => worktreeStatus(join(scratch, "does-not-exist")));
+  });
+
+  it("says so when there is nothing left to report", () => {
+    assert.deepEqual(preservedWorktreeLines([]), [
+      "  the worktree reports nothing uncommitted now",
+    ]);
+  });
+
+  it("indents every entry it prints", () => {
+    assert.deepEqual(preservedWorktreeLines(["?? pnpm-lock.yaml", " M a.txt"]), [
+      "  ?? pnpm-lock.yaml",
+      "   M a.txt",
+    ]);
+  });
+
+  it("prints the whole list when it is exactly the limit", () => {
+    const entries = Array.from({ length: PRESERVED_STATUS_LIMIT }, (_, i) => `?? f${i}`);
+    const lines = preservedWorktreeLines(entries);
+    assert.equal(lines.length, PRESERVED_STATUS_LIMIT);
+    assert.ok(!lines.some((l) => l.includes("more")), lines.join(" | "));
+  });
+
+  it("counts the rest once the list is longer than the limit", () => {
+    const entries = Array.from({ length: PRESERVED_STATUS_LIMIT + 5 }, (_, i) => `?? f${i}`);
+    const lines = preservedWorktreeLines(entries);
+    assert.equal(lines.length, PRESERVED_STATUS_LIMIT + 1);
+    assert.equal(lines.at(-1), "  ... and 5 more");
   });
 });

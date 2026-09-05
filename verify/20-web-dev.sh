@@ -40,9 +40,30 @@ check_eq "nvm is $NVM_VERSION"         "$NVM_VERSION"      "$(box_sh 'nvm --vers
 check_contains 'node comes from the isolated HOME (nvm), not the host' \
     "distrobox-homes/$BOX_NAME" "$(box_sh 'command -v node' 2>/dev/null)"
 
-for pkg in git jq gh; do
-    check "web-dev package: $pkg" -- box_sh "command -v $pkg >/dev/null"
+# --- distribution packages --------------------------------------------------
+#
+# manifests/web-dev-packages.txt is the source of truth, so it is read here
+# rather than repeated. A hardcoded list is what let podman-remote be absent
+# from a container that every other check called correct: bin/agentbox needs a
+# Podman client inside this box, nothing declared one, and module 8 reported
+# the missing client as a SKIP because a machine without Podman is allowed.
+#
+# Both halves are checked. "rpm -q" is what bootstrap/web-dev.sh converges on,
+# and "command -v" is what every caller actually needs.
+web_dev_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/web-dev-packages.txt" | awk 'NF')
+
+for pkg in $web_dev_packages; do
+    check "web-dev package: $pkg (rpm)"  -- box_sh "rpm -q $pkg >/dev/null"
+    check "web-dev package: $pkg (PATH)" -- box_sh "command -v $pkg >/dev/null"
 done
+
+# distrobox/web-dev.ini repeats the list, because the INI format cannot read a
+# file. Nothing else notices when the two drift apart, and a container created
+# from a stale .ini starts without a package the manifest requires.
+ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/web-dev.ini" |
+    tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')
+check_eq 'distrobox/web-dev.ini repeats the package manifest' \
+    "$(printf '%s\n' $web_dev_packages | sort | tr '\n' ' ')" "$ini_packages"
 
 check_contains 'git identity is configured in the box' '@' \
     "$(box_sh 'git config --get user.email' 2>/dev/null)"

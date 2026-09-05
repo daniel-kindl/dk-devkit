@@ -1,10 +1,30 @@
 # Distribution packages required inside the web-dev container.
 #
-# These are already declared in distrobox/web-dev.ini as additional_packages,
-# so a container created from that manifest gets them at creation time.
-# bootstrap/web-dev.sh re-checks them so that an EXISTING container, created
-# before a package was added here, converges without being recreated.
+# This file is the source of truth. Two other places consume it:
+#
+#   * distrobox/web-dev.ini repeats the list as additional_packages, so a
+#     container created from that manifest gets them at creation time. The
+#     format cannot read a file, so the list is literal there. verify.sh
+#     module 2 compares the two and fails when they disagree.
+#   * bootstrap/web-dev.sh re-checks every package with "rpm -q", so an
+#     EXISTING container, created before a package was added here, converges
+#     without being recreated.
+#
+# One package per line. The package name must also be the command name: the
+# verification checks both "rpm -q <name>" and "command -v <name>".
 
 git
 jq
 gh
+
+# podman-remote is a Podman client with no local engine. bin/agentbox runs
+# from inside this container, and Sandcastle's Podman provider calls the
+# client to create each sandbox as a SIBLING container on the host, through
+# the rootless API socket at /run/user/<uid>/podman/podman.sock.
+#
+# The host needs no such package: podman is part of the Bazzite base image.
+# This container is not the host, so without this line "agentbox doctor" and
+# every "agentqueue drain" stop with "no Podman client found".
+#
+# See docs/sandcastle.md, "Podman connection design".
+podman-remote

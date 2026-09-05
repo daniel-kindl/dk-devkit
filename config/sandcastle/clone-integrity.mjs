@@ -138,3 +138,61 @@ export const missingIdentity = (config, identity) => {
   const want = [`user.name=${identity?.name ?? ""}`, `user.email=${identity?.email ?? ""}`];
   return want.filter((line) => !config.includes(line));
 };
+
+/**
+ * What a worktree still has uncommitted, one porcelain line per entry.
+ *
+ * Sandcastle removes the worktree it made when the worktree is clean, and
+ * PRESERVES it when it is not. Preserving is the safe half of that choice and
+ * must stay: a worktree that still holds work is evidence, and an orchestrator
+ * that deleted one to quieten its own warning would destroy the only copy.
+ *
+ * The message alone is not enough to act on. bin/agentbox removes the whole
+ * run directory when a run succeeds, so the path the message names is gone
+ * before a human reads the log, and "uncommitted changes" never says whether
+ * that was one generated lockfile or a repository the run left broken.
+ * Reading the status here, while the worktree still exists, is what makes the
+ * answer survive the run.
+ *
+ * The untracked mode is deliberately "normal": an untracked directory
+ * collapses to one entry, so a package manager that wrote 18448 files reports
+ * one line rather than 18448.
+ *
+ * An empty array is not an error. It is what a preserved worktree looks like
+ * once the state that made it dirty is gone. A worktree git cannot read at all
+ * is a different answer, so this throws rather than reporting it as clean.
+ *
+ * git() is deliberately NOT used. Porcelain status is two columns wide, and a
+ * file that is modified but not staged reports a LEADING space (" M path").
+ * Trimming the output would eat that column on the first line only, so the
+ * same state would read differently depending on its position in the list.
+ */
+export const worktreeStatus = (worktree) =>
+  execFileSync(
+    "git",
+    ["-C", worktree, "status", "--porcelain", "--untracked-files=normal"],
+    { encoding: "utf8" },
+  )
+    .split("\n")
+    .filter(Boolean);
+
+/** How many status lines a preserved-worktree report prints before it counts
+ *  the rest. A run that left a whole dependency tree untracked must still
+ *  produce a report a human reads, not one they scroll past. */
+export const PRESERVED_STATUS_LIMIT = 20;
+
+/**
+ * The indented body of the preserved-worktree report, one string per line.
+ *
+ * Kept beside worktreeStatus, and separate from the orchestrator, so that the
+ * bound and the empty case can both be proved with no container and no model
+ * credential. The caller adds the "[agentbox]" prefix.
+ */
+export const preservedWorktreeLines = (entries, limit = PRESERVED_STATUS_LIMIT) => {
+  if (entries.length === 0) return ["  the worktree reports nothing uncommitted now"];
+  const lines = entries.slice(0, limit).map((e) => `  ${e}`);
+  if (entries.length > limit) {
+    lines.push(`  ... and ${entries.length - limit} more`);
+  }
+  return lines;
+};
