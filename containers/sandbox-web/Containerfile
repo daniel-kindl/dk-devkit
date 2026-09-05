@@ -5,7 +5,11 @@
 # Nothing in this image is trusted to survive a run.
 #
 # The image holds NO credential. The Claude token and the optional Codex key
-# arrive as environment variables at run time and are never written to a layer.
+# arrive as a read-only bind mount of one file, mode 600, at
+# /opt/agents/credential/agent.env. bin/agent-cli-shim turns that file into the
+# environment variable the CLI expects, inside the CLI's own process, so no
+# credential value is ever an argument to podman and none is in the container
+# environment. Nothing is written to a layer.
 #
 # Sandcastle's bind-mount providers require:
 #   * a non-root user, because the agent CLIs refuse to run as root
@@ -43,9 +47,11 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends gh; \
     rm -rf /var/lib/apt/lists/*
 
-# The read-only policy and skill mounts land here. Creating the mount points
-# in the image keeps the run-time mount from having to create them.
-RUN install -d -o agent -g agent /opt/agents/policy /opt/agents/skills
+# The read-only policy, skill and credential mounts land here. Creating the
+# mount points in the image keeps the run-time mount from having to create
+# them.
+RUN install -d -o agent -g agent \
+        /opt/agents/policy /opt/agents/skills /opt/agents/credential /opt/agents/bin
 
 USER agent
 WORKDIR /home/agent
@@ -54,6 +60,8 @@ ENV PATH=/home/agent/.local/bin:$PATH
 
 # The same native installers that manifests/toolchain.env pins for web-dev.
 # They self-update, so the image records what was verified, not a hard pin.
+# They run BEFORE the credential shim is on PATH, so an installer that probes
+# for an existing CLI finds the real one or nothing, never the shim.
 ARG CLAUDE_CODE_INSTALLER=https://claude.ai/install.sh
 ARG CODEX_INSTALLER=https://chatgpt.com/codex/install.sh
 RUN set -eux; \
@@ -62,10 +70,28 @@ RUN set -eux; \
     "$HOME/.local/bin/claude" --version; \
     "$HOME/.local/bin/codex" --version
 
+# The credential shim, linked under every agent CLI name. /opt/agents/bin comes
+# first on PATH from here on, so the shim runs before the real CLI does, reads
+# the mounted credential file, and execs the real CLI with the value exported
+# in that process alone.
+COPY bin/agent-cli-shim /opt/agents/bin/agent-cli-shim
+RUN set -eux; \
+    chmod 0755 /opt/agents/bin/agent-cli-shim; \
+    ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/claude; \
+    ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/codex
+ENV PATH=/opt/agents/bin:/home/agent/.local/bin:$PATH
+
+# The shim must be what PATH finds, and it must still reach the real CLI.
+RUN set -eux; \
+    test "$(command -v claude)" = /opt/agents/bin/claude; \
+    test "$(command -v codex)" = /opt/agents/bin/codex; \
+    claude --version; \
+    codex --version
+
 # The shared agent policy is mounted read-only at /opt/agents/policy. Both
 # clients read their global instructions through these links, so the sandbox
 # agent obeys the same AGENTS.md as an interactive agent.
-# /opt/agents/skills is the read-only shared skill store. Claude Code accepts
+# /opt/agents/skills is the read-only staged skill store. Claude Code accepts
 # one directory link for the whole store; Codex needs one link per skill, which
 # agentbox creates at run time in the writable home.
 RUN set -eux; \

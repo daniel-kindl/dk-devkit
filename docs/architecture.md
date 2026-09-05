@@ -167,21 +167,29 @@ unattended model output, so the control plane is a plain non-privileged OCI
 image instead.
 
 It reaches the host Podman through the rootless API socket, so each sandbox is
-a sibling container on the host rather than a nested one. That is also why the
-control plane mounts `~/projects` at its **host** path and not at `/workspace`:
-the host engine resolves a bind mount in its own namespace, where `/workspace`
-does not exist.
+a sibling container on the host rather than a nested one. Every path it is
+given is spelled the way the **host** spells it, because the host engine
+resolves a bind mount in its own namespace, where `/workspace` does not exist.
+
+The boundary is a **disposable clone**. Each run clones the target repository
+into `~/.local/share/agentbox/runs/<run-id>/repo`, and the sandbox works only
+there. The real repository is never bind-mounted, so a sandbox cannot read or
+write its `.git`, move a ref, change its config, install a hook, or touch its
+working tree: none of those paths exists inside the container. Every run proves
+that from inside the running sandbox.
+
+Afterwards the host validates the result — it must descend from the base
+commit, stay under the commit bound, carry no unexpected merge, and target an
+`agent/` branch that has not moved — and imports it with a compare-and-swap ref
+update. Nothing from the clone is executed on the host: its config is restored
+from the copy taken at clone time and its hooks are removed first. If any
+invariant is uncertain, nothing is imported.
 
 An unattended agent never receives the SSH key, the ssh-agent socket, the
-Podman socket, or a writable `~/.agents`. It cannot push, open a pull request,
-or merge on GitHub, because it holds no credential that would let it.
-
-It does receive the target repository's `.git` directory, read-write: that is
-how Sandcastle's worktree sandbox works, and it means the `agent/` branch prefix
-is a policy the orchestrator verifies after the run rather than a boundary the
-sandbox is held inside. Every run records the repository's refs, local config
-and hooks before the sandbox exists and fails if any of them moved. Point
-`agentbox` at a repository you can afford to have an unattended agent touch.
+Podman socket, the canonical `~/.agents`, or the canonical skill store. It
+cannot push, open a pull request, or merge on GitHub, because it holds no
+credential that would let it. The credential it does hold arrives as a
+read-only file, never as an argument.
 
 `docs/sandcastle.md` holds the full design and the limits.
 

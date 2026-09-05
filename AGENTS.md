@@ -37,13 +37,15 @@ Edit it only through this repository.
    router, `bin/devbox-verify` must also pass.
 
 7. **Keep the unattended agent boundary closed.** `bin/agentbox` runs model
-   output with no human watching. Never give a sandbox the SSH key, the
-   ssh-agent socket, the Podman socket, a writable `~/.agents`, or a push
-   credential. The sandbox does hold the target repository's `.git` read-write,
-   so `agent/` is a policy the orchestrator verifies after a run, not a
-   boundary: never remove that verification, and never widen what a run is
-   allowed to change. `verify.sh` module 8 checks each of these, and
-   `docs/sandcastle.md` says why.
+   output with no human watching. The boundary is a **disposable clone**: an
+   unattended sandbox never receives the real repository, its `.git`, the
+   canonical `~/.agents`, or the canonical skill store. Only commits that pass
+   host-side validation enter the real repository, and only on an `agent/`
+   branch. Never bind-mount a canonical path into a sandbox, never pass a
+   credential value as an argument, never run a command the disposable clone
+   configures, and never weaken the import validation. `verify.sh` module 8
+   checks each of these, `agentbox selftest --adversarial` proves them on a
+   live machine, and `docs/sandcastle.md` says why.
 
 8. **Do not special-case a repository.** The router already resolves an
    environment from `.devbox`, from the git-common-dir, from `repos.tsv`, and

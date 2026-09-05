@@ -28,8 +28,10 @@ host are shims that go through the router, so Orca launches an agent on the host
 and the agent runs in the correct container.
 
 Unattended agents are the other half. `agentbox` runs an agent with no human
-present, in a Podman container that is destroyed afterwards, on its own branch.
-It never pushes. Read [docs/sandcastle.md](docs/sandcastle.md).
+present, in a Podman container that is destroyed afterwards, against a
+disposable clone of the repository. The real repository is never mounted, and
+only validated commits are imported onto an `agent/` branch. It never pushes.
+Read [docs/sandcastle.md](docs/sandcastle.md).
 
 Read [docs/architecture.md](docs/architecture.md) for the full picture.
 

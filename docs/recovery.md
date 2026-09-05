@@ -139,8 +139,12 @@ agentbox build      # a few minutes; it pulls two base images
 agentbox doctor     # expect: ready
 ```
 
-`agentbox selftest --repo <a disposable repo>` proves the whole sandbox
-lifecycle without spending a token. See `docs/sandcastle.md`.
+`agentbox selftest` proves the whole sandbox lifecycle on a throw-away
+repository it creates itself, without spending a token.
+`agentbox selftest --adversarial` goes further: the sandbox attacks its own git
+directory on purpose, and the run proves that the real repository, its config,
+its hooks and its SELinux labels are all unchanged. Run both after a rebuild.
+See `docs/sandcastle.md`.
 
 ## 9. MANUAL: install and register Orca
 
@@ -190,7 +194,7 @@ run them again.
 | A client rewrote its own status line | `~/.agents/statusline/install.sh` |
 | Routing resolves the wrong environment | `devbox doctor` |
 | An unattended agent run fails to start | `agentbox doctor` |
-| A sandbox container was left behind | `agentbox clean` |
+| A sandbox container, lock or run directory was left behind | `agentbox clean`, or `agentbox clean --all` |
 | The agent images are stale | `agentbox build --force` |
 | The container is broken beyond repair | see below |
 

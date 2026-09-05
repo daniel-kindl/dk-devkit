@@ -81,16 +81,38 @@ over far more than a single run needs. When `OPENAI_API_KEY` is absent,
 `agentbox` skips the review step and says so, rather than reaching for
 `auth.json`.
 
+That file is the only source. `agentbox` does **not** take
+`ANTHROPIC_API_KEY` or any other credential from the shell that starts it: an
+interactive shell often exports one for its own use, and delegating it to an
+unattended sandbox silently is not a choice the user made. Pass
+`--use-ambient-credentials` to ask for that on purpose.
+
 A sandbox also never receives the private SSH key or the ssh-agent socket, so it
 cannot push, open a pull request, or merge on GitHub. `agentbox selftest` proves
 this from inside a running sandbox, and the same probes run on every real run.
 
+### How the credential reaches a sandbox
+
+`agentbox` copies the values it needs into
+`~/.local/share/agentbox/runs/<run-id>/creds/agent.env`, mode 600, and mounts
+that file read-only into the sandbox. The sandbox image puts a shim in front of
+`claude` and `codex` on `PATH`; the shim reads the file — it never sources it,
+because a sourced file is code — and exports the value inside the CLI's own
+process.
+
+A credential value is therefore never a `podman` argument, never in the control
+plane's environment, and never in `/proc/<pid>/cmdline`. The file is removed as
+soon as the run ends, even when the run directory is kept for inspection.
+
 Two limits belong here rather than only in `docs/sandcastle.md`:
 
-- The token is passed as `podman run -e NAME=VALUE`, so it is visible in the
-  `podman` process arguments to this user and to root.
-- Agent output is streamed without redaction. An agent that prints its
-  environment prints the token into your terminal and into any captured log.
+- Run output passes through a filter that replaces the exact configured
+  credential values before it reaches your terminal or a log. This is defense
+  in depth only. The sandbox has a network connection and holds the
+  credential, so an agent that wants to send it somewhere can.
+- The control plane can read the credential file, because Sandcastle validates
+  every sandbox mount source from inside the runner. It never puts the value
+  in an argument or in its own environment.
 
 ## Scanning
 

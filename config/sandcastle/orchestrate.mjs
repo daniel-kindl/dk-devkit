@@ -1,35 +1,37 @@
 // orchestrate.mjs - the Sandcastle control-plane program.
 //
 // It runs inside the agent-runner container, which bin/agentbox starts with
-// "podman run --rm". It reads one JSON configuration document from the
-// AGENTBOX_CONFIG environment variable and drives this lifecycle:
+// "podman run --rm". It reads one JSON configuration document from the file
+// named by AGENTBOX_CONFIG_FILE and drives this lifecycle:
 //
-//   validate repository
-//   -> create the isolated branch and worktree
+//   validate the DISPOSABLE clone
+//   -> create the isolated branch and worktree inside it
 //   -> create the Podman sandbox
+//   -> prove the real repository is not reachable from the sandbox
 //   -> run the implementer agent
 //   -> deterministic verification
 //   -> optional independent reviewer
 //   -> deterministic verification
-//   -> leave the branch for human review
 //   -> destroy the sandbox
 //
 // What it never does, by construction:
-//   * push a branch
-//   * open or merge a pull request
+//   * touch the real repository. It is never told where that repository is,
+//     beyond a list of paths it proves are ABSENT from the sandbox.
+//   * push a branch, open or merge a pull request
 //   * merge into the checked-out branch
 //
 // The branch strategy is always an explicit named branch. Sandcastle's
 // "head" and "merge-to-head" strategies are never selected here.
 //
-// What it CANNOT prevent, and checks for instead:
-//   Sandcastle's bind-mount worktree mounts <repo>/.git into the sandbox
-//   read-write, because a worktree's ".git" is only a pointer into it. An
-//   agent inside the sandbox can therefore write a ref outside "agent/",
-//   change .git/config, or install a git hook that later runs on the host.
-//   The snapshot below records every ref, the local config and the hook
-//   inventory before the sandbox exists, compares them after it is destroyed,
-//   and fails the run when anything outside the agent branch moved.
+// The git directory the sandbox holds read-write belongs to the disposable
+// clone that bin/agentbox made for this run and deletes afterwards. A ref, a
+// config entry or a hook written there reaches nothing else. bin/agentbox
+// validates the result on the host and imports only the commits that pass.
+//
+// The snapshot below is defense in depth: it records the clone's refs, config
+// and hooks before the sandbox exists and compares them after it is
+// destroyed, so a run that wrote outside its own branch says so out loud even
+// though the write could not leave the run directory.
 //
 // ESM resolves @ai-hero/sandcastle from /opt/workstation/sandcastle/node_modules,
 // which is why bin/agentbox mounts this file into that directory.
@@ -37,7 +39,7 @@
 import { createSandbox, claudeCode, codex } from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 
 // --------------------------------------------------------------- utilities --
 
@@ -62,36 +64,51 @@ const gitOrEmpty = (repo, args) => {
   }
 };
 
-// ----------------------------------------------------------- configuration --
+/** Quote one value for a POSIX shell. Every probe path comes from the host
+ *  configuration, and a path is allowed to contain a space. */
+const shq = (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 
-const raw = process.env.AGENTBOX_CONFIG;
-if (!raw) fail("AGENTBOX_CONFIG is not set");
+// ----------------------------------------------------------- configuration --
+//
+// The configuration arrives in a FILE, not in an environment variable and not
+// in an argument: a prompt can be long, and nothing about a run belongs in a
+// process listing.
+
+const configFile = process.env.AGENTBOX_CONFIG_FILE;
+if (!configFile) fail("AGENTBOX_CONFIG_FILE is not set");
 
 /** @type {{
- *   mode: "run" | "pipeline",
- *   repo: string, branch: string, prompt: string,
- *   reviewPrompt?: string, agent: string, model: string,
+ *   mode: "run" | "pipeline", runId: string,
+ *   repo: string, branch: string, baseBranch: string, baseCommit: string,
+ *   prompt: string, reviewPrompt?: string, agent: string, model: string,
  *   reviewAgent: "codex" | "claude" | "none", reviewModel: string,
- *   maxIterations: number, checks: string[],
- *   sandboxImage: string, mounts: {hostPath: string, sandboxPath: string, readonly?: boolean}[],
- *   assertIsolation: boolean, effort?: string
+ *   maxIterations: number, checks: string[], sandboxImage: string,
+ *   mounts: {hostPath: string, sandboxPath: string, readonly?: boolean}[],
+ *   assertIsolation: boolean, timeoutSeconds: number,
+ *   credentials: {claude: boolean, codex: boolean}, credentialPath: string,
+ *   forbiddenPaths: string[], effort?: string
  * }} */
-const cfg = JSON.parse(raw);
+let cfg;
+try {
+  cfg = JSON.parse(readFileSync(configFile, "utf8"));
+} catch (e) {
+  fail(`cannot read the configuration from ${configFile}: ${e.message}`);
+}
 
-// ------------------------------------------------------ repository validation --
+// ------------------------------------------ the disposable clone, validated --
 
-log(`repository       ${cfg.repo}`);
+log(`run id           ${cfg.runId}`);
+log(`disposable clone ${cfg.repo}`);
 log(`branch           ${cfg.branch}`);
+log(`base commit      ${cfg.baseCommit.slice(0, 12)}`);
 log(`sandbox image    ${cfg.sandboxImage}`);
 
-let headBefore;
 let currentBranch;
 try {
   if (git(cfg.repo, ["rev-parse", "--is-inside-work-tree"]) !== "true") {
     fail(`${cfg.repo} is not a Git working tree`);
   }
   currentBranch = git(cfg.repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  headBefore = git(cfg.repo, ["rev-parse", "HEAD"]);
 } catch (e) {
   fail(`${cfg.repo} is not a usable Git repository: ${e.message}`);
 }
@@ -99,25 +116,25 @@ try {
 if (cfg.branch === currentBranch) {
   fail(
     `refusing to run: the requested branch "${cfg.branch}" is the branch the ` +
-      `repository currently has checked out. The agent must work on a separate branch.`,
+      `disposable clone currently has checked out.`,
   );
 }
 
-log(`checked out      ${currentBranch} @ ${headBefore.slice(0, 12)}`);
+// The base commit the host resolved must be the one this clone holds. A
+// mismatch means the run directory is not the one the configuration describes.
+try {
+  git(cfg.repo, ["cat-file", "-e", `${cfg.baseCommit}^{commit}`]);
+} catch {
+  fail(`the base commit ${cfg.baseCommit} is not in ${cfg.repo}`);
+}
 
-// ------------------------------------------------- repository integrity --
+// --------------------------------------------------- clone integrity, extra --
 //
-// Sandcastle's bind-mount worktree gives the sandbox the repository's SHARED
-// git directory, read-write: a worktree's ".git" is a file pointing at
-// <repo>/.git/worktrees/<name>, so the provider mounts <repo>/.git as well.
-// Nothing inside the sandbox is therefore prevented from writing a ref
-// outside "agent/", from rewriting .git/config, or from installing a hook
-// that would later run on the HOST.
-//
-// The branch prefix is a policy, not a boundary. This snapshot is what turns
-// a violation of that policy from a silent one into a loud one: everything
-// except the agent branch is recorded before the sandbox exists and compared
-// after it is destroyed. See docs/sandcastle.md, "Honest limits".
+// bin/agentbox owns the boundary: the real repository is not mounted, and the
+// host validates every commit before it imports one. This snapshot adds a
+// second, cheaper signal. It says whether the run stayed inside its own branch
+// while it had the disposable git directory, which is what a well-behaved run
+// does and what a hostile one does not.
 
 const gitCommonDir = () =>
   git(cfg.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
@@ -135,38 +152,31 @@ const hookInventory = (commonDir) => {
     .filter((e) => e.isFile() && !e.name.endsWith(".sample"))
     .map((e) => {
       const st = statSync(`${dir}/${e.name}`);
-      return `${e.name} ${(st.mode & 0o7777).toString(8)} ${st.size} ${st.mtimeMs}`;
+      return `${e.name} ${(st.mode & 0o7777).toString(8)} ${st.size}`;
     })
     .sort();
 };
 
-/**
- * Everything the agent must not change. Taken before the sandbox is created
- * and again after it is destroyed.
- */
 const snapshotIntegrity = () => {
   const commonDir = gitCommonDir();
   return {
     commonDir,
-    // Every ref and the object it points at. The agent branch is filtered out
-    // of the comparison; every other entry must be identical.
-    refs: git(cfg.repo, [
-      "for-each-ref", "--format=%(refname) %(objectname)",
-    ]).split("\n").filter(Boolean).sort(),
-    // Which branch the primary working tree is on.
+    refs: git(cfg.repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
+      .split("\n")
+      .filter(Boolean)
+      .sort(),
     head: gitOrEmpty(cfg.repo, ["symbolic-ref", "--quiet", "HEAD"]),
-    // .git/config decides what git EXECUTES: aliases, pagers, fsmonitor,
-    // credential helpers. A change here is a host-side code-execution change.
     config: gitOrEmpty(cfg.repo, ["config", "--local", "--list"])
-      .split("\n").filter(Boolean).sort(),
+      .split("\n")
+      .filter(Boolean)
+      .sort(),
     hooks: hookInventory(commonDir),
   };
 };
 
-/** The refname the agent is allowed to create or move. */
+/** The refname the run is allowed to create or move. */
 const agentRef = `refs/heads/${cfg.branch}`;
 
-/** Compare two snapshots. Returns a list of human-readable violations. */
 const diffIntegrity = (before, after) => {
   const violations = [];
   const withoutAgentBranch = (refs) =>
@@ -198,51 +208,35 @@ const diffIntegrity = (before, after) => {
   return violations;
 };
 
-// Taken BEFORE anything is created. A repository this cannot be read from is
-// not one an unattended agent should be pointed at, so this failure is fatal
-// and happens while nothing has been changed yet.
 let integrityBefore;
 try {
   integrityBefore = snapshotIntegrity();
 } catch (e) {
-  fail(`cannot record the repository integrity baseline: ${e.message}`);
+  fail(`cannot record the clone integrity baseline: ${e.message}`);
 }
-log(`integrity baseline ${integrityBefore.refs.length} ref(s), ` +
-    `${integrityBefore.hooks.length} hook(s)`);
+
+// The clone's git directory must be inside the run directory the host made.
+// If it is not, this program is pointed at something it must not drive.
+if (!integrityBefore.commonDir.startsWith(`${cfg.repo}/`)) {
+  fail(
+    `the git directory ${integrityBefore.commonDir} is outside the disposable ` +
+      `clone ${cfg.repo}. Refusing to run.`,
+  );
+}
+log(
+  `clone baseline   ${integrityBefore.refs.length} ref(s), ` +
+    `${integrityBefore.hooks.length} hook(s)`,
+);
 
 // --------------------------------------------------------------- providers --
-
-// Credentials reach the sandbox through the SANDBOX provider, not the agent
-// provider.
 //
-// The provider builds the container with "podman run -e ...", and drives it
-// afterwards with "podman exec", which passes no environment of its own. The
-// container environment is therefore fixed when the sandbox is created. With
-// createSandbox() the agent is not known yet at that moment, so an agent
-// provider's env would arrive too late and the CLI would report "Not logged
-// in". The sandbox provider's env is applied at create time, which is what the
-// implementer and the reviewer both need.
-//
-// Sandcastle throws when the agent env and the sandbox env share a key, so the
-// credentials live in exactly one of the two: the sandbox.
+// No credential is passed here, and none is in this process's environment.
+// bin/agentbox writes the credential to a file, mode 600, and mounts that file
+// read-only into the sandbox. The sandbox image puts a shim in front of the
+// agent CLIs; the shim reads the file and exports the value in the CLI's own
+// process. A credential value is therefore never an argument to podman, never
+// in this container's environment, and never in a process listing.
 
-const claudeCredential = () => {
-  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  if (token) return { CLAUDE_CODE_OAUTH_TOKEN: token };
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (key) return { ANTHROPIC_API_KEY: key };
-  return null;
-};
-
-const codexCredential = () => {
-  const key = process.env.OPENAI_API_KEY;
-  return key ? { OPENAI_API_KEY: key } : null;
-};
-
-const credentialFor = (name) =>
-  name === "claude" ? claudeCredential() : name === "codex" ? codexCredential() : null;
-
-/** Build the agent provider. The credential is already in the container env. */
 const agentProvider = (name, model, effort) => {
   const options = effort ? { effort } : {};
   if (name === "claude") return claudeCode(model, options);
@@ -250,31 +244,28 @@ const agentProvider = (name, model, effort) => {
   return fail(`unknown agent: ${name}`);
 };
 
-// Fail before anything is created when the implementer has no credential.
-const implementCredential = credentialFor(cfg.agent);
-if (!implementCredential) {
+const hasCredential = (name) => Boolean(cfg.credentials?.[name]);
+
+if (!hasCredential(cfg.agent)) {
   fail(
     `no credential for the implementer "${cfg.agent}". Put CLAUDE_CODE_OAUTH_TOKEN ` +
       "(from 'claude setup-token') in ~/.config/agentbox/secrets.env. See docs/secrets.md.",
   );
 }
 
-// The reviewer shares the container, so its credential has to be present at
-// create time too. When it is absent the review step is skipped, not failed.
 const wantsReview = cfg.mode === "pipeline" && cfg.reviewAgent !== "none";
-const reviewCredential = wantsReview ? credentialFor(cfg.reviewAgent) : null;
+const reviewCredential = wantsReview && hasCredential(cfg.reviewAgent);
 if (wantsReview && !reviewCredential) {
   log(`no credential for "${cfg.reviewAgent}"; the review step will be skipped`);
 }
 
-const sandboxEnv = { ...implementCredential, ...(reviewCredential ?? {}) };
-
 const sandboxProvider = podman({
   imageName: cfg.sandboxImage,
-  env: sandboxEnv,
   mounts: cfg.mounts ?? [],
   // Bazzite runs SELinux. The shared label lets the rootless container read the
-  // bind mounts; it is a no-op on a system without SELinux.
+  // bind mounts; it is a no-op on a system without SELinux. Every mount source
+  // is inside the per-run directory, so the relabelling lands only on files
+  // this run created and this run deletes.
   selinuxLabel: "z",
   // The host user maps to the "agent" user of the image, so bind-mounted files
   // and image-built files both have the right owner without a chown.
@@ -286,14 +277,14 @@ const sandboxProvider = podman({
 // -------------------------------------------------------- isolation asserts --
 
 /**
- * Prove, from inside the running sandbox, that no private key material and no
- * host agent socket reached it. Returns a list of {name, ok, detail}.
+ * Prove, from inside the running sandbox, that no private key material, no
+ * host agent socket and no path belonging to the REAL repository reached it.
  */
 const assertIsolation = async (sandbox) => {
   const probes = [
     {
       name: "no ~/.ssh directory in the sandbox",
-      cmd: "test ! -e ~/.ssh && echo clean || (echo LEAK; ls -la ~/.ssh)",
+      cmd: "test ! -e ~/.ssh && echo clean || echo LEAK",
     },
     {
       name: "no private key anywhere in the sandbox home",
@@ -301,7 +292,7 @@ const assertIsolation = async (sandbox) => {
     },
     {
       name: "no ssh-agent socket forwarded",
-      cmd: "test -z \"$SSH_AUTH_SOCK\" && echo clean || echo LEAK",
+      cmd: 'test -z "$SSH_AUTH_SOCK" && echo clean || echo LEAK',
     },
     {
       name: "no Podman socket reachable from the sandbox",
@@ -309,13 +300,40 @@ const assertIsolation = async (sandbox) => {
     },
     {
       name: "shared AGENTS.md policy is readable",
-      cmd: "head -1 ~/.claude/CLAUDE.md >/dev/null && echo clean || echo MISSING",
+      cmd: "head -c 1 ~/.claude/CLAUDE.md >/dev/null 2>&1 && echo clean || echo MISSING",
     },
     {
-      name: "shared skills are readable",
-      cmd: "test -d ~/.claude/skills && ls ~/.claude/skills | head -1 >/dev/null && echo clean || echo MISSING",
+      name: "the git directory belongs to the disposable clone",
+      cmd:
+        `case "$(git rev-parse --path-format=absolute --git-common-dir)" in ` +
+        `${shq(cfg.repo)}/*) echo clean ;; *) echo LEAK ;; esac`,
     },
   ];
+
+  // The whole point of the redesign: none of these paths exists in here.
+  for (const p of cfg.forbiddenPaths ?? []) {
+    probes.push({
+      name: `the host path ${p} is absent from the sandbox`,
+      cmd: `test ! -e ${shq(p)} && echo clean || echo LEAK`,
+    });
+  }
+
+  if ((cfg.mounts ?? []).some((m) => m.sandboxPath === "/opt/agents/skills")) {
+    probes.push({
+      name: "shared skills are readable",
+      cmd: "test -d ~/.claude/skills && echo clean || echo MISSING",
+    });
+  }
+
+  if (cfg.credentialPath) {
+    probes.push({
+      name: "the credential arrived as a file, not as an environment variable",
+      cmd:
+        `test -s ${shq(cfg.credentialPath)} && ` +
+        `test -z "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY$OPENAI_API_KEY" ` +
+        `&& echo clean || echo LEAK`,
+    });
+  }
 
   const results = [];
   for (const p of probes) {
@@ -323,8 +341,8 @@ const assertIsolation = async (sandbox) => {
     const out = `${r.stdout}${r.stderr}`.trim();
     results.push({
       name: p.name,
-      ok: r.exitCode === 0 && out.startsWith("clean"),
-      detail: out.split("\n")[0] ?? "",
+      ok: r.exitCode === 0 && out.split("\n").pop() === "clean",
+      detail: out.split("\n").pop() ?? "",
     });
   }
   return results;
@@ -349,25 +367,37 @@ const runChecks = async (sandbox, label) => {
 };
 
 // --------------------------------------------------------------------- main --
+//
+// bin/agentbox holds the authoritative wall-clock limit around this whole
+// container. The AbortController below is the polite half of the same limit:
+// it stops the agent at the deadline so the sandbox can still be destroyed
+// and the summary can still be printed.
+
+const deadlineMs = Math.max(30, (cfg.timeoutSeconds ?? 3600) - 60) * 1000;
+const abort = new AbortController();
+const deadline = setTimeout(() => {
+  log(`the wall-clock limit of ${cfg.timeoutSeconds}s is reached; stopping the agent`);
+  abort.abort(new Error("agentbox wall-clock timeout"));
+}, deadlineMs);
+deadline.unref?.();
 
 const summary = {
+  runId: cfg.runId,
   repo: cfg.repo,
   branch: cfg.branch,
+  baseCommit: cfg.baseCommit,
   mode: cfg.mode,
-  headBefore,
-  currentBranch,
   implement: null,
   checksAfterImplement: [],
   review: null,
   checksAfterReview: [],
   isolation: [],
   commits: [],
+  resultCommit: null,
   checksPassed: null,
   sandboxDestroyed: false,
-  headAfter: null,
-  mainUnchanged: null,
-  integrityViolations: null,
-  repositoryIntact: null,
+  cloneIntegrityViolations: null,
+  cloneIntact: null,
 };
 
 let sandbox;
@@ -377,6 +407,7 @@ try {
   log("creating the sandbox (isolated branch, worktree and container)");
   sandbox = await createSandbox({
     branch: cfg.branch,
+    baseBranch: cfg.baseBranch,
     sandbox: sandboxProvider,
     cwd: cfg.repo,
   });
@@ -401,6 +432,7 @@ try {
     prompt: cfg.prompt,
     maxIterations: cfg.maxIterations ?? 1,
     logging: { type: "stdout" },
+    signal: abort.signal,
   });
   summary.implement = {
     iterations: impl.iterations.length,
@@ -417,7 +449,7 @@ try {
     if (!reviewCredential) {
       log(
         `skipping the independent review: no credential for "${cfg.reviewAgent}". ` +
-          "The implementation branch is still left for human review.",
+          "The implementation branch is still validated and left for human review.",
       );
       summary.review = { skipped: true, reason: "no credential" };
     } else {
@@ -428,6 +460,7 @@ try {
         prompt: cfg.reviewPrompt,
         maxIterations: 1,
         logging: { type: "stdout" },
+        signal: abort.signal,
       });
       summary.review = {
         skipped: false,
@@ -441,6 +474,7 @@ try {
   process.stderr.write(`[agentbox] run failed: ${err?.stack ?? err}\n`);
   exitCode = 1;
 } finally {
+  clearTimeout(deadline);
   if (sandbox) {
     log("destroying the sandbox");
     try {
@@ -459,10 +493,9 @@ try {
 // ------------------------------------------------------------- final report --
 
 try {
-  summary.headAfter = git(cfg.repo, ["rev-parse", "HEAD"]);
-  summary.mainUnchanged = summary.headAfter === headBefore;
+  summary.resultCommit = git(cfg.repo, ["rev-parse", `refs/heads/${cfg.branch}`]);
   summary.commits = git(cfg.repo, [
-    "log", "--format=%H", `${headBefore}..${cfg.branch}`,
+    "log", "--format=%H", `${cfg.baseCommit}..${cfg.branch}`,
   ])
     .split("\n")
     .filter(Boolean);
@@ -470,43 +503,38 @@ try {
   // The branch may not exist when the run failed before the worktree was made.
 }
 
-// -------------------------------------------------- repository integrity --
-//
-// The sandbox held the repository's shared git directory read-write, so the
-// agent/ prefix could not stop a write outside it. This is the check that says
-// whether one happened. It runs AFTER teardown, and it fails the run: a
-// repository whose refs, config or hooks moved is one a human must look at
-// before trusting anything on the branch.
+// The clone the sandbox held is disposable, so a write outside the agent
+// branch reached nothing. It is still a signal worth failing on: a run that
+// tried is a run whose result a human should look at before trusting it.
 try {
   const violations = diffIntegrity(integrityBefore, snapshotIntegrity());
-  summary.integrityViolations = violations;
-  summary.repositoryIntact = violations.length === 0;
+  summary.cloneIntegrityViolations = violations;
+  summary.cloneIntact = violations.length === 0;
   if (violations.length > 0) {
     exitCode = 1;
-    log(`REPOSITORY INTEGRITY FAILED: ${violations.length} change(s) outside ${cfg.branch}`);
+    log(`DISPOSABLE CLONE INTEGRITY FAILED: ${violations.length} change(s) outside ${cfg.branch}`);
     for (const v of violations) log(`  ! ${v}`);
-    log("Inspect the repository before you use this branch.");
+    log("The real repository is unaffected: it was never mounted. Nothing will be imported.");
   } else {
-    log(`repository integrity: intact (nothing changed outside ${cfg.branch})`);
+    log(`disposable clone integrity: intact (nothing changed outside ${cfg.branch})`);
   }
 } catch (err) {
   // Not being able to answer the question is a failure, not a pass.
   exitCode = 1;
-  summary.repositoryIntact = false;
-  summary.integrityViolations = [`the integrity check could not run: ${err?.message}`];
-  log(`REPOSITORY INTEGRITY UNKNOWN: ${err?.message}`);
+  summary.cloneIntact = false;
+  summary.cloneIntegrityViolations = [`the integrity check could not run: ${err?.message}`];
+  log(`DISPOSABLE CLONE INTEGRITY UNKNOWN: ${err?.message}`);
 }
 
-// A failing check is a RESULT, not a crash: the branch is still left for a
-// human either way. The reviewer is deliberately still run, because its job
-// includes fixing a defect the checks found. The exit code stays 0 for a run
-// that completed; the summary says whether the checks passed.
+// A failing check is a RESULT, not a crash: the commits are still validated
+// and imported either way, and the branch is left for a human. The reviewer is
+// deliberately still run, because its job includes fixing a defect the checks
+// found. The summary says whether the checks passed.
 const allChecks = [...summary.checksAfterImplement, ...summary.checksAfterReview];
 summary.checksPassed = allChecks.every((c) => c.exitCode === 0);
 const failedChecks = allChecks.filter((c) => c.exitCode !== 0);
 
-log(`branch left for human review: ${cfg.branch} (${summary.commits.length} commit(s))`);
-log(`checked-out branch unchanged: ${summary.mainUnchanged}`);
+log(`commits on ${cfg.branch}: ${summary.commits.length}`);
 if (allChecks.length === 0) {
   log(
     (cfg.checks ?? []).length === 0

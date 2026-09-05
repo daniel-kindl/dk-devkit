@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# agent-cli-shim - give an agent CLI its credential without an argument.
+#
+# agentbox never passes a credential as "podman run -e NAME=VALUE", because a
+# value in an argument is a value in a process listing. It writes the
+# credential to a file, mode 600, and mounts that file read-only at
+# /opt/agents/credential/agent.env. This shim is what turns the file back into
+# the environment variable the CLI expects, inside the CLI's own process.
+#
+# /opt/agents/bin comes before ~/.local/bin on PATH, and this file is linked
+# there as "claude" and as "codex". The shim therefore runs whenever the
+# orchestrator asks for either CLI, and execs the real one afterwards.
+#
+# The file is READ, never sourced. A sourced file is code: a credential
+# carrying a shell metacharacter would run. This reads KEY=VALUE lines and
+# exports them verbatim, so no value can be interpreted.
+
+set -u
+
+CREDENTIAL_FILE=${AGENTBOX_CREDENTIAL_FILE:-/opt/agents/credential/agent.env}
+REAL_BIN_DIR=${AGENTBOX_REAL_BIN_DIR:-/home/agent/.local/bin}
+
+name=${0##*/}
+
+if [ -r "$CREDENTIAL_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case $line in
+            ''|'#'*) continue ;;
+            *=*) ;;
+            *) continue ;;
+        esac
+        key=${line%%=*}
+        value=${line#*=}
+        # A name that is not a shell name is not exported. The file is written
+        # by agentbox, and this is what keeps a damaged one from doing harm.
+        case $key in
+            *[!A-Za-z0-9_]*|[0-9]*|'') continue ;;
+        esac
+        export "$key=$value"
+    done < "$CREDENTIAL_FILE"
+fi
+
+exec "$REAL_BIN_DIR/$name" "$@"

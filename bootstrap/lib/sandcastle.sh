@@ -15,6 +15,15 @@ install_agentbox() {
 
     link_into "$repo_root/bin/agentbox" "$home/.local/bin/agentbox"
 
+    # The per-run scratch area. Every disposable clone, every staged copy of
+    # the agent policy and every per-run credential file lives under here, and
+    # only paths under here ever receive a container SELinux label. It is
+    # created with mode 700: a run directory holds a credential file for as
+    # long as the run lasts.
+    local state_dir=$home/.local/share/agentbox
+    ensure_dir "$state_dir"
+    run chmod 700 -- "$state_dir"
+
     # The credential file lives outside this repository, and only the user may
     # read it. bootstrap creates the directory and a commented template; the
     # values stay a manual step, exactly like gh and claude authentication.

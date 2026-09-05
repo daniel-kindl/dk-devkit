@@ -7,12 +7,122 @@ environment that owns a repository. `devbox` does that, and a human watches the
 result.
 
 This subsystem adds the other half: an **unattended** agent. It runs with no
-human at the keyboard, in a container that is destroyed afterwards, on a branch
-that no human is using. The tool is `bin/agentbox`, and it drives
+human at the keyboard, in a container that is destroyed afterwards, against a
+**disposable clone** of a repository. Only commits that pass validation on the
+host reach the real repository, and only on an `agent/` branch. The tool is
+`bin/agentbox`, and it drives
 [Sandcastle](https://github.com/mattpocock/sandcastle) (`@ai-hero/sandcastle`).
 
     devbox     interactive agent   ->  a long-lived development environment
-    agentbox   unattended agent    ->  a disposable sandbox, one branch, no push
+    agentbox   unattended agent    ->  a disposable clone, one branch, no push
+
+## The boundary
+
+This is the most important section. Everything else follows from it.
+
+    real repository
+      -> the host clones it into ~/.local/share/agentbox/runs/<run-id>/repo
+      -> Sandcastle runs only against that disposable clone
+      -> the agent commits inside the disposable clone
+      -> the host validates the result
+      -> validated commits are imported as one agent/<name> branch
+      -> the clone, the sandbox and the run directory are removed
+
+**The real repository is never bind-mounted into a sandbox.** Its path is not
+in any `-v` argument, its `.git` is not reachable, and its working tree does
+not exist inside the container. A sandbox therefore cannot:
+
+| The sandbox cannot | Why not |
+| --- | --- |
+| read or write `<real-repo>/.git` | the path does not exist inside it |
+| move any ref in the real repository | same |
+| change the real repository's git config | same |
+| install a hook in the real repository | same |
+| change the checked-out working tree | same |
+| escape by running `git update-ref`, writing `.git/config`, or writing `.git/hooks/*` | every one of those hits the disposable clone |
+
+Every run proves the first five from inside the running sandbox: `agentbox`
+passes the real repository path, `~/.agents` and the canonical skill store as
+`forbiddenPaths`, and the orchestrator asserts that none of them exists there.
+`agentbox selftest --adversarial` proves the sixth by carrying the attack out.
+
+The clone is made with `git clone --no-hardlinks`. That flag is not a
+preference. A local clone hardlinks its object files by default, so the clone
+and the real repository would share inodes, and a write through the clone
+would be a write to a real object. `--template=` points at an empty directory,
+so the clone gets no sample hooks, and the `origin` remote is removed
+immediately: nothing inside the disposable clone names the repository it came
+from.
+
+### What the sandbox still gets
+
+The disposable clone's `.git` directory, read-write. That is unavoidable: a
+git worktree carries no object store of its own.
+`<clone>/.sandcastle/worktrees/<branch>/.git` is a **file** holding one line,
+`gitdir: <clone>/.git/worktrees/<branch>`, and Sandcastle's
+`resolveGitMounts()` follows that pointer and mounts both. The difference from
+the old design is what that git directory belongs to: a clone this run made
+and this run deletes, not the repository a human works in.
+
+## Commit transfer
+
+The transfer is the one place where anything from the sandbox enters the real
+repository. It runs on the **host**, in `bin/agentbox`, after the sandbox is
+destroyed.
+
+### Nothing from the clone is executed
+
+Everything a git repository can configure is a command git would otherwise
+run: an alias, a pager, an fsmonitor, a clean or smudge filter, a credential
+helper, an upload-pack hook, a hook script. The clone was writable by the
+sandbox, so all of them are treated as hostile.
+
+`sanitize_clone` removes `hooks/`, `worktrees/`, `modules/`,
+`objects/info/alternates` and `config.worktree`, and restores `.git/config`
+from the byte-for-byte copy the host took at clone time. It then **proves** the
+restore: the config must compare equal to the pristine copy, the hook
+directory must be empty, and the alternates file must be gone. A mismatch is a
+refusal, not a repair.
+
+Every host git command against the clone additionally runs with
+`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null`,
+`GIT_ASKPASS=/bin/false`, `GIT_SSH_COMMAND=/bin/false`,
+`GIT_ALLOW_PROTOCOL=file`, and a `core.hooksPath` pointing at an empty
+directory the host created and no container ever saw.
+
+### What is validated
+
+Nothing is imported unless every one of these holds:
+
+1. the agent branch exists in the clone and names a commit
+2. that commit descends from the base commit the run started at
+3. the range holds at least one commit and at most `--max-commits`
+   (`AGENTBOX_MAX_COMMITS`, default 20)
+4. the range holds no merge commit, unless `--allow-merges` was passed
+5. the target branch is inside `agent/` and passes `git check-ref-format`
+6. the real repository's refs, `HEAD`, config, hooks and working tree are
+   byte-for-byte what they were when the run started
+7. the target ref is still exactly what it was when the run started
+
+The objects then move with one `git fetch` from the clone into a temporary
+`refs/agentbox/import/<run-id>`, with `fetch.fsckObjects` and
+`transfer.fsckObjects` on, so a malformed object graph is rejected before any
+branch moves. The fetched commit is compared against the validated one.
+
+The branch update is the compare-and-swap form:
+
+    git update-ref refs/heads/<branch> <new> <old>
+
+An empty `<old>` means the ref must not exist. This enforces invariant 7 a
+second time, atomically, so a ref that moved between the check and the write
+fails the write instead of being clobbered.
+
+Afterwards the repository is compared against the baseline once more, and the
+run fails if anything other than `refs/heads/<branch>` differs.
+
+**If any invariant is uncertain, nothing is imported.** A run that fails, times
+out, or cannot be validated leaves the real repository exactly as it was and
+keeps the run directory for inspection.
 
 ## The four layers
 
@@ -49,7 +159,21 @@ So the control plane is a plain OCI image instead:
 `containers/agent-runner/Containerfile`. It is not privileged, it runs as
 uid 1000, and `podman run --rm` destroys it when the run ends.
 
-The other reason is path arithmetic, below.
+## What the control plane gets
+
+Narrow, and only from the run directory:
+
+    <run-dir>/repo         the disposable clone, read-write
+    <run-dir>/staging      the staged policy, skills, orchestrator and config, read-only
+    <run-dir>/creds        the per-run credential file, read-only
+    /run/user/1000/podman/podman.sock   the Podman API socket
+
+It does **not** get `~/projects`, a sibling repository, this checkout, `~/.ssh`,
+an ssh-agent socket, or a writable `~/.agents`. It is never told where the real
+repository is, beyond the list of paths it proves are absent from the sandbox.
+
+`verify.sh` module 8 reads every `-v` argument in `bin/agentbox` and fails if
+one of them names anything but the socket, the clone, or the run directory.
 
 ## Podman connection design
 
@@ -74,126 +198,110 @@ nested child. Nothing needs nesting privilege.
 The runner image installs the same `podman-remote` version that the host runs,
 so the client and the API server agree.
 
-### Host and container repository paths
-
-This is the part that a remapped mount breaks.
+### Host and container paths
 
 `web-dev` mounts the host `~/projects` at `/workspace`. Both spellings reach the
 same directory *from inside the container*, but only one of them exists for the
 host Podman engine:
 
-    podman run -v /home/dkindl/projects/workstation:/mnt ...   works
-    podman run -v /workspace/workstation:/mnt ...              statfs: no such file or directory
+    podman run -v /home/dkindl/.local/share/agentbox/runs/x/repo:/mnt ...  works
+    podman run -v /workspace/...:/mnt                                     statfs: no such file or directory
 
-The control plane therefore mounts `~/projects` at the **identical host path**,
-not at `/workspace`. There is exactly one spelling of every repository path, and
-it is the one the host engine understands. `agentbox` also translates a
-`/workspace/...` argument back to its host spelling before it uses it, so the
-command works from either side.
+`agentbox` therefore tracks two spellings of every path: `*_HOST`, which Podman
+is told, and `*_VIEW`, which this side opens with `cat`, `git` and `mkdir`.
+Inside `web-dev` the view spelling goes through `/run/host`.
 
-Sandcastle puts each worktree under the repository it came from:
-
-    <repo>/.sandcastle/worktrees/<branch>
-
-That path is inside `~/projects`, so the host engine can mount it. Every
-repository that `agentbox` drives must ignore `.sandcastle/`.
+Because the real repository is no longer mounted, it no longer has to live
+under `~/projects`, and it no longer has to ignore `.sandcastle/`: Sandcastle's
+worktrees are created inside the disposable clone.
 
 ## The lifecycle
 
 `agentbox pipeline` runs this, in order:
 
-1. validate the repository, and refuse when the requested branch is the one that
-   is checked out
-2. create the isolated branch and worktree
-3. create the Podman sandbox
-4. run the implementer agent (Claude)
-5. deterministic verification
-6. optional independent reviewer (Codex)
-7. deterministic verification
-8. leave the branch for human review
-9. destroy the sandbox
-10. compare the repository against the baseline taken at step 1, and fail the
-    run when anything outside the agent branch moved
+1. validate the branch name, resolve the base commit, and take the branch lock
+2. record the real repository's refs, `HEAD`, config, hooks and working tree
+3. clone the repository into the run directory with `--no-hardlinks`
+4. stage the agent policy, the skills, the orchestrator and the configuration
+5. write the per-run credential file, mode 600
+6. start the control plane with a wall-clock limit
+7. create the isolated branch, worktree and Podman sandbox inside the clone
+8. prove no key material, no Podman socket and no real repository path reached
+   the sandbox
+9. run the implementer agent (Claude)
+10. deterministic verification
+11. optional independent reviewer (Codex)
+12. deterministic verification
+13. destroy the sandbox
+14. compare the real repository against the baseline; it must be identical
+15. sanitize the clone, validate the result, and import it as `agent/<name>`
+16. compare again; exactly one ref may have moved
+17. remove the credential file, the clone and the run directory
 
 The branch strategy is always an explicit named branch. Sandcastle's `head` and
 `merge-to-head` strategies are never selected, so nothing `agentbox` configures
 merges into the checked-out branch.
 
-`agentbox` refuses any branch that does not start with `agent/`, and refuses any
-name `git check-ref-format` rejects. That prefix is in
-`manifests/sandcastle.env`.
+## The run directory
 
-Read the next section before you rely on that prefix.
+    ~/.local/share/agentbox/runs/<run-id>/
+        repo/       the disposable clone
+        staging/    policy, skills, orchestrator and the run configuration
+        creds/      the per-run credential file, mode 600
+        meta/       the integrity snapshots and the pristine clone config
 
-## The branch prefix is a policy, not a boundary
+    ~/.local/share/agentbox/locks/<key>.lock
 
-This is the most important limit in the design, and the one that is easiest to
-read past.
+Nothing here is a canonical workstation path. That is the point: see SELinux,
+below.
 
-A git worktree does not carry its own object store. `<repo>/.sandcastle/worktrees/<branch>/.git`
-is a **file** holding one line:
+The credential file is removed as soon as the control plane exits, even when
+the run directory is kept for inspection. A successful run removes the whole
+directory; a failed one keeps it and says where it is. `agentbox clean` sweeps
+run directories older than a day, and `agentbox clean --all` sweeps all of
+them, along with every lock and every stray container.
 
-    gitdir: <repo>/.git/worktrees/<branch>
+## SELinux
 
-Sandcastle's bind-mount provider follows that pointer. `resolveGitMounts()`
-reads the file, resolves the parent, and mounts **both**:
+Sandcastle's Podman provider takes a `selinuxLabel` option and defaults it to
+`"z"`. `agentbox` passes `"z"` as well, because without it SELinux denies the
+rootless container access to the bind mounts. `formatVolumeMount()` appends the
+flag to **every** mount, so `podman` relabels each mount source on the host,
+recursively and permanently.
 
-    <worktree>/.git   ->  the same path in the sandbox
-    <repo>/.git       ->  the same path in the sandbox
+That is why no canonical path is a mount source any more. Every sandbox mount
+comes out of the run directory:
 
-Neither mount is read-only. So a process inside the sandbox holds the
-repository's shared ref database and object store, read-write, and can:
+    <run-dir>/repo/.sandcastle/worktrees/<branch>   the worktree
+    <run-dir>/repo/.git                             the disposable git directory
+    <run-dir>/staging/policy                        a copy of config/agents
+    <run-dir>/staging/skills                        a copy of the skill store
+    <run-dir>/creds                                 the credential file
 
-- write any ref, including `refs/heads/main`, with `git update-ref`
-- rewrite `.git/config`, where an `alias`, `core.pager` or `core.fsmonitor`
-  value is a command that git later runs **on the host**
-- install a `.git/hooks/` script that the next human `git commit` runs on the
-  host
+The canonical `config/agents`, the canonical `~/.agents/skills`, the real
+repository and its `.git` are **copied from, never mounted**. After a run they
+carry exactly the labels they carried before it, and the paths that were
+relabelled no longer exist.
 
-`agentbox` cannot remove those mounts without leaving Sandcastle's worktree
-model, so it does the next best thing: it **detects** the abuse and fails.
-Before the sandbox exists, `orchestrate.mjs` records every ref and its object,
-the branch `HEAD` points at, the local `git config`, and an inventory of
-`.git/hooks`. After the sandbox is destroyed it takes the same record and
-compares. Anything that moved outside the agent branch is printed as a
-violation and the run exits non-zero.
+`agentbox selftest --adversarial` records the recursive contexts of the real
+repository, of `config/agents` and of the skill store before the run, reads
+them again afterwards, and fails on any difference.
 
-That converts a silent compromise into a loud one. It does not prevent it.
-
-**Point `agentbox` at a repository you are willing to have an unattended agent
-touch.** A clone you can throw away is the safe choice; the repository you are
-working in is not.
-
-## What never enters a sandbox
-
-| Never | Why |
-| --- | --- |
-| the private SSH key | it stays on the host, as `docs/secrets.md` requires |
-| the ssh-agent socket | an unattended agent must not be able to authenticate as the user |
-| the Podman socket | a sandbox that can reach it can create any container |
-| `~/.claude/.credentials.json` | the interactive session credential is not the unattended one |
-| `~/.codex/auth.json` | a full ChatGPT sign-in is more than a sandbox needs |
-| a writable `~/.agents` | an agent must not rewrite the policy that governs it |
-
-Because the sandbox holds no push credential, it **cannot** push to GitHub,
-open a pull request, or merge there, even if a prompt told it to.
-
-What it does receive, and what the table above does not cover, is the
-repository's own `.git` directory, read-write. See "The branch prefix is a
-policy, not a boundary". The sandbox has a network, so "it cannot reach GitHub"
-is false; "it cannot authenticate to GitHub" is what holds.
-
-`agentbox selftest` proves each row of the table from inside a running sandbox,
-and the isolation probes run on every `run` and `pipeline` as well. Pass
-`--no-isolation-check` to skip them.
+The control plane keeps one deliberate relaxation: it runs with
+`--security-opt label=disable`, because SELinux denies a confined container
+process the `connect()` on the Podman socket, and the alternative is the
+host-wide `container_connect_any` boolean. The **sandboxes keep their full
+SELinux confinement**; Sandcastle never passes that flag, and `verify.sh`
+module 8 fails if a second `label=disable` appears in `bin/agentbox`.
 
 ## Policy and skills in a sandbox
 
-The sandbox agent obeys the same rules as an interactive one. Two read-only
-mounts do that:
+The sandbox agent obeys the same rules as an interactive one. Each run copies
+the policy and the skills into its own staging directory and mounts the
+**copies** read-only:
 
-    config/agents            -> /opt/agents/policy   (from this checkout)
-    ~/.agents/skills         -> /opt/agents/skills   (the shared skill store)
+    config/agents/AGENTS.md  -> <run-dir>/staging/policy/  -> /opt/agents/policy  (ro)
+    ~/.agents/skills         -> <run-dir>/staging/skills/  -> /opt/agents/skills  (ro)
 
 The image links both into place:
 
@@ -201,8 +309,8 @@ The image links both into place:
     ~/.codex/AGENTS.md   -> /opt/agents/policy/AGENTS.md
     ~/.claude/skills     -> /opt/agents/skills
 
-Both mounts are read-only on both hops: into the runner, and from the runner
-into the sandbox.
+An agent therefore cannot rewrite the policy that governs it, and cannot reach
+the canonical store that every interactive agent on this machine reads.
 
 ## Credentials
 
@@ -216,121 +324,127 @@ never writes a value.
 | Claude | `ANTHROPIC_API_KEY` | an API key, as an alternative |
 | Codex | `OPENAI_API_KEY` | an API key |
 
-`agentbox` passes only the variables an agent needs, as environment variables on
-the container. Nothing is written to disk in the repository or in a worktree.
+That file is the **only** source. An interactive shell often exports
+`ANTHROPIC_API_KEY` for its own use, and taking it silently would hand an
+unattended sandbox a credential the user did not choose to delegate.
+`--use-ambient-credentials` asks for that on purpose.
 
-They reach the sandbox through the **sandbox** provider, not the agent provider.
-Sandcastle builds the container with `podman run -e ...` and drives it afterwards
-with `podman exec`, which passes no environment of its own, so the container
-environment is fixed at creation time. `createSandbox()` does not know the agent
-yet at that moment, so an agent provider's `env` arrives too late and the CLI
-reports `Not logged in`. Sandcastle also throws when the two `env` maps share a
-key, so the credentials live in exactly one of them.
+### No credential value is ever an argument
 
-One consequence: the implementer and the reviewer share a container, so a
-configured `OPENAI_API_KEY` is present for the whole run, not only during the
-review step. That is the cost of keeping both agents on one branch in one
-sandbox.
+`agentbox` copies the values it needs into `<run-dir>/creds/agent.env`, mode
+600, and mounts that file read-only into the sandbox at
+`/opt/agents/credential/agent.env`. The sandbox image puts
+`/opt/agents/bin/agent-cli-shim` in front of `claude` and `codex` on `PATH`.
+The shim **reads** the file — it never sources it, because a sourced file is
+code — parses `KEY=VALUE` lines, exports them, and execs the real CLI.
+
+The value is therefore:
+
+- never in a `podman` argument, on either hop
+- never in the control plane's environment
+- never in `/proc/<pid>/cmdline`
+
+The orchestrator asserts this from inside the sandbox on every run: the
+credential file must be present and `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` must all be empty in the container
+environment.
+
+### Output redaction
+
+Everything the control plane writes passes through a filter that replaces the
+exact configured credential values with `[redacted credential]` before the
+output reaches the terminal or a log. The values are exported into the filter,
+not passed as arguments.
+
+**This is defense in depth, and nothing more.** The sandbox has a network
+connection and holds the credential, so an agent that wants to exfiltrate it
+can. Redaction stops the accidental case, where a tool prints its own
+environment into the run log. It does not stop a deliberate one.
+
+### Sharing
+
+The implementer and the reviewer share a container, so a configured
+`OPENAI_API_KEY` is present for the whole run, not only during the review step.
+That is the cost of keeping both agents on one branch in one sandbox.
 
 When `OPENAI_API_KEY` is absent, the pipeline **skips** the review step and says
-so. The implementation branch is still left for a human. This is deliberate:
-delegating the interactive ChatGPT sign-in to a disposable sandbox is a larger
-exposure than an independent review is worth.
+so. The implementation branch is still validated and imported. This is
+deliberate: delegating the interactive ChatGPT sign-in to a disposable sandbox
+is a larger exposure than an independent review is worth.
 
-## What a run changes on the host
+## Runtime controls
 
-Two host-side effects outlive a run. Neither is a bug in `agentbox`, and both
-are easy to be surprised by.
+| Control | What it does |
+| --- | --- |
+| `--timeout SECONDS` | wall-clock limit for the whole run; `AGENTBOX_TIMEOUT_SECONDS` sets the default. `timeout --kill-after=30s` bounds the control plane, and the orchestrator aborts the agent a minute earlier so the sandbox can still be destroyed cleanly |
+| branch lock | two runs cannot claim the same branch of the same repository. A lock whose run directory is gone, or which is older than the run could be, is broken once and reported |
+| `--max-commits N` | the import bound |
+| `--allow-merges` | accepts merge commits in the imported range |
+| `--check CMD` | a deterministic check. A newline in the argument is refused, not split into two checks |
+| `INT` and `TERM` | remove the control plane, remove this run's sandboxes, remove the credential file, release the lock |
+| `agentbox clean` | sweeps stray containers, stale locks and stale run directories |
 
-### Every bind mount is relabelled
+`--max-iterations` bounds the number of agent turns; `--timeout` bounds how
+long they may take in total.
 
-Sandcastle's Podman provider takes a `selinuxLabel` option and defaults it to
-`"z"`. `agentbox` passes `"z"` as well, because without it SELinux denies the
-rootless container access to the bind mounts. `formatVolumeMount()` appends the
-flag to **every** mount, so `podman` relabels each mount source on the host,
-recursively:
+## What never enters a sandbox
 
-    <repo>/.sandcastle/worktrees/<branch>    the worktree
-    <repo>/.git                              the shared git directory
-    <this checkout>/config/agents            the shared policy
-    ~/.agents/skills                         the shared skill store
+| Never | Why |
+| --- | --- |
+| the real repository, or its `.git` | the boundary this design exists for |
+| the private SSH key | it stays on the host, as `docs/secrets.md` requires |
+| the ssh-agent socket | an unattended agent must not be able to authenticate as the user |
+| the Podman socket | a sandbox that can reach it can create any container |
+| `~/.claude/.credentials.json` | the interactive session credential is not the unattended one |
+| `~/.codex/auth.json` | a full ChatGPT sign-in is more than a sandbox needs |
+| the canonical `~/.agents` or skill store | an agent must not rewrite the policy that governs it, and a mount would relabel it |
+| a credential in an argument or an environment variable | it would appear in a process listing |
 
-Those paths change from `user_home_t` to `container_file_t` and **stay**
-changed after the run. The lower-case `z` is the *shared* label, so every other
-container on the machine can then read them; `:ro` makes the mount read-only
-inside this container, it does not make the host label read-only.
+Because the sandbox holds no push credential, it **cannot** push to GitHub,
+open a pull request, or merge there, even if a prompt told it to. The sandbox
+does have a network, so "it cannot reach GitHub" is false; "it cannot
+authenticate to GitHub" is what holds.
 
-Check what a run relabelled:
-
-```bash
-ls -dZ ~/.agents/skills ~/projects/<repo>/.git
-```
-
-Restore a path when you want the original type back:
-
-```bash
-restorecon -R -v ~/.agents/skills
-```
-
-`restorecon` is a no-op for anything under `/run/user/<uid>/`: the shipped
-`file_contexts` maps `/run/user/[^/]+/.+` to `<<none>>`, so there is no
-default context to restore. Recreate the file instead — for the Podman API
-socket, `systemctl --user restart podman.socket`.
-
-### The control plane's one deliberate relaxation
-
-The control plane runs with `--security-opt label=disable`.
-
-SELinux denies a confined container process the `connect()` on the Podman
-socket, and the alternative is the host-wide `container_connect_any` boolean,
-which would apply to every container on the machine. The narrower change is the
-one flag, on the one container that already holds container-creation authority.
-
-The **sandboxes keep their full SELinux confinement**. Sandcastle never passes
-that flag, and `verify.sh` module 8 fails if a second `label=disable` ever
-appears in `bin/agentbox`.
+`agentbox selftest` proves each row from inside a running sandbox, and the same
+probes run on every `run` and `pipeline`. Pass `--no-isolation-check` to skip
+them.
 
 ## Honest limits
 
-- **The sandbox holds `<repo>/.git` read-write.** The `agent/` prefix is a
-  policy the orchestrator checks afterwards, not a boundary the sandbox is held
-  inside. A `.git/config` or `.git/hooks` write is host-side code execution the
-  next time a human runs git in that repository. See "The branch prefix is a
-  policy, not a boundary". Use a disposable clone.
+- **The sandbox has an unrestricted network.** The Podman provider passes no
+  `--network`, so the sandbox reaches the internet, which is what the agent CLI
+  needs. It cannot *authenticate* to GitHub, because it holds no key and no
+  token; it can still reach any public host, and it can send the credential it
+  holds anywhere. Output redaction does not change this.
 - A process that can reach the Podman socket can create a privileged container.
   The control plane holds that authority by necessity, because Sandcastle has to
   create containers. Keeping it non-privileged limits what a bug in the runner
   reaches; it does not change what a deliberate misuse of the socket could do.
   Do not add anything else to the runner image that does not need to be there.
-- A run relabels its bind mount sources on the host and does not put them back.
-  See "What a run changes on the host".
-- **The sandbox has an unrestricted network.** The Podman provider passes no
-  `--network`, so the sandbox reaches the internet, which is what the agent CLI
-  needs. It cannot *authenticate* to GitHub, because it holds no key and no
-  token; it can still reach any public host.
-- **The credential is visible in a process listing.** `agentbox` passes the
-  token as `-e NAME=VALUE`, so it appears in the `podman` client's `argv` and in
-  `/proc/<pid>/cmdline`, readable by the same user and by root. Sandcastle
-  passes the sandbox environment the same way inside the runner.
-- **Agent output is not redacted.** The runner streams the agent's stdout
-  straight through. An agent that prints its own environment prints the token
-  with it, into your terminal and into anything capturing that output.
-- **There is no wall-clock timeout.** `--max-iterations` bounds the number of
-  agent turns, not how long one takes.
+- The control plane can read the per-run credential file, because Sandcastle
+  validates every sandbox mount source from inside the runner. It never places
+  the value in an argument or in its own environment.
+- A full clone per run costs disk and time proportional to the repository. The
+  run directory is removed on success and kept on failure; `agentbox clean`
+  sweeps what a killed process left.
+- A run imports the committed state only. Uncommitted work in the real
+  repository is not visible to the agent, because the clone starts from a
+  commit.
 - The images are built locally and are not signed. The base images are floating
   tags, not digests, and the sandbox image installs the Claude and Codex CLIs
   from an installer script fetched at build time.
-- `agentbox` runs one sandbox per invocation. Parallel runs are possible because
-  each takes its own branch, but nothing schedules them yet, and nothing locks a
-  branch against a second run using the same name.
+- Parallel runs are possible: each takes its own branch, its own run directory
+  and its own lock. Nothing schedules them.
 
 ## Commands
 
 ```bash
-agentbox build                    # build the runner and sandbox images
-agentbox doctor                   # what is ready, what is missing
-agentbox selftest --repo PATH     # prove the sandbox lifecycle, no credential
-agentbox clean                    # remove stray sandbox and control-plane containers
+agentbox build                      # build the runner and sandbox images
+agentbox doctor                     # what is ready, what is missing
+agentbox selftest                   # prove the lifecycle on a throw-away repository
+agentbox selftest --adversarial     # attack the git directory and prove it reached nothing
+agentbox clean                      # remove stray containers, stale locks and run dirs
+agentbox clean --all                # remove every run directory and lock as well
 
 agentbox run \
   --repo ~/projects/example \
@@ -342,7 +456,23 @@ agentbox pipeline \
   --branch agent/example \
   --prompt-file ./prompt.md \
   --check 'npm test' \
-  --check 'npm run typecheck'
+  --check 'npm run typecheck' \
+  --timeout 1800
 ```
 
 `agentbox help` lists every option.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 2 | usage error |
+| 3 | the repository argument is not a usable Git repository |
+| 4 | a required image is missing |
+| 5 | no usable Podman connection |
+| 6 | a credential is missing or has the wrong permissions |
+| 7 | refused: the branch is unsafe |
+| 8 | the agent run itself failed; nothing was imported |
+| 9 | the result was refused at import; the real repository did not change |
+| 10 | the run passed its wall-clock limit; nothing was imported |
+| 11 | another run holds the branch |

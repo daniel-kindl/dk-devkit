@@ -4,36 +4,44 @@
 // agentbox lifecycle except the agent invocation itself, so it needs no model
 // credential and costs nothing:
 //
-//   create the isolated branch and worktree
+//   create the isolated branch and worktree inside the DISPOSABLE clone
 //   -> create the Podman sandbox
 //   -> prove no key material and no Podman socket reached the sandbox
-//   -> prove the shared policy and skills are readable inside the sandbox
+//   -> prove no path of the REAL repository is reachable from the sandbox
+//   -> prove the staged policy and skills are readable
 //   -> run the deterministic checks
-//   -> prove the checked-out branch did not move
-//   -> destroy the sandbox and remove the temporary branch
+//   -> make one ordinary commit, so the host has something to import
+//   -> destroy the sandbox
 //
-// bin/agentbox selftest drives it.
+// bin/agentbox selftest drives it, and then proves on the HOST that the real
+// repository did not move and that the commit imports cleanly.
 
 import { createSandbox } from "@ai-hero/sandcastle";
 import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const log = (m) => process.stdout.write(`[selftest] ${m}\n`);
 const git = (repo, args) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+const shq = (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 
-const cfg = JSON.parse(process.env.AGENTBOX_CONFIG ?? "{}");
+const configFile = process.env.AGENTBOX_CONFIG_FILE;
+if (!configFile) {
+  process.stderr.write("[selftest] error: AGENTBOX_CONFIG_FILE is not set\n");
+  process.exit(1);
+}
+const cfg = JSON.parse(readFileSync(configFile, "utf8"));
 if (!cfg.repo) {
-  process.stderr.write("[selftest] error: AGENTBOX_CONFIG has no repo\n");
+  process.stderr.write("[selftest] error: the configuration has no repo\n");
   process.exit(1);
 }
 
-const branch = cfg.branch ?? `agent/selftest-${Date.now()}`;
+const branch = cfg.branch;
 const headBefore = git(cfg.repo, ["rev-parse", "HEAD"]);
-const branchBefore = git(cfg.repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
 
-log(`repository       ${cfg.repo}`);
-log(`checked out      ${branchBefore} @ ${headBefore.slice(0, 12)}`);
+log(`disposable clone ${cfg.repo}`);
+log(`base commit      ${headBefore.slice(0, 12)}`);
 log(`sandbox branch   ${branch}`);
 log(`sandbox image    ${cfg.sandboxImage}`);
 
@@ -55,15 +63,31 @@ const PROBES = [
    "test ! -e /run/user/1000/podman/podman.sock && echo clean || echo LEAK"],
   ["no credential file from the host home",
    "test ! -e ~/.claude/.credentials.json && test ! -e ~/.codex/auth.json && echo clean || echo LEAK"],
-  ["the shared AGENTS.md policy is readable",
+  ["no credential in the sandbox environment",
+   'test -z "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY$OPENAI_API_KEY" && echo clean || echo LEAK'],
+  ["the staged AGENTS.md policy is readable",
    "head -c 1 ~/.claude/CLAUDE.md >/dev/null 2>&1 && echo clean || echo MISSING"],
-  ["the shared skill store is readable",
-   "test -d ~/.claude/skills && echo clean || echo MISSING"],
   ["the sandbox is not privileged",
    "if capsh --print 2>/dev/null | grep -q 'cap_sys_admin'; then echo LEAK; else echo clean; fi"],
-  ["the repository worktree is mounted and is a git worktree",
+  ["the worktree is mounted and is a git worktree",
    "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && echo clean || echo MISSING"],
+  ["the git directory belongs to the disposable clone",
+   `case "$(git rev-parse --path-format=absolute --git-common-dir)" in ${shq(cfg.repo)}/*) echo clean ;; *) echo LEAK ;; esac`],
 ];
+
+if ((cfg.mounts ?? []).some((m) => m.sandboxPath === "/opt/agents/skills")) {
+  PROBES.push([
+    "the staged skill store is readable",
+    "test -d ~/.claude/skills && echo clean || echo MISSING",
+  ]);
+}
+
+for (const p of cfg.forbiddenPaths ?? []) {
+  PROBES.push([
+    `the host path ${p} is absent from the sandbox`,
+    `test ! -e ${shq(p)} && echo clean || echo LEAK`,
+  ]);
+}
 
 let sandbox;
 let exitCode = 0;
@@ -72,6 +96,7 @@ try {
   log("creating the sandbox");
   sandbox = await createSandbox({
     branch,
+    baseBranch: cfg.baseBranch,
     cwd: cfg.repo,
     sandbox: podman({
       imageName: cfg.sandboxImage,
@@ -103,23 +128,16 @@ try {
     record(`check: ${cmd}`, r.exitCode === 0, `exit ${r.exitCode}`);
   }
 
-  // Writing inside the sandbox must not reach the checked-out branch.
-  await sandbox.exec("printf 'selftest\\n' > SELFTEST_MARKER.txt");
-  const headDuring = git(cfg.repo, ["rev-parse", "HEAD"]);
-  record("the checked-out branch does not move while the sandbox runs",
-    headDuring === headBefore, `${headDuring.slice(0, 12)} vs ${headBefore.slice(0, 12)}`);
-
-  // The primary working tree must be untouched. Sandcastle keeps its own
-  // worktrees and logs under .sandcastle/, which every repository that uses
-  // agentbox ignores; that entry is expected and is not an agent edit.
-  const dirty = git(cfg.repo, ["status", "--porcelain"])
-    .split("\n")
-    .filter((l) => l.trim() !== "" && !l.includes(".sandcastle/"));
-  record("the primary working tree stays clean", dirty.length === 0, dirty[0] ?? "");
-
-  // Leave the worktree clean so Sandcastle can remove it on close, which in
-  // turn lets the temporary branch be deleted.
-  await sandbox.exec("rm -f SELFTEST_MARKER.txt");
+  // One ordinary commit, so the host side has a real result to validate and
+  // import. Everything up to here proved what the sandbox cannot reach; this
+  // proves the path that a real run takes.
+  log("making one commit inside the sandbox");
+  const commit = await sandbox.exec(
+    "printf 'selftest\\n' > AGENTBOX_SELFTEST.txt && git add AGENTBOX_SELFTEST.txt && " +
+      "git commit -q -m 'agentbox selftest' && git rev-parse HEAD",
+  );
+  record("the sandbox produced a commit", commit.exitCode === 0,
+    `${commit.stdout}${commit.stderr}`.trim().split("\n").pop() ?? "");
 } catch (err) {
   process.stderr.write(`[selftest] failed: ${err?.stack ?? err}\n`);
   exitCode = 1;
@@ -134,38 +152,6 @@ try {
       exitCode = 1;
     }
   }
-}
-
-// The sandbox container must be gone.
-try {
-  const left = execFileSync("podman",
-    ["ps", "-a", "--filter", "name=^sandcastle-", "--format", "{{.Names}}"],
-    { encoding: "utf8" }).trim();
-  record("no sandbox container is left behind", left === "", left);
-} catch (err) {
-  record("no sandbox container is left behind", false, err?.message ?? "");
-}
-
-// The temporary branch is ours; remove it so the pilot repo stays tidy.
-try {
-  const headAfter = git(cfg.repo, ["rev-parse", "HEAD"]);
-  record("the checked-out branch is unchanged after teardown",
-    headAfter === headBefore, `${headAfter.slice(0, 12)} vs ${headBefore.slice(0, 12)}`);
-  // "git branch -D" is a force delete. It runs only against a branch this
-  // selftest made, and the prefix is what proves that: a configuration that
-  // named an existing branch must not be able to turn teardown into a delete
-  // of someone's work.
-  if (cfg.removeBranch !== false) {
-    if (!branch.startsWith("agent/")) {
-      log(`refusing to delete "${branch}": it is not an agent/ branch`);
-    } else {
-      try { git(cfg.repo, ["worktree", "prune"]); } catch { /* nothing to prune */ }
-      try { git(cfg.repo, ["branch", "-D", branch]); log(`removed the temporary branch ${branch}`); }
-      catch { /* the branch may never have been created */ }
-    }
-  }
-} catch (err) {
-  record("the checked-out branch is unchanged after teardown", false, err?.message ?? "");
 }
 
 const failed = results.filter((r) => !r.ok);

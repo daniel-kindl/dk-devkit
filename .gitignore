@@ -94,7 +94,9 @@ AppImages/
 # --- third-party skill payloads and repository worktrees ---
 /skills/
 .worktrees/
-# Sandcastle's scratch area: agent worktrees, run logs and patches.
+# Sandcastle's scratch area. agentbox creates it inside its per-run disposable
+# clone under ~/.local/share/agentbox, never here, but a repository that
+# agentbox targets still keeps the entry.
 .sandcastle/
 
 # --- OS noise ---
