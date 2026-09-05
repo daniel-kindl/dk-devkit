@@ -37,6 +37,8 @@ from typing import List, Optional, Sequence
 
 from .model import Comment, Issue
 
+# These markers are a durable wire-format identifier. Keep them stable so
+# claims written by agentqueue remain readable after the CLI became agentq.
 CLAIM_MARKER = "<!-- agentqueue:claim v1 -->"
 RELEASE_MARKER = "<!-- agentqueue:release v1 -->"
 
@@ -165,7 +167,7 @@ def claim_body(claim: Claim) -> str:
     }
     return (
         f"{CLAIM_MARKER}\n"
-        "**agentqueue** claimed this issue for an unattended implementation run.\n\n"
+        "**agentq** claimed this issue for an unattended implementation run.\n\n"
         f"- run `{claim.run_id}`\n"
         f"- branch `{claim.branch}`\n"
         f"- base commit `{claim.base_commit[:12]}`\n"
@@ -187,7 +189,7 @@ def release_body(run_id: str, issue: int, outcome: str, detail: str) -> str:
     }
     return (
         f"{RELEASE_MARKER}\n"
-        f"**agentqueue** released this issue. Outcome: **{outcome}**.\n\n"
+        f"**agentq** released this issue. Outcome: **{outcome}**.\n\n"
         f"{detail}\n\n"
         "```json\n" + json.dumps(payload, sort_keys=True) + "\n```\n"
     )
@@ -241,9 +243,6 @@ class ClaimStore:
         self.github.remove_label(issue_number, self.policy.inProgressLabel)
 
 
-# ------------------------------------------------------------- local lock --
-
-
 class LocalLockError(Exception):
     pass
 
@@ -289,7 +288,7 @@ class LocalLock:
             os.mkdir(self.dir)
         except FileExistsError:
             if not self.is_stale():
-                raise LocalLockError(f"another agentqueue run holds {self.dir}")
+                raise LocalLockError(f"another agentq run holds {self.dir}")
             import shutil
 
             shutil.rmtree(self.dir, ignore_errors=True)
