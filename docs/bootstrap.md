@@ -75,7 +75,7 @@ It refuses to run on the host.
 
 | Step | Idempotency check |
 | --- | --- |
-| Distribution packages | `rpm -q` |
+| Distribution packages | `rpm -q`, from `manifests/web-dev-packages.txt` |
 | nvm | `test -s $NVM_DIR/nvm.sh` |
 | Shell integration | skipped when `~/.bashrc` already loads nvm |
 | Node | `nvm version <v>` |

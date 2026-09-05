@@ -50,7 +50,9 @@ import {
   diffIntegrity,
   git,
   missingIdentity,
+  preservedWorktreeLines,
   snapshotIntegrity,
+  worktreeStatus,
 } from "./clone-integrity.mjs";
 
 // --------------------------------------------------------------- utilities --
@@ -387,6 +389,42 @@ const deadline = setTimeout(() => {
 }, deadlineMs);
 deadline.unref?.();
 
+// -------------------------------------------------- the preserved worktree --
+//
+// Sandcastle keeps a worktree it cannot remove cleanly instead of deleting it.
+// That is correct, and it is not weakened here. What is added is the evidence:
+// the run directory, and the preserved worktree inside it, are removed by
+// bin/agentbox as soon as the run succeeds, so a bare path in the log points
+// at nothing by the time anyone reads it.
+//
+// Two producers are already known and neither is a defect in this program:
+//
+//   * .pnpm-store/ - pnpm put its content-addressable store in the repository
+//     because the worktree is its own mount point. The sandbox image pins
+//     store-dir, so this appears only on an image built before SANDBOX_TAG
+//     0.2.0.
+//   * pnpm-lock.yaml - "pnpm install" writes it, and a repository that
+//     neither commits nor ignores its lockfile leaves it untracked on every
+//     run. That is the target repository's gap to close, not this one's.
+//
+// Anything else on this list is worth a human's attention, which is the whole
+// reason the list is printed.
+
+const reportPreservedWorktree = (path) => {
+  log(`worktree preserved (uncommitted changes): ${path}`);
+  let entries;
+  try {
+    entries = worktreeStatus(path);
+  } catch (err) {
+    summary.preservedWorktree = { path, entries: null, error: String(err?.message ?? err) };
+    log(`  the status of the worktree could not be read: ${err?.message ?? err}`);
+    return;
+  }
+  summary.preservedWorktree = { path, entries };
+  for (const line of preservedWorktreeLines(entries)) log(line);
+  log("  nothing here is imported, and the run directory removes it");
+};
+
 const summary = {
   runId: cfg.runId,
   repo: cfg.repo,
@@ -407,6 +445,7 @@ const summary = {
   sandboxDestroyed: false,
   cloneIntegrityViolations: null,
   cloneIntact: null,
+  preservedWorktree: null,
 };
 
 let sandbox;
@@ -531,7 +570,7 @@ try {
       const closed = await sandbox.close();
       summary.sandboxDestroyed = true;
       if (closed?.preservedWorktreePath) {
-        log(`worktree preserved (uncommitted changes): ${closed.preservedWorktreePath}`);
+        reportPreservedWorktree(closed.preservedWorktreePath);
       }
     } catch (err) {
       process.stderr.write(`[agentbox] sandbox teardown failed: ${err?.message}\n`);

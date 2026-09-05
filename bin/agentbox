@@ -249,8 +249,10 @@ require_podman() {
     resolve_podman && return 0
     fail 5 'no Podman client found' \
         'On the Bazzite host, podman is part of the base image.' \
-        'Inside a container, install podman-remote and make sure' \
-        "the host socket is reachable at $PODMAN_SOCKET"
+        'Inside web-dev, podman-remote is declared in' \
+        'manifests/web-dev-packages.txt. Converge the container with:' \
+        '  bootstrap/web-dev.sh' \
+        "The host socket must also be reachable at $PODMAN_SOCKET"
 }
 
 podman_() { require_podman; "$PODMAN_BIN" "$@"; }

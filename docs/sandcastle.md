@@ -130,12 +130,44 @@ That is an image change, so `SANDBOX_TAG` moves with it. Run `agentbox build`
 before the next run; a run against an image that does not exist stops with exit
 code 4 and says so.
 
-A second untracked file can survive this, and `agentbox` should NOT remove it.
-`pnpm install` writes `pnpm-lock.yaml`, so a repository that does not commit
-its lockfile can leave that one file untracked, which is enough on its own for
-Sandcastle to preserve the worktree. That is the repository's own gap. The run
-that verified this fix did not reproduce it - only the store was left behind
-the first time - so treat it as a case to expect rather than a certainty.
+A second untracked file survives this, and `agentbox` must NOT remove it.
+`pnpm install` writes `pnpm-lock.yaml`, so a repository that neither commits
+nor ignores its lockfile leaves that one file untracked, which is enough on its
+own for Sandcastle to preserve the worktree. That is the target repository's
+gap to close, not this one's.
+
+This is no longer a case to expect. Two runs against `daniel-kindl/dkkb` on
+`SANDBOX_TAG` 0.2.0 both reported a preserved worktree, and `dkkb` neither
+tracks nor ignores its lockfile. The store was gone; the lockfile was not.
+
+### A preserved worktree reports what it holds
+
+Preserving a dirty worktree is the safe half of the choice, and it stays. An
+orchestrator that removed one to quieten its own warning would destroy the only
+copy of whatever the run left behind.
+
+The message on its own could not be acted on. `bin/agentbox` removes the whole
+run directory as soon as a run succeeds, so the path the message named pointed
+at nothing by the time anyone read the log, and "uncommitted changes" never
+said whether that was one generated lockfile or a repository the run had
+broken.
+
+`orchestrate.mjs` therefore reads `git status --porcelain` in the worktree
+while it still exists, prints the entries, and publishes them in the run
+summary as `preservedWorktree`:
+
+```
+[agentbox] worktree preserved (uncommitted changes): /.../worktrees/agent-issue-87-...
+[agentbox]   ?? pnpm-lock.yaml
+[agentbox]   nothing here is imported, and the run directory removes it
+```
+
+The untracked mode is `normal`, so an untracked directory collapses to one
+entry: the store that once produced 18448 files reports `?? .pnpm-store/` and
+nothing more. Past twenty entries the rest is counted rather than printed.
+`worktreeStatus` lives in `clone-integrity.mjs` so that
+`verify/probes/clone-integrity.test.mjs` can prove each of those rules with no
+container and no model credential.
 
 A preserved worktree is harmless either way: it lives inside the run directory,
 the host reads the branch and not the worktree, `sanitize_clone` removes
@@ -279,6 +311,27 @@ nested child. Nothing needs nesting privilege.
 
 The runner image installs the same `podman-remote` version that the host runs,
 so the client and the API server agree.
+
+### The client is provisioned, not assumed
+
+`bin/agentbox` itself runs from inside `web-dev`, one hop before the runner, and
+it needs a client there for the same reason. The Bazzite host needs no package
+for this - `podman` is part of the base image - so the requirement is easy to
+miss, and it was: `web-dev` declared only `git`, `jq` and `gh`, and the first
+`agentqueue drain` stopped with
+
+    agentbox: no Podman client found
+
+`podman-remote` is therefore declared in `manifests/web-dev-packages.txt`, which
+is the source of truth, and repeated in `distrobox/web-dev.ini` so that a newly
+created container has it at creation time. `bootstrap/web-dev.sh` converges an
+existing container from the manifest with `rpm -q`, so no `dnf install` is ever
+run by hand.
+
+`verify.sh` module 2 reads the manifest instead of a list of its own, and
+compares it against the `.ini` so the two cannot drift. Module 8 checks the
+declaration separately, because its `agentbox doctor` check correctly SKIPS on a
+machine that has no Podman at all and so can never catch a missing package.
 
 ### Host and container paths
 

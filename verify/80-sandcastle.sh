@@ -241,6 +241,18 @@ check_contains 'D19 the sandbox pins a pnpm store outside the repository' \
 check_contains 'D20 that store lives in the sandbox home' \
     '/home/agent/.config/pnpm/rc' "$SANDBOX_CF"
 
+# A worktree Sandcastle could not remove cleanly is PRESERVED, and that stays.
+# What the run must also say is WHAT was left in it: bin/agentbox removes the
+# whole run directory as soon as the run succeeds, so the path in the message
+# points at nothing by the time a human reads the log.
+INTEG=$(code_of "$SC_DIR/clone-integrity.mjs")
+check_contains 'D21 a preserved worktree is reported by content' \
+    'worktreeStatus' "$ORCH"
+check_contains 'D22 the report keeps an untracked directory to one line' \
+    'untracked-files=normal' "$INTEG"
+check_not_contains 'D23 the orchestrator never cleans a preserved worktree' \
+    'git clean' "$ORCH"
+
 # --- the agent cannot reach main --------------------------------------------
 
 check_not_contains 'E1 the orchestrator never pushes'     'git push'      "$ORCH"
@@ -551,6 +563,22 @@ if [ "$probe_rc" = 0 ]; then
 else
     fail 'L2 a real disposable clone starts with the agent identity' \
         "$(printf '%s\n' "$probe_out" | grep -A2 '  FAIL' | head -9 | tr '\n' ' ')"
+fi
+
+# --- the Podman client is provisioned, not assumed ---------------------------
+#
+# agentbox runs from inside web-dev, and Sandcastle's Podman provider calls a
+# client there to create each sandbox on the host engine. The host needs no
+# package for that; the container does, and nothing used to declare one. K1
+# below cannot catch it, because a machine with no Podman is a legitimate
+# state and K1 correctly skips. This check reads the declaration instead, so
+# it fails on every machine when the requirement is dropped.
+if grep -qx 'podman-remote' "$REPO_ROOT/manifests/web-dev-packages.txt"; then
+    pass 'K0 the web-dev package manifest declares a Podman client'
+else
+    fail 'K0 the web-dev package manifest declares a Podman client' \
+        'bin/agentbox runs inside web-dev and needs podman-remote there.' \
+        'Add it to manifests/web-dev-packages.txt and distrobox/web-dev.ini.'
 fi
 
 # --- the machine side, when Podman is reachable -----------------------------
