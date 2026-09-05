@@ -629,6 +629,10 @@ agentqueue drain --repo . --json      # one JSON object per event
 | `--quiet` | failures, human intervention and the summary |
 | `--json` | one JSON object per event, and nothing else |
 
+One mode at a time. The four are one group on the command line, `--json`
+included, so `--json --verbose` is refused rather than silently ignored:
+`--json` is not a louder or quieter terminal, it is a different reader.
+
 `--quiet` hides progress, never a failure. A failing check, a `NEEDS_HUMAN`
 outcome and a security stop are printed at every level.
 
@@ -769,6 +773,12 @@ finish that call, and nothing is pushed or merged afterwards.
 Two issues at a time cannot share one active line, so the output changes shape:
 the compact view becomes purely line-oriented, every line names its issue, and
 the heartbeat is off. See "A terminal, a file and a pipe".
+
+Every piece of per-issue progress is held per thread, in the coordinator and in
+both renderers, so one issue can never report another's stage, iteration or
+result. The queue-wide counters behind `[2/5]` are taken under a lock. The
+tests force a real overlap with a barrier to prove it, because two issues run
+one after the other would prove nothing.
 
 ## Honest limits
 

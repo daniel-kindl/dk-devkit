@@ -92,6 +92,10 @@ def build_parser() -> argparse.ArgumentParser:
 
         The levels differ only in what reaches the terminal. The run log holds
         the whole transcript at every level, so a quiet run loses no evidence.
+
+        --json belongs to the same group as the other three. It is not a
+        louder or quieter terminal, it is a different reader, and "--json
+        --verbose" has no meaning to give.
         """
         level = p.add_mutually_exclusive_group()
         level.add_argument("--quiet", "-q", action="store_true",
@@ -100,8 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="the stage view and the coordinator's own notes")
         level.add_argument("--debug", action="store_true",
                            help="everything, including the raw agentbox stream")
-        p.add_argument("--json", dest="json_out", action="store_true",
-                       help="one JSON object per event, for a machine")
+        level.add_argument("--json", dest="json_out", action="store_true",
+                           help="one JSON object per event, for a machine")
 
     def common(p):
         p.add_argument("--repo", required=True, help="the repository to work on")

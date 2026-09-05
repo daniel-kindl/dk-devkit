@@ -648,8 +648,27 @@ class JsonUi(NullUi):
         self.stream = stream
         self.transcript = transcript
         self._lock = threading.RLock()
-        self._issue = 0
-        self._stage = ""
+        # Which issue and which stage this THREAD is reporting on. Several
+        # issues at a time means several threads write to the same stream, and
+        # an event carrying another thread's issue number would be worse than
+        # an event carrying none: it would be a wrong answer, not a missing one.
+        self._local = threading.local()
+
+    @property
+    def _issue(self) -> int:
+        return getattr(self._local, "issue", 0)
+
+    @_issue.setter
+    def _issue(self, number: int) -> None:
+        self._local.issue = number
+
+    @property
+    def _stage(self) -> str:
+        return getattr(self._local, "stage", "")
+
+    @_stage.setter
+    def _stage(self, name: str) -> None:
+        self._local.stage = name
 
     def _emit(self, event: str, **fields) -> None:
         record = {"time": _iso_now(), "event": event}

@@ -207,6 +207,20 @@ check_contains 'P14 the queue transcript is readable by its owner only' \
 check_contains 'P15 a dry run writes no transcript' '_NoRunLog' \
     "$(aq_code_of "$AQ_LIB/cli.py")"
 
+# Two issues at a time means two threads reach the display and the progress
+# bookkeeping. State that is per RUN must be per thread, or one issue reports
+# another's progress, which is a wrong answer rather than a missing one.
+COORD_CODE_ALL=$(aq_code_of "$AQ_LIB/coordinator.py")
+CLI_CODE_ALL=$(aq_code_of "$AQ_LIB/cli.py")
+check_contains 'P15a the phases one agentbox run reported are per thread' \
+    'self._agent_events = threading.local()' "$COORD_CODE_ALL"
+check_contains 'P15b the queue-wide counters are taken under a lock' \
+    'with self._book:' "$COORD_CODE_ALL"
+check_contains 'P15c the JSON stream attributes an event per thread' \
+    'self._local = threading.local()' "$UI_CODE"
+check_contains 'P15d the output modes are one group, --json included' \
+    'level.add_argument("--json"' "$CLI_CODE_ALL"
+
 # The four levels exist, and they are the only four.
 if command -v python3 >/dev/null 2>&1; then
     check_eq 'P16 the output levels are quiet, compact, verbose and debug' \

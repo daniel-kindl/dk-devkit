@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from typing import Dict, List, Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +52,11 @@ class FakeGitHub:
         self._next_pull = 500
         self.merge_calls: List[tuple] = []
         self.merge_should_conflict = False
+        # maxParallel above 1 drives this double from several threads. The
+        # counters below hand out identities, and two issues that were given
+        # the same pull request number would be a defect of the double, not of
+        # the coordinator.
+        self._counters = threading.Lock()
 
     # ------------------------------------------------------------ helpers --
 
@@ -139,11 +145,13 @@ class FakeGitHub:
 
     def create_comment(self, number, body):
         self._mutate(f"comment on #{number}")
-        self._next_comment += 1
+        with self._counters:
+            self._next_comment += 1
+            identity = self._next_comment
         self.comments.setdefault(number, []).append(
-            Comment(self._next_comment, body, "agentqueue", "")
+            Comment(identity, body, "agentqueue", "")
         )
-        return self._next_comment
+        return identity
 
     def delete_comment(self, comment_id):
         self._mutate(f"delete comment {comment_id}")
@@ -159,11 +167,13 @@ class FakeGitHub:
 
     def create_pull(self, title, body, head, base):
         self._mutate(f"open a pull request for {head}")
-        self._next_pull += 1
+        with self._counters:
+            self._next_pull += 1
+            number = self._next_pull
         pull = PullRequest(
-            self._next_pull, "OPEN", head, base,
+            number, "OPEN", head, base,
             self.head_sha_for(head), False, "MERGEABLE", "CLEAN",
-            f"https://example.invalid/pull/{self._next_pull}",
+            f"https://example.invalid/pull/{number}",
         )
         self.pulls[pull.number] = pull
         return pull

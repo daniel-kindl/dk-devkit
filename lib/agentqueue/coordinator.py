@@ -28,6 +28,7 @@ import dataclasses
 import datetime
 import os
 import socket
+import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -139,14 +140,28 @@ class Coordinator:
             policy.dependencySources, github.blocked_by, github.get_issue
         )
         self.scheduler = Scheduler(policy, self.resolver, None if dry_run else self.claims)
+        # The queue-wide bookkeeping behind "[2/5]". Several issues at a time
+        # means several threads reach it, so it is taken under a lock.
+        self._book = threading.Lock()
         self._processed: List[int] = []
         self._position = 0
         self._total = 0
-        # Which phases the current agentbox run reported for itself. A phase
-        # agentbox announced is not announced a second time by the coordinator.
-        self._seen_events: set = set()
+        # Which phases the agentbox run of THIS issue reported for itself. A
+        # phase agentbox announced is not announced a second time by the
+        # coordinator. It is per thread, because with maxParallel above 1 two
+        # issues run at once and one issue's phases must never answer for
+        # another's.
+        self._agent_events = threading.local()
 
     # ------------------------------------------------------------- scanning --
+
+    def _seen(self) -> set:
+        """The phases the current thread's agentbox run has published."""
+        seen = getattr(self._agent_events, "seen", None)
+        if seen is None:
+            seen = set()
+            self._agent_events.seen = seen
+        return seen
 
     def base_ref(self) -> str:
         return f"refs/remotes/origin/{self.policy.baseBranch}"
@@ -192,7 +207,10 @@ class Coordinator:
             # The total an issue carries in "[2/5]". A merge can make more
             # issues runnable, so the total grows rather than being guessed at
             # once and then being wrong.
-            self._total = max(self._total, len(self._processed) + len(runnable))
+            with self._book:
+                self._total = max(
+                    self._total, len(self._processed) + len(runnable)
+                )
             self.ui.wave(report.waves, wave)
             try:
                 results = self._run_wave(wave)
@@ -239,15 +257,17 @@ class Coordinator:
     }
 
     def _guarded(self, number: int) -> IssueResult:
-        self._processed.append(number)
-        self._position += 1
+        with self._book:
+            self._processed.append(number)
+            self._position += 1
+            position = self._position
+            total = max(self._total, position)
         title = ""
         try:
             title = self.github.get_issue(number).title
         except Exception:
             pass
-        total = max(self._total, self._position)
-        self.ui.issue_start(self._position, total, number, title)
+        self.ui.issue_start(position, total, number, title)
         stop = None
         try:
             result = self.process_issue(number)
@@ -437,7 +457,7 @@ class Coordinator:
                     log_path=agent_run.log_path,
                 )
                 return self._after_failed_agent(issue, run_id, result, agent_run)
-            if "implement.done" not in self._seen_events:
+            if "implement.done" not in self._seen():
                 # agentbox published no event for this phase, so the
                 # coordinator states the result itself. One line either way.
                 self.ui.stage(
@@ -627,7 +647,7 @@ class Coordinator:
             branch, path, continuation=True, log_name=f"repair-{attempt}",
             run_dir=run_dir,
         )
-        if run.outcome is Outcome.SUCCESS and "implement.done" not in self._seen_events:
+        if run.outcome is Outcome.SUCCESS and "implement.done" not in self._seen():
             self.ui.stage(Stage.IMPLEMENT, Status.OK, _commit_count(run) or "repaired")
         return run
 
@@ -641,7 +661,7 @@ class Coordinator:
         marker the classifier reads are exactly what they were. The only thing
         added is where the lines go.
         """
-        self._seen_events = set()
+        self._agent_events.seen = set()
         return self.runner.run(
             self.git.root, branch, prompt_file, self.base_ref(),
             continuation=continuation, log_name=log_name, log_dir=run_dir,
@@ -658,7 +678,7 @@ class Coordinator:
         """
         name = str(event.get("event", ""))
         ui = self.ui
-        self._seen_events.add(name)
+        self._seen().add(name)
         if name == "implement.start":
             ui.stage_detail(_agent_label(event), key="implement:start")
         elif name == "agent.progress":

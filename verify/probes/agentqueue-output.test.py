@@ -20,6 +20,7 @@ What is proved here:
     a redirected stream never receives a terminal control sequence
     the child's exit code, its summary and its evidence survive the new layer
     an interrupt reaches the caller, and the evidence it produced is on disk
+    two issues at a time never report each other's progress
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -469,6 +471,35 @@ class TestOutputLevels(unittest.TestCase):
         with self.assertRaises(ValueError):
             StageUi(io.StringIO(), level="loud")
 
+    def test_the_command_line_allows_one_output_mode_at_a_time(self):
+        from agentqueue.cli import build_parser
+
+        parser = build_parser()
+        for first, second in (
+            ("--quiet", "--verbose"), ("--quiet", "--debug"),
+            ("--verbose", "--debug"), ("--json", "--verbose"),
+            ("--json", "--quiet"), ("--json", "--debug"),
+        ):
+            with self.assertRaises(SystemExit, msg=f"{first} {second}"):
+                with open(os.devnull, "w", encoding="utf-8") as quiet:
+                    stderr, sys.stderr = sys.stderr, quiet
+                    try:
+                        parser.parse_args(
+                            ["drain", "--repo", ".", first, second]
+                        )
+                    finally:
+                        sys.stderr = stderr
+
+    def test_each_output_mode_is_accepted_on_its_own(self):
+        from agentqueue.cli import build_parser
+
+        parser = build_parser()
+        for flag in ("--quiet", "--verbose", "--debug", "--json"):
+            args = parser.parse_args(["drain", "--repo", ".", flag])
+            self.assertTrue(
+                args.quiet or args.verbose or args.debug or args.json_out
+            )
+
 
 class TestJsonOutput(unittest.TestCase):
     def test_every_event_is_one_json_object(self):
@@ -632,6 +663,222 @@ class TestSeveralIssuesAtATime(unittest.TestCase):
         )
         harness.drain()
         self.assertNotIn("\x1b", harness.text)
+
+
+class TestConcurrentAttribution(unittest.TestCase):
+    """Two issues at a time must never report each other's progress.
+
+    Every case below forces a REAL overlap with a barrier, so state that is
+    per process rather than per issue is guaranteed to be read by the wrong
+    thread. A test that only ran two issues one after the other would pass
+    with the state shared, which is exactly the defect these look for.
+    """
+
+    def _threads(self, worker, count=2, timeout=10):
+        barrier = threading.Barrier(count, timeout=timeout)
+        errors = []
+
+        def guarded(number):
+            try:
+                worker(number, barrier)
+            except BaseException as exc:  # a barrier timeout must be visible
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=guarded, args=(n,))
+            for n in (86, 87)[:count]
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=timeout)
+            self.assertFalse(thread.is_alive(), "a worker did not finish")
+        self.assertEqual(errors, [])
+
+    def test_json_attributes_every_stage_to_the_issue_that_reached_it(self):
+        stream = io.StringIO()
+        ui = ui_mod.JsonUi(stream)
+
+        def worker(number, barrier):
+            ui.issue_start(1, 2, number, f"issue {number}")
+            # Both issues have started before either reports a stage. A
+            # shared "current issue" is now the other thread's.
+            barrier.wait()
+            ui.stage(Stage.CLAIM, Status.OK, f"agent/issue-{number}")
+            barrier.wait()
+            ui.stage(Stage.PUSH, Status.OK, f"agent/issue-{number}")
+            ui.issue_end(number, Status.OK, "done")
+
+        self._threads(worker)
+        records = [json.loads(line) for line in stream.getvalue().splitlines()]
+        stages = [r for r in records if r["event"] == "stage"]
+        self.assertEqual(len(stages), 4)
+        for record in stages:
+            self.assertEqual(f"agent/issue-{record['issue']}", record["detail"])
+        self.assertEqual({r["issue"] for r in stages}, {86, 87})
+
+    def test_json_attributes_stage_progress_to_the_right_stage(self):
+        stream = io.StringIO()
+        ui = ui_mod.JsonUi(stream)
+
+        def worker(number, barrier):
+            ui.issue_start(1, 2, number, f"issue {number}")
+            stage = Stage.IMPLEMENT if number == 86 else Stage.CI
+            ui.stage(stage, Status.RUNNING, "")
+            barrier.wait()
+            ui.stage_detail(f"detail {number}", key=str(number))
+
+        self._threads(worker)
+        records = [json.loads(line) for line in stream.getvalue().splitlines()]
+        progress = {r["issue"]: r for r in records
+                    if r["event"] == "stage.progress"}
+        self.assertEqual(progress[86]["stage"], "IMPLEMENT")
+        self.assertEqual(progress[87]["stage"], "CI")
+
+    def test_the_stage_view_names_the_issue_that_reached_each_stage(self):
+        stream = io.StringIO()
+        ui = StageUi(stream, level="compact", tty=False, clock=StepClock(),
+                     unicode=True, multi=True)
+
+        def worker(number, barrier):
+            ui.issue_start(1, 2, number, f"issue {number}")
+            barrier.wait()
+            ui.stage(Stage.CLAIM, Status.OK, f"agent/issue-{number}")
+            barrier.wait()
+            ui.stage(Stage.IMPLEMENT, Status.RUNNING, "")
+            ui.stage_detail(f"iteration 1/4 of {number}", key=str(number))
+
+        self._threads(worker)
+        for line in stream.getvalue().splitlines():
+            if " CLAIM" not in line:
+                continue
+            number = line.split("#", 1)[1].split()[0]
+            self.assertIn(f"agent/issue-{number}", line)
+        for line in stream.getvalue().splitlines():
+            if "iteration 1/4 of" not in line:
+                continue
+            number = line.split("#", 1)[1].split()[0]
+            self.assertIn(f"iteration 1/4 of {number}", line)
+
+
+class OverlappingRunner(fakes.FakeRunner):
+    """Two agentbox runs whose event streams genuinely overlap.
+
+    Neither run may return before both have started, and #86 publishes its
+    whole event stream while #87 is still inside its own call. A coordinator
+    that kept "which phases has agentbox reported" per PROCESS would then let
+    #86's ``implement.done`` answer for #87, and #87 would lose the line that
+    says what it produced.
+    """
+
+    def __init__(self, git, events_by_issue):
+        super().__init__(git)
+        self.events_by_issue = events_by_issue
+        self.started = threading.Barrier(2, timeout=10)
+        self.first_published = threading.Event()
+
+    def run(self, repo, branch, prompt_file, base_ref, continuation=False,
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
+        number = 86 if "issue-86" in branch else 87
+        self.calls.append({"branch": branch, "log_dir": log_dir})
+        self.started.wait()
+        if number == 86:
+            for item in self.events_by_issue[86]:
+                if on_event is not None:
+                    on_event(item)
+            self.first_published.set()
+        else:
+            self.first_published.wait(timeout=10)
+            for item in self.events_by_issue[87]:
+                if on_event is not None:
+                    on_event(item)
+
+        from agentqueue.model import classify_agentbox_exit
+
+        sha = f"sha-{number}"
+        self.git.refs[f"refs/heads/{branch}"] = sha
+        return fakes.AgentRun(
+            exit_code=0,
+            outcome=classify_agentbox_exit(0, ""),
+            output="",
+            summary={
+                "checksPassed": True,
+                "failedChecks": [],
+                "fixRounds": 0,
+                "review": {"skipped": True, "reason": "no Codex credential"},
+                "resultCommit": sha,
+                "commits": ["a"],
+            },
+            duration_seconds=1,
+            command=["agentbox"],
+            log_path=os.path.join(log_dir or "/fake", f"{log_name}.log"),
+        )
+
+
+class TestConcurrentDrain(unittest.TestCase):
+    """The same defect, through the coordinator, with two issues at once."""
+
+    def _drain(self):
+        stream = io.StringIO()
+        ui = StageUi(stream, level="compact", tty=False, clock=StepClock(),
+                     unicode=True, multi=True)
+        github = fakes.FakeGitHub()
+        github.add_issue(86, "One", labels=(READY,))
+        github.add_issue(87, "Two", labels=(READY,))
+        git = fakes.FakeGit()
+        policy = fakes.make_policy(
+            autoMerge=False, mergeWithoutReview=True, checks=["pnpm check"],
+            maxParallel=2,
+        )
+        # #86 publishes its phases. #87 publishes none, so the coordinator
+        # must state #87's result itself.
+        runner = OverlappingRunner(git, {86: GREEN_EVENTS, 87: []})
+        github.head_sha_source = lambda b: git.refs.get(
+            "refs/heads/" + b, "sha-" + b
+        )
+        github.check_runs = lambda sha: [
+            CheckRun("Quality", "completed", "success")
+        ]
+        coordinator = Coordinator(
+            github, git, policy, runner, tempfile.mkdtemp(),
+            os.path.join(_ROOT, "bin", "scan-secrets"),
+            emit=lambda line: ui.note(line), dry_run=False, run_id="testrun",
+            agent_identities=(fakes.AGENT_IDENTITY,),
+            sleep=lambda _s: None, ui=ui,
+        )
+        report = coordinator.drain()
+        ui.close()
+        return report, stream.getvalue()
+
+    def test_both_issues_report_their_own_implementation(self):
+        report, text = self._drain()
+        self.assertEqual(
+            [r.outcome for r in report.results],
+            [Outcome.SUCCESS, Outcome.SUCCESS],
+        )
+        self.assertEqual([r.issue for r in report.results], [86, 87])
+        done = [l for l in text.splitlines() if "IMPLEMENT" in l and "✓" in l]
+        # Exactly one finished IMPLEMENT line per issue, each naming its own.
+        self.assertEqual(len(done), 2, text)
+        self.assertEqual(
+            sorted(l.split("#", 1)[1].split()[0] for l in done),
+            ["86", "87"],
+            text,
+        )
+
+    def test_every_stage_line_names_the_issue_it_belongs_to(self):
+        _, text = self._drain()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(("✓", "-", "●", "!")):
+                continue
+            self.assertRegex(stripped, r"^[✓\-●!] #(86|87) ", text)
+
+    def test_each_issue_reaches_its_own_position_in_the_counter(self):
+        _, text = self._drain()
+        headers = [l for l in text.splitlines() if l.startswith("[")]
+        self.assertEqual(sorted(headers)[0].split("]")[0], "[1/2")
+        self.assertEqual(sorted(headers)[1].split("]")[0], "[2/2")
 
 
 # ---------------------------------------------------- the child, for real --
