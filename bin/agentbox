@@ -1,0 +1,1862 @@
+#!/usr/bin/env bash
+#
+# agentbox - run unattended agents in disposable Podman sandboxes.
+#
+# The unattended counterpart of the devbox router. devbox routes an
+# INTERACTIVE agent into the development environment that owns a repository.
+# agentbox runs an UNATTENDED agent against a DISPOSABLE CLONE of a
+# repository, and imports only validated commits back into the real one.
+#
+#   agentbox build [--force]        build the runner and sandbox images
+#   agentbox doctor                 check that the machine can run a sandbox
+#   agentbox selftest [options]     prove the lifecycle, no model credential
+#   agentbox run      <options>     one agent, one branch
+#   agentbox pipeline <options>     implement -> check -> review -> check
+#   agentbox clean [--all]          remove stray containers, run dirs and locks
+#                                   --all also takes a run that is still going
+#   agentbox help
+#
+# Options for run and pipeline:
+#   --repo PATH              the repository to work on             (required)
+#   --branch NAME            the agent/ branch to create           (required)
+#   --prompt-file FILE       the instruction for the agent         (required)
+#   --base REF               what the work starts from, default HEAD
+#   --review-prompt-file F   the instruction for the reviewer
+#   --agent NAME             claude (default) or codex
+#   --model NAME             overrides the manifest default
+#   --review-agent NAME      codex (default), claude, or none
+#   --review-model NAME      overrides the manifest default
+#   --check CMD              a deterministic check; repeatable
+#   --max-iterations N       agent iterations, default 1
+#   --max-commits N          the import limit, default from the manifest
+#   --allow-merges           accept merge commits in the imported range
+#   --timeout SECONDS        wall-clock limit for the whole run
+#   --effort LEVEL           low, medium, high or xhigh
+#   --image IMAGE            overrides the sandbox image
+#   --use-ambient-credentials  also read a credential from this shell
+#   --keep-run-dir           keep the per-run scratch directory
+#   --no-isolation-check     skip the probes that prove no key material and
+#                            no real repository path reached the sandbox
+#   --dry-run                print the plan and change nothing
+#
+# Options for selftest:
+#   --repo PATH              a repository to work on; a throw-away repository
+#                            is created when this is absent
+#   --adversarial            the sandbox attacks its git directory on purpose,
+#                            and the run proves the real repository did not move
+#   --timeout SECONDS        wall-clock limit, default 600
+#   --image IMAGE            overrides the sandbox image
+#   --keep-run-dir           keep the per-run scratch directory
+#
+# The boundary
+#
+#   real repository
+#     -> agentbox clones it into ~/.local/share/agentbox/runs/<run-id>/repo
+#     -> Sandcastle runs only against that disposable clone
+#     -> the agent commits inside the disposable clone
+#     -> agentbox validates the result on the host
+#     -> validated commits are imported as one agent/<name> branch
+#     -> the clone, the sandbox and the run directory are removed
+#
+# The real repository is NEVER bind-mounted into a sandbox. A sandbox cannot
+# read or write <real-repo>/.git, cannot move a ref, cannot change the git
+# config, cannot install a hook, and cannot touch the checked-out working
+# tree, because none of those paths exists inside it. The pre-run and post-run
+# integrity comparison stays, as defense in depth, not as the boundary.
+#
+# What agentbox never does:
+#   * push a branch, open a pull request, or merge anything
+#   * put a private SSH key, an ssh-agent socket, or the Podman socket into
+#     a sandbox
+#   * bind-mount the real repository, the canonical ~/.agents, the canonical
+#     skill store, or this checkout into a sandbox
+#   * put a credential value in a command line
+#   * run a command, a hook or a filter that the disposable clone configures
+#
+# See docs/sandcastle.md.
+
+set -euo pipefail
+
+PROGRAM=agentbox
+VERSION=0.2.0
+
+# Exit codes (stable, scripts may depend on them).
+#   2   usage error
+#   3   the repository argument is not a usable Git repository
+#   4   a required image is missing
+#   5   no usable Podman connection
+#   6   a credential is missing or has the wrong permissions
+#   7   refused (the branch is unsafe, or the repository is the checked-out one)
+#   8   the agent run itself failed
+#   9   the result was refused at import; the real repository did not change
+#   10  the run passed its wall-clock timeout
+#   11  another run holds the branch
+
+fail() {
+    local code=$1 line
+    shift
+    printf '%s: %s\n' "$PROGRAM" "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+    exit "$code"
+}
+
+info() { printf '%s: %s\n' "$PROGRAM" "$1"; }
+warn() { printf '%s: warning: %s\n' "$PROGRAM" "$1" >&2; }
+
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# --------------------------------------------------------------- host paths --
+#
+# Every path that reaches Podman must be spelled the way the HOST spells it.
+# The host daemon resolves a bind mount in its own namespace, so the container
+# spelling of ~/projects (/workspace) does not exist for it.
+#
+# Two spellings are therefore tracked for every path:
+#   *_HOST  what Podman is told
+#   *_VIEW  what THIS side opens with cat, git and mkdir
+
+IN_CONTAINER=0
+if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then IN_CONTAINER=1; fi
+
+if [ "$IN_CONTAINER" = 1 ]; then
+    HOST_HOME=${DISTROBOX_HOST_HOME:-/home/${USER:-$(id -un)}}
+else
+    HOST_HOME=$HOME
+fi
+
+# canon <path> - the path with every symlink resolved.
+#
+# Bazzite is an ostree system: /home is a symlink to /var/home. A bind mount
+# source and the path the orchestrator is told to use must be the SAME
+# spelling, or the source resolves through the symlink while the target does
+# not exist inside the runner. Canonicalising both is what keeps them equal.
+canon() { readlink -m -- "$1" 2>/dev/null || printf '%s' "$1"; }
+
+HOST_HOME=$(canon "$HOST_HOME")
+PROJECTS_ROOT=$(canon "$HOST_HOME/projects")
+
+# Distrobox mounts the whole host root at /run/host. That is how this side
+# reaches a host path that has no container spelling of its own.
+HOST_VIEW_PREFIX=''
+if [ "$IN_CONTAINER" = 1 ] && [ -d /run/host/etc ]; then
+    HOST_VIEW_PREFIX=/run/host
+fi
+
+# view_path <host-path> - the same file, spelled the way THIS side opens it.
+view_path() { printf '%s%s' "$HOST_VIEW_PREFIX" "$1"; }
+
+# host_path <path> - absolute path, spelled as the host spells it.
+host_path() {
+    local p
+    p=$(canon "$1")
+    case $p in
+        /run/host) printf '/' ;;
+        /run/host/*) printf '%s' "${p#/run/host}" ;;
+        /workspace) printf '%s' "$PROJECTS_ROOT" ;;
+        /workspace/*) printf '%s%s' "$PROJECTS_ROOT" "${p#/workspace}" ;;
+        *) printf '%s' "$p" ;;
+    esac
+}
+
+REPO_ROOT_HOST=$(host_path "$REPO_ROOT")
+
+# The canonical shared skill store. It lives in the web-dev home, because that
+# is where the agent CLIs run. It is READ ONLY here and is never mounted: each
+# run gets its own copy. See stage_policy_and_skills.
+SKILLS_DIR=$(canon "$HOST_HOME/.local/share/distrobox-homes/web-dev/.agents/skills")
+SKILLS_VIEW=$(view_path "$SKILLS_DIR")
+[ -d "$SKILLS_VIEW" ] || SKILLS_VIEW=$SKILLS_DIR
+
+# The per-run scratch area. Only paths under here ever receive a container
+# SELinux label, and every one of them is removed again.
+#
+# AGENTBOX_STATE_DIR moves it. It exists for the host-side tests, which drive
+# the clone and the import with no container at all; a real run needs a path
+# the HOST Podman can resolve, which is what the default gives.
+STATE_HOST=${AGENTBOX_STATE_DIR:-$HOST_HOME/.local/share/agentbox}
+STATE_VIEW=$(view_path "$STATE_HOST")
+[ -n "${AGENTBOX_STATE_DIR:-}" ] && STATE_VIEW=$STATE_HOST
+
+# ------------------------------------------------------------------ manifest --
+
+MANIFEST=$REPO_ROOT/manifests/sandcastle.env
+[ -f "$MANIFEST" ] || fail 2 "manifest not found: $MANIFEST"
+# shellcheck source=/dev/null
+. "$MANIFEST"
+
+RUNNER_REF=$RUNNER_IMAGE:$RUNNER_TAG
+SANDBOX_REF=$SANDBOX_IMAGE:$SANDBOX_TAG
+
+# ------------------------------------------------------------ Podman client --
+#
+# On the host this is plain "podman". Inside a container there is no local
+# engine, so it is podman-remote pointed at the rootless host API socket. Both
+# reach the same daemon, and a container created either way is a host-level
+# sibling of the caller.
+
+PODMAN_SOCKET=${PODMAN_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
+PODMAN_BIN=''
+
+resolve_podman() {
+    [ -n "$PODMAN_BIN" ] && return 0
+    if [ "$IN_CONTAINER" = 0 ] && command -v podman >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman)
+        return 0
+    fi
+    if command -v podman-remote >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman-remote)
+        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
+        return 0
+    fi
+    if command -v podman >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman)
+        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
+        return 0
+    fi
+    return 1
+}
+
+# require_podman - resolve the client, or stop with a usable message.
+#
+# resolve_podman only reports; it never exits. "agentbox doctor" has to be able
+# to report a missing client instead of dying on it.
+require_podman() {
+    resolve_podman && return 0
+    fail 5 'no Podman client found' \
+        'On the Bazzite host, podman is part of the base image.' \
+        'Inside a container, install podman-remote and make sure' \
+        "the host socket is reachable at $PODMAN_SOCKET"
+}
+
+podman_() { require_podman; "$PODMAN_BIN" "$@"; }
+
+# ------------------------------------------------------------- run teardown --
+#
+# "podman run --rm" removes the container when the client exits cleanly. An
+# interrupt, a timeout or a killed terminal is not a clean exit: the name stays
+# taken, the control plane keeps running, and the sandbox it created keeps the
+# credential mounted. The trap closes that, and "agentbox clean" closes the
+# case where even the trap did not get to run.
+#
+# $$ alone is not unique: agentbox runs both on the host and inside the
+# container, where the same PID number exists in a different namespace.
+
+RUNNER_NAME=''
+RUN_DIR_HOST=''
+RUN_DIR_VIEW=''
+LOCK_DIR=''
+KEEP_RUN_DIR=0
+
+remove_runner() {
+    [ -n "$RUNNER_NAME" ] || return 0
+    [ -n "$PODMAN_BIN" ] || return 0
+    "$PODMAN_BIN" rm -f "$RUNNER_NAME" >/dev/null 2>&1 || true
+    RUNNER_NAME=''
+}
+
+# remove_run_sandboxes - remove every sandbox container of THIS run.
+#
+# Sandcastle names a sandbox "sandcastle-<uuid>", which says nothing about
+# which run made it. The run directory does: a sandbox of this run is the one
+# whose bind mounts come out of it. Parallel runs on other branches are
+# therefore left alone.
+remove_run_sandboxes() {
+    [ -n "$RUN_DIR_HOST" ] || return 0
+    [ -n "$PODMAN_BIN" ] || return 0
+    local line name
+    while IFS= read -r line; do
+        name=${line%%|*}
+        case ${line#*|} in
+            *"$RUN_DIR_HOST"*) ;;
+            *) continue ;;
+        esac
+        case $name in
+            sandcastle-*) "$PODMAN_BIN" rm -f "$name" >/dev/null 2>&1 || true ;;
+        esac
+    done < <("$PODMAN_BIN" ps -a --format '{{.Names}}|{{.Mounts}}' 2>/dev/null || true)
+}
+
+# shred_credentials - remove the per-run credential file.
+#
+# It is the only file agentbox writes that holds a secret. It goes away even
+# when the run directory is kept for inspection.
+shred_credentials() {
+    [ -n "$RUN_DIR_VIEW" ] || return 0
+    [ -d "$RUN_DIR_VIEW/creds" ] || return 0
+    rm -f -- "$RUN_DIR_VIEW/creds"/* 2>/dev/null || true
+    rmdir -- "$RUN_DIR_VIEW/creds" 2>/dev/null || true
+}
+
+release_lock() {
+    [ -n "$LOCK_DIR" ] || return 0
+    rm -f -- "$LOCK_DIR/owner" 2>/dev/null || true
+    rmdir -- "$LOCK_DIR" 2>/dev/null || true
+    LOCK_DIR=''
+}
+
+remove_run_dir() {
+    [ -n "$RUN_DIR_VIEW" ] || return 0
+    if [ "$KEEP_RUN_DIR" = 1 ]; then
+        info "run directory kept: $RUN_DIR_HOST"
+        return 0
+    fi
+    rm -rf -- "$RUN_DIR_VIEW" 2>/dev/null || true
+    RUN_DIR_VIEW=''
+}
+
+cleanup() {
+    remove_runner
+    remove_run_sandboxes
+    shred_credentials
+    remove_run_dir
+    release_lock
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# ---------------------------------------------------------------- credentials --
+#
+# Credentials live outside this repository, in a file only the user can read.
+# agentbox copies the values it needs into a per-run file, mode 600, and that
+# file is the ONLY way a credential reaches a container. No credential value
+# is ever an argument to podman, to the orchestrator, or to any other command.
+
+SECRETS_FILE=$HOST_HOME/.config/agentbox/secrets.env
+
+CLAUDE_CODE_OAUTH_TOKEN=''
+ANTHROPIC_API_KEY=''
+OPENAI_API_KEY=''
+
+# load_secrets [--ambient]
+#
+# The dedicated agentbox credential file is the default and only source. An
+# interactive shell often exports ANTHROPIC_API_KEY for its own use; taking it
+# silently would hand an unattended sandbox a credential the user did not
+# choose to delegate. --ambient asks for that on purpose.
+load_secrets() {
+    local ambient=0
+    [ "${1:-}" = --ambient ] && ambient=1
+
+    local amb_oauth='' amb_anthropic='' amb_openai=''
+    if [ "$ambient" = 1 ]; then
+        amb_oauth=${CLAUDE_CODE_OAUTH_TOKEN:-}
+        amb_anthropic=${ANTHROPIC_API_KEY:-}
+        amb_openai=${OPENAI_API_KEY:-}
+    fi
+    CLAUDE_CODE_OAUTH_TOKEN=''
+    ANTHROPIC_API_KEY=''
+    OPENAI_API_KEY=''
+
+    local readable
+    readable=$(view_path "$SECRETS_FILE")
+    [ -r "$readable" ] || readable=$SECRETS_FILE
+    if [ -r "$readable" ]; then
+        # A mode this cannot read is a mode this cannot vouch for. Refusing is
+        # the only safe answer; defaulting to "600" would pass a world-readable
+        # file whenever stat is unavailable.
+        local mode
+        mode=$(stat -c '%a' "$readable" 2>/dev/null) ||
+            fail 6 "cannot read the permissions of $SECRETS_FILE" \
+                'A credential file whose mode cannot be checked is not used.'
+        case $mode in
+            600|400) ;;
+            *) fail 6 "$SECRETS_FILE has mode $mode" \
+                    'A credential file must not be readable by anyone else.' \
+                    "Fix it with: chmod 600 $SECRETS_FILE" ;;
+        esac
+        # shellcheck source=/dev/null
+        . "$readable"
+    fi
+
+    CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-$amb_oauth}
+    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$amb_anthropic}
+    OPENAI_API_KEY=${OPENAI_API_KEY:-$amb_openai}
+
+    # The per-run credential file is read line by line inside the sandbox, and
+    # the redaction filter matches whole lines. A value carrying a newline
+    # would defeat both, so it is refused rather than silently truncated.
+    local name
+    for name in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY; do
+        case ${!name} in
+            *$'\n'*) fail 6 "$name contains a newline" \
+                'A credential must be one line. Check the quoting in the file.' ;;
+        esac
+    done
+}
+
+# REDACT_VALUES - the exact strings that must not reach a terminal or a log.
+declare -a REDACT_VALUES=()
+
+collect_redactions() {
+    REDACT_VALUES=()
+    local name value
+    for name in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY; do
+        value=${!name}
+        # A short value would match ordinary prose and turn the whole stream
+        # into "[redacted credential]". No real credential is this short.
+        if [ "${#value}" -ge 12 ]; then REDACT_VALUES+=("$value"); fi
+    done
+}
+
+# redact - copy stdin to stdout with every configured credential replaced.
+#
+# Defense in depth, and nothing more. An agent with a network connection and a
+# credential can exfiltrate it deliberately; this only stops the accidental
+# case, where a tool prints its own environment into the run log.
+#
+# The values are exported into the filter, never passed as arguments: an
+# argument would put the credential back into a process listing.
+redact() {
+    if [ "${#REDACT_VALUES[@]}" -eq 0 ]; then cat; return 0; fi
+    (
+        local i=0 v
+        for v in "${REDACT_VALUES[@]}"; do
+            export "AGENTBOX_REDACT_$i=$v"
+            i=$(( i + 1 ))
+        done
+        exec python3 -u -c '
+import os, sys
+vals, i = [], 0
+while True:
+    v = os.environ.get("AGENTBOX_REDACT_%d" % i)
+    if v is None:
+        break
+    vals.append(v)
+    i += 1
+vals.sort(key=len, reverse=True)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    for v in vals:
+        line = line.replace(v, "[redacted credential]")
+    sys.stdout.write(line)
+    sys.stdout.flush()
+'
+    )
+}
+
+# ---------------------------------------------------- the per-run scratch area --
+#
+# ~/.local/share/agentbox/runs/<run-id>/
+#     repo/       the disposable clone; the ONLY git tree a sandbox ever sees
+#     staging/    the copies of the policy, the skills and the orchestrator
+#     creds/      the per-run credential file, mode 600
+#     meta/       the integrity snapshots and the pristine clone config
+#
+# Nothing here is a canonical workstation path, so the container SELinux label
+# that Podman applies to a bind mount source lands only on disposable files.
+
+new_run_id() {
+    printf '%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" \
+        "$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
+}
+
+# make_run_dir <run-id> - create the run directory and set the globals.
+make_run_dir() {
+    local id=$1
+    RUN_DIR_HOST=$STATE_HOST/runs/$id
+    RUN_DIR_VIEW=$STATE_VIEW/runs/$id
+    mkdir -p -- "$RUN_DIR_VIEW"/staging "$RUN_DIR_VIEW"/creds "$RUN_DIR_VIEW"/meta
+    chmod 700 -- "$RUN_DIR_VIEW" "$RUN_DIR_VIEW/creds"
+    # git must find no hook directory it did not get from agentbox.
+    mkdir -p -- "$RUN_DIR_VIEW/meta/no-hooks"
+}
+
+# ------------------------------------------------------------------- locking --
+#
+# Two runs that claim the same branch of the same repository would race at
+# import: both validate against the same baseline, and the second one would
+# either clobber the first or fail confusingly. The lock makes the second one
+# stop with a clear message instead.
+#
+# mkdir is the atomic primitive. A lock whose run directory is gone, or which
+# is older than the run could possibly be, is stale and is broken once.
+
+lock_key() {
+    printf '%s\n%s\n' "$1" "$2" | sha256sum | cut -c1-16
+}
+
+# lock_host_id - which side of the host/container boundary took a lock.
+#
+# A PID means nothing across that boundary: the same number exists in both
+# namespaces and names two different processes. The marker is what lets the
+# staleness test know whether it may look at the PID at all.
+lock_host_id() { printf '%s:%s' "$(uname -n)" "$IN_CONTAINER"; }
+
+# lock_is_stale <lock-dir> [grace-seconds] - true when no run still holds it.
+#
+# Three signals, in order of certainty:
+#   * the run directory it names is gone
+#   * it was taken by a process on THIS side that no longer exists
+#   * it is older than the longest a run could hold it
+#
+# take_lock and cmd_clean must agree on this. When they did not, a lock kept
+# its run directory alive and the run directory kept the lock alive, and
+# neither could ever be swept.
+lock_is_stale() {
+    local dir=$1 fallback=${2:-$(( AGENTBOX_TIMEOUT_SECONDS + 600 ))}
+    local owner run_dir dir_view host pid started now recorded grace
+
+    owner=$(cat -- "$dir/owner" 2>/dev/null) || return 0
+    [ -n "$owner" ] || return 0
+
+    run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
+    [ -n "$run_dir" ] || return 0
+    dir_view=$(view_path "$run_dir")
+    [ -d "$dir_view" ] || [ -d "$run_dir" ] || return 0
+
+    # "kill -0" fails for a process that is gone, and succeeds for one this
+    # user owns. A live run therefore never looks stale; only the reverse.
+    host=$(printf '%s\n' "$owner" | sed -n 's/^host=//p')
+    pid=$(printf '%s\n' "$owner" | sed -n 's/^pid=//p')
+    if [ -n "$host" ] && [ "$host" = "$(lock_host_id)" ] && [ -n "$pid" ]; then
+        kill -0 "$pid" 2>/dev/null || return 0
+    fi
+
+    # The run records the limit it was given, so the age rule can use the
+    # right number instead of assuming the manifest maximum. A lock written by
+    # an earlier version records none, and falls back to that maximum.
+    recorded=$(printf '%s\n' "$owner" | sed -n 's/^timeout=//p')
+    case $recorded in
+        ''|*[!0-9]*) grace=$fallback ;;
+        *) grace=$(( recorded + 600 )) ;;
+    esac
+
+    started=$(printf '%s\n' "$owner" | sed -n 's/^started=//p')
+    now=$(date +%s)
+    if [ -n "$started" ] && [ "$(( now - started ))" -gt "$grace" ]; then
+        return 0
+    fi
+    return 1
+}
+
+take_lock() {
+    local repo=$1 branch=$2 timeout=$3 key dir owner
+    key=$(lock_key "$repo" "$branch")
+    dir=$STATE_VIEW/locks/$key.lock
+    mkdir -p -- "$STATE_VIEW/locks"
+
+    if ! mkdir -- "$dir" 2>/dev/null; then
+        if lock_is_stale "$dir" "$(( timeout + 600 ))"; then
+            warn "breaking a stale lock on $branch"
+            rm -rf -- "$dir"
+            mkdir -- "$dir" 2>/dev/null ||
+                fail 11 "the branch $branch is claimed by another run" \
+                    "lock: $dir"
+        else
+            owner=$(cat -- "$dir/owner" 2>/dev/null || printf '')
+            fail 11 "the branch $branch is claimed by another run" \
+                "lock: $dir" \
+                "${owner:-(no owner recorded)}" \
+                'Wait for it, or remove the lock with: agentbox clean --all'
+        fi
+    fi
+
+    LOCK_DIR=$dir
+    printf 'repo=%s\nbranch=%s\nrunDir=%s\nstarted=%s\npid=%s\nhost=%s\ntimeout=%s\n' \
+        "$repo" "$branch" "$RUN_DIR_HOST" "$(date +%s)" "$$" "$(lock_host_id)" \
+        "$timeout" > "$dir/owner"
+}
+
+# --------------------------------------------- git against the disposable clone --
+#
+# Everything the disposable clone can configure is a command the host would
+# otherwise run: an alias, a pager, an fsmonitor, a clean or smudge filter, a
+# credential helper, an upload-pack hook, a hook script. sgit removes all of
+# them at once. It reads no system or global configuration, it uses a hook
+# directory agentbox created and no container ever saw, and it runs only after
+# sanitize_clone has put the clone's own configuration back to the copy the
+# host took at clone time.
+
+sgit() {
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    GIT_SSH_COMMAND=/bin/false \
+    GIT_ALLOW_PROTOCOL=file \
+    git -C "$CLONE_VIEW" \
+        -c "core.hooksPath=$RUN_DIR_VIEW/meta/no-hooks" \
+        -c core.fsmonitor=false \
+        -c core.pager=cat \
+        -c core.editor=/bin/false \
+        -c protocol.version=2 \
+        "$@"
+}
+
+# create_clone <source-view> <base-sha>
+#
+# --no-hardlinks is not a preference. A local clone hardlinks the object files
+# by default, so the clone and the real repository would share inodes, and a
+# write through the clone would be a write to the real repository's objects.
+# --template= points at an empty directory, so the clone gets no sample hooks
+# and no template configuration.
+#
+# The origin remote is removed straight away: nothing inside the disposable
+# clone should name, or be able to reach, the repository it came from.
+create_clone() {
+    local src=$1 base=$2
+
+    CLONE_HOST=$RUN_DIR_HOST/repo
+    CLONE_VIEW=$RUN_DIR_VIEW/repo
+
+    mkdir -p -- "$RUN_DIR_VIEW/meta/empty-template"
+    info 'cloning into the disposable repository'
+    git clone --quiet --no-hardlinks --no-checkout \
+        --template="$RUN_DIR_VIEW/meta/empty-template" \
+        -- "$src" "$CLONE_VIEW" ||
+        fail 3 "cannot clone $src into the run directory"
+
+    sgit remote remove origin >/dev/null 2>&1 || true
+
+    sgit cat-file -e "$base^{commit}" 2>/dev/null ||
+        fail 3 "the base commit is not in the clone: $base" \
+            'It is reachable in the repository but not from any branch.' \
+            'Pass --base with a branch or a tag that contains it.'
+
+    # A named base branch, so Sandcastle forks from a ref instead of from
+    # whatever HEAD happened to be. The name is agentbox's, not the user's.
+    sgit branch --quiet -f "$BASE_BRANCH" "$base" ||
+        fail 3 "cannot create $BASE_BRANCH in the clone" \
+            'A branch of that name already exists with a conflicting shape.'
+    sgit symbolic-ref HEAD "refs/heads/$BASE_BRANCH"
+    sgit reset --quiet --hard
+
+    # The run must always start from the base, never from a branch of the same
+    # name that the source repository already carries.
+    sgit branch -D "$BRANCH" >/dev/null 2>&1 || true
+
+    # The pristine configuration. sanitize_clone puts this back before the
+    # host reads anything out of the clone again.
+    cp -- "$CLONE_VIEW/.git/config" "$RUN_DIR_VIEW/meta/clone-config.pristine"
+    chmod 600 -- "$RUN_DIR_VIEW/meta/clone-config.pristine"
+}
+
+# sanitize_clone - put every control surface of the clone back, then prove it.
+#
+# The sandbox held the clone's git directory read-write, so the clone can now
+# carry an alias, a hook, an alternates file, or a worktree configuration that
+# the host would execute or trust. Each of those is removed or restored, and
+# the result is compared against the copy taken at clone time. A mismatch is a
+# refusal, not a repair.
+sanitize_clone() {
+    local gitdir=$CLONE_VIEW/.git
+
+    [ -d "$gitdir" ] ||
+        fail 9 'the disposable clone has no git directory' \
+            'Nothing can be imported from it.'
+
+    rm -rf -- "$gitdir/hooks" "$gitdir/worktrees" "$gitdir/modules"
+    rm -f -- "$gitdir/objects/info/alternates" "$gitdir/config.worktree"
+    mkdir -p -- "$gitdir/hooks"
+    cp -- "$RUN_DIR_VIEW/meta/clone-config.pristine" "$gitdir/config"
+
+    cmp -s -- "$gitdir/config" "$RUN_DIR_VIEW/meta/clone-config.pristine" ||
+        fail 9 'the disposable clone configuration could not be restored'
+    [ -z "$(ls -A -- "$gitdir/hooks" 2>/dev/null)" ] ||
+        fail 9 'the disposable clone still has hooks after sanitising'
+    [ ! -e "$gitdir/objects/info/alternates" ] ||
+        fail 9 'the disposable clone still has an alternates file'
+}
+
+# ------------------------------------------------ real repository integrity --
+#
+# The snapshot is taken with ordinary git, in the repository the user owns.
+# That repository is trusted; the clone is not. Each phase writes one small
+# file per property, so a difference names itself.
+
+repo_snapshot() {
+    local repo=$1 out=$2 common f
+    mkdir -p -- "$out"
+    common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)
+
+    git -C "$repo" for-each-ref --format='%(refname) %(objectname)' |
+        LC_ALL=C sort > "$out/refs"
+
+    { git -C "$repo" symbolic-ref --quiet HEAD ||
+      printf 'detached %s\n' "$(git -C "$repo" rev-parse HEAD)"; } > "$out/head"
+
+    if [ -f "$common/config" ]; then
+        sha256sum < "$common/config" > "$out/config"
+    else
+        printf 'absent\n' > "$out/config"
+    fi
+
+    : > "$out/hooks"
+    if [ -d "$common/hooks" ]; then
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            printf '%s %s %s\n' "$f" \
+                "$(stat -c '%a %s' -- "$common/hooks/$f")" \
+                "$(sha256sum < "$common/hooks/$f" | cut -d' ' -f1)" >> "$out/hooks"
+        done < <(cd -- "$common/hooks" && find . -type f -printf '%P\n' | LC_ALL=C sort)
+    fi
+
+    git -C "$repo" status --porcelain | LC_ALL=C sort > "$out/worktree"
+}
+
+# diff_snapshot <before-dir> <after-dir> [allowed-ref]
+#
+# Prints one line per difference and returns 1 when there is any. When
+# allowed-ref is given, a ref line for exactly that refname is not a
+# difference; everything else still is.
+diff_snapshot() {
+    local before=$1 after=$2 allow=${3:-} prop line rc=0
+    for prop in refs head config hooks worktree; do
+        if [ "$prop" = refs ] && [ -n "$allow" ]; then
+            while IFS= read -r line; do
+                case $line in
+                    '<'*|'>'*)
+                        case ${line#? } in
+                            "$allow "*) continue ;;
+                        esac
+                        printf 'refs: %s\n' "$line"; rc=1 ;;
+                esac
+            done < <(diff --old-line-format='< %L' --new-line-format='> %L' \
+                          --unchanged-line-format='' \
+                          -- "$before/$prop" "$after/$prop" || true)
+            continue
+        fi
+        if ! diff -q -- "$before/$prop" "$after/$prop" >/dev/null 2>&1; then
+            while IFS= read -r line; do
+                printf '%s: %s\n' "$prop" "$line"
+            done < <(diff --old-line-format='< %L' --new-line-format='> %L' \
+                          --unchanged-line-format='' \
+                          -- "$before/$prop" "$after/$prop" || true)
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
+# ------------------------------------------------- validated commit transfer --
+#
+# Nothing is executed out of the disposable clone. The host reads one ref from
+# it, checks every invariant, and moves the objects with a plain fetch that
+# validates them on arrival. If any answer is uncertain, nothing is imported.
+#
+# The invariants:
+#   * the agent branch exists in the clone and names a commit
+#   * that commit descends from the base the run started at
+#   * the range holds at least one and at most --max-commits commits
+#   * the range holds no merge commit, unless --allow-merges said so
+#   * the target branch is inside the agent/ namespace and is a valid ref name
+#   * the real repository has not moved since the baseline was taken
+#   * the target ref is still exactly what it was when the run started
+#
+# The last one is enforced twice: once by comparison, and once by the
+# compare-and-swap form of "git update-ref", which fails if the ref moved
+# between the check and the write.
+
+# IMPORT_SOFT=1 turns a refusal into a return value instead of an exit, so the
+# selftest can prove that a corrupted result IS refused. Every other caller
+# leaves it at 0, where a refusal stops the program.
+IMPORT_SOFT=0
+IMPORT_REFUSAL=''
+
+import_refuse() {
+    IMPORT_REFUSAL=$1
+    if [ "$IMPORT_SOFT" = 1 ]; then
+        printf '%s: import refused: %s\n' "$PROGRAM" "$1" >&2
+        return 1
+    fi
+    fail 9 "$@"
+}
+
+import_result() {
+    local real=$1 branch=$2 base=$3 before=$4 max=$5 allow_merges=$6 run_id=$7
+    local result count merges tmp_ref fetched
+    IMPORT_REFUSAL=''
+
+    result=$(sgit rev-parse --verify --quiet "refs/heads/$branch^{commit}") || result=''
+    [ -n "$result" ] ||
+        { import_refuse "the agent produced no commit on $branch" \
+            'The disposable clone has no such branch. Nothing was imported.'; return 1; }
+
+    sgit merge-base --is-ancestor "$base" "$result" ||
+        { import_refuse 'the result does not descend from the base commit' \
+            "base:   $base" \
+            "result: $result" \
+            'A rewritten history is refused. Nothing was imported.'; return 1; }
+
+    count=$(sgit rev-list --count "$base..$result")
+    [ "$count" -ge 1 ] ||
+        { import_refuse 'the result is identical to the base commit' \
+            'There is nothing to import.'; return 1; }
+    [ "$count" -le "$max" ] ||
+        { import_refuse "the result has $count commits, and the limit is $max" \
+            'Raise it with --max-commits if this is expected.'; return 1; }
+
+    merges=$(sgit rev-list --merges --count "$base..$result")
+    if [ "$merges" != 0 ] && [ "$allow_merges" != 1 ]; then
+        import_refuse "the result has $merges merge commit(s)" \
+            'Pass --allow-merges if this is expected.'
+        return 1
+    fi
+
+    # The receiving side validates every object it takes. A malformed or
+    # malicious object graph is rejected here, before any ref moves.
+    tmp_ref=refs/agentbox/import/$run_id
+    GIT_ALLOW_PROTOCOL=file \
+    git -C "$real" \
+        -c fetch.fsckObjects=true \
+        -c transfer.fsckObjects=true \
+        -c fetch.recurseSubmodules=no \
+        fetch --quiet --no-tags --no-write-fetch-head --no-recurse-submodules \
+        -- "$CLONE_VIEW" "+refs/heads/$branch:$tmp_ref" ||
+        { import_refuse 'the objects could not be fetched from the disposable clone' \
+            'They failed the object check, or the clone is unreadable.'; return 1; }
+
+    fetched=$(git -C "$real" rev-parse --verify --quiet "$tmp_ref") || fetched=''
+    if [ "$fetched" != "$result" ]; then
+        git -C "$real" update-ref -d "$tmp_ref" >/dev/null 2>&1 || true
+        import_refuse 'the fetched commit is not the validated one' \
+            "validated: $result" "fetched:   ${fetched:-none}"
+        return 1
+    fi
+
+    # Compare and swap. An empty old value means the ref must not exist.
+    if git -C "$real" update-ref -m "agentbox $run_id" \
+            "refs/heads/$branch" "$result" "$before"; then
+        git -C "$real" update-ref -d "$tmp_ref" >/dev/null 2>&1 || true
+        IMPORTED_SHA=$result
+        IMPORTED_COUNT=$count
+        return 0
+    fi
+    git -C "$real" update-ref -d "$tmp_ref" >/dev/null 2>&1 || true
+    import_refuse "refs/heads/$branch moved while the run was in progress" \
+        "expected it at: ${before:-(absent)}" \
+        'Nothing was imported.'
+    return 1
+}
+
+# ------------------------------------------------------------------ staging --
+#
+# The agent policy and the shared skills are COPIED into the run directory.
+# The canonical files are never mounted, so they never receive a container
+# SELinux label, and no sandbox can reach the store that every interactive
+# agent on this machine also reads.
+
+stage_policy_and_skills() {
+    local stage=$RUN_DIR_VIEW/staging
+    mkdir -p -- "$stage/policy"
+    cp -- "$REPO_ROOT/config/agents/AGENTS.md" "$stage/policy/AGENTS.md" ||
+        fail 2 "cannot copy the agent policy from $REPO_ROOT/config/agents"
+
+    STAGED_SKILLS=0
+    if [ -d "$SKILLS_VIEW" ]; then
+        # -L dereferences: a skill store entry is often a symlink into a
+        # checkout, and a copied symlink would dangle inside the sandbox.
+        if cp -RL -- "$SKILLS_VIEW" "$stage/skills" 2>/dev/null; then
+            STAGED_SKILLS=1
+        else
+            warn 'the shared skill store could not be copied; running without it'
+            rm -rf -- "$stage/skills"
+        fi
+    fi
+}
+
+# stage_script <basename> - copy one orchestrator program into the run.
+#
+# The control plane never mounts this checkout either. It gets one file, from
+# the run directory, read-only.
+stage_script() {
+    cp -- "$REPO_ROOT/config/sandcastle/$1" "$RUN_DIR_VIEW/staging/$1" ||
+        fail 2 "cannot copy config/sandcastle/$1"
+}
+
+# write_credential_file <agent>... - the only path a credential takes.
+#
+# Plain KEY=VALUE lines, mode 600, one per line, no quoting. The sandbox shim
+# parses them without a shell, so no value can be interpreted as code.
+write_credential_file() {
+    local f=$RUN_DIR_VIEW/creds/agent.env
+    : > "$f"
+    chmod 600 -- "$f"
+    local want
+    for want in "$@"; do
+        case $want in
+            claude)
+                if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                    printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN" >> "$f"
+                elif [ -n "$ANTHROPIC_API_KEY" ]; then
+                    printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY" >> "$f"
+                fi ;;
+            codex)
+                if [ -n "$OPENAI_API_KEY" ]; then
+                    printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" >> "$f"
+                fi ;;
+        esac
+    done
+    CREDENTIAL_FILE_HOST=$RUN_DIR_HOST/creds/agent.env
+}
+
+# sandbox_mounts_json - the read-only mounts every sandbox receives.
+#
+# Every source is inside the run directory. Sandcastle appends the ":z" label
+# to each of them, so the relabelling lands on disposable copies only.
+sandbox_mounts_json() {
+    MOUNT_POLICY="$RUN_DIR_HOST/staging/policy" \
+    MOUNT_SKILLS="$RUN_DIR_HOST/staging/skills" \
+    MOUNT_CREDS="$RUN_DIR_HOST/creds" \
+    SKILLS_OK="${STAGED_SKILLS:-0}" \
+    python3 -c '
+import json, os
+m = [{"hostPath": os.environ["MOUNT_POLICY"],
+      "sandboxPath": "/opt/agents/policy", "readonly": True},
+     {"hostPath": os.environ["MOUNT_CREDS"],
+      "sandboxPath": "/opt/agents/credential", "readonly": True}]
+if os.environ.get("SKILLS_OK") == "1":
+    m.append({"hostPath": os.environ["MOUNT_SKILLS"],
+              "sandboxPath": "/opt/agents/skills", "readonly": True})
+print(json.dumps(m))'
+}
+
+# run_in_runner <script-basename> <config-file-host> <timeout-seconds>
+#
+# The control plane is NOT privileged, and it is deliberately narrow. It gets
+# the disposable clone, the staged policy and skills, the per-run credential
+# file, the Podman API socket, and one orchestrator program. It never receives
+# ~/projects, a sibling repository, this checkout, ~/.ssh, an ssh-agent
+# socket, or a writable ~/.agents.
+#
+# --security-opt label=disable is required for one reason only: SELinux denies
+# a confined container process the connect() on the Podman socket. It applies
+# to the CONTROL PLANE alone. The sandboxes that run agent output keep their
+# full SELinux confinement, because Sandcastle never passes that flag.
+run_in_runner() {
+    local script=$1 config=$2 timeout=$3 rc=0
+    require_podman
+
+    RUNNER_NAME="agentbox-runner-$$-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
+
+    # No "-i", and stdin comes from /dev/null.
+    #
+    # The orchestrator reads nothing from stdin, and "-i" makes the podman
+    # client read the terminal. A client that reads the terminal from a
+    # BACKGROUND process group takes SIGTTIN, and podman forwards that to the
+    # container instead of stopping, which livelocks its attach loop: it stops
+    # draining the container's stdout, and the orchestrator blocks on its next
+    # write. The run then looks like a hang at teardown until the wall-clock
+    # limit kills it. A background process group is the normal case here, both
+    # for "agentbox ... &" and for "timeout", which puts its child in one.
+    #
+    # --foreground keeps the client in this shell's process group, so an
+    # interrupt still reaches it. Both halves are needed: either one alone
+    # leaves a way to reach the terminal.
+    set +e
+    timeout --foreground --kill-after=30s "$timeout" \
+        "$PODMAN_BIN" run --rm \
+        --name "$RUNNER_NAME" \
+        --userns=keep-id \
+        --security-opt label=disable \
+        -e "AGENTBOX_CONFIG_FILE=$config" \
+        -e "CONTAINER_HOST=unix://$PODMAN_SOCKET" \
+        -v "$PODMAN_SOCKET:$PODMAN_SOCKET" \
+        -v "$CLONE_HOST:$CLONE_HOST" \
+        -v "$RUN_DIR_HOST/staging:$RUN_DIR_HOST/staging:ro" \
+        -v "$RUN_DIR_HOST/creds:$RUN_DIR_HOST/creds:ro" \
+        -v "$RUN_DIR_HOST/staging/$script:/opt/workstation/sandcastle/$script:ro" \
+        -w "$CLONE_HOST" \
+        "$RUNNER_REF" \
+        "/opt/workstation/sandcastle/$script" </dev/null 2>&1 | redact
+    rc=${PIPESTATUS[0]}
+    set -e
+    return "$rc"
+}
+
+# ------------------------------------------------------------------ commands --
+
+cmd_build() {
+    local force=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --force) force=1; shift ;;
+            *) fail 2 "build: unknown option: $1" ;;
+        esac
+    done
+    require_podman
+
+    local img ref file ctx
+    for img in runner sandbox; do
+        if [ "$img" = runner ]; then
+            ref=$RUNNER_REF; file=$REPO_ROOT/containers/agent-runner/Containerfile
+            ctx=$REPO_ROOT/containers/agent-runner
+        else
+            ref=$SANDBOX_REF; file=$REPO_ROOT/containers/sandbox-web/Containerfile
+            ctx=$REPO_ROOT/containers/sandbox-web
+        fi
+        if [ "$force" = 0 ] && podman_ image exists "$ref" 2>/dev/null; then
+            info "image already present: $ref"
+            continue
+        fi
+        info "building $ref"
+        podman_ build -t "$ref" -f "$file" \
+            --build-arg "SANDCASTLE_PACKAGE=$SANDCASTLE_PACKAGE" \
+            --build-arg "SANDCASTLE_VERSION=$SANDCASTLE_VERSION" \
+            --build-arg "RUNNER_BASE=$RUNNER_BASE" \
+            --build-arg "SANDBOX_BASE=$SANDBOX_BASE" \
+            --build-arg "AGENT_UID=$(id -u)" \
+            --build-arg "AGENT_GID=$(id -g)" \
+            "$ctx"
+    done
+    info 'images ready'
+}
+
+cmd_doctor() {
+    local rc=0
+    printf '%s doctor\n\n' "$PROGRAM"
+
+    printf '  running on         %s\n' \
+        "$( [ "$IN_CONTAINER" = 1 ] && printf 'inside a container' || printf 'the Bazzite host' )"
+    printf '  host home          %s\n' "$HOST_HOME"
+    printf '  checkout (host)    %s\n' "$REPO_ROOT_HOST"
+    printf '  run scratch        %s\n' "$STATE_HOST"
+    printf '  sandcastle         %s@%s\n' "$SANDCASTLE_PACKAGE" "$SANDCASTLE_VERSION"
+
+    if command -v git >/dev/null 2>&1; then
+        printf '  git                %s\n' "$(git --version | awk '{print $3}')"
+    else
+        printf '  git                NOT FOUND\n'; rc=1
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        printf '  python3            present\n'
+    else
+        printf '  python3            NOT FOUND\n'; rc=1
+    fi
+    if command -v timeout >/dev/null 2>&1; then
+        printf '  timeout            present\n'
+    else
+        printf '  timeout            NOT FOUND (no wall-clock limit)\n'; rc=1
+    fi
+
+    if resolve_podman 2>/dev/null; then
+        printf '  podman client      %s\n' "$PODMAN_BIN"
+        printf '  podman connection  %s\n' "${CONTAINER_HOST:-local}"
+        if "$PODMAN_BIN" info --format '{{.Host.Security.Rootless}}' >/dev/null 2>&1; then
+            printf '  podman reachable   yes (rootless=%s)\n' \
+                "$("$PODMAN_BIN" info --format '{{.Host.Security.Rootless}}' 2>/dev/null)"
+        else
+            printf '  podman reachable   NO\n'; rc=1
+        fi
+    else
+        printf '  podman client      NOT FOUND\n'; rc=1
+    fi
+
+    # Without a client there is nothing to ask about the images. Report that
+    # and carry on, so doctor always prints the whole picture.
+    local ref
+    for ref in "$RUNNER_REF" "$SANDBOX_REF"; do
+        if [ -z "$PODMAN_BIN" ]; then
+            printf '  image              %s unknown (no Podman client)\n' "$ref"
+        elif "$PODMAN_BIN" image exists "$ref" 2>/dev/null; then
+            printf '  image              %s present\n' "$ref"
+        else
+            printf '  image              %s MISSING (run: agentbox build)\n' "$ref"; rc=1
+        fi
+    done
+
+    local stale_runs=0 stale_locks=0
+    if [ -d "$STATE_VIEW/runs" ]; then
+        stale_runs=$(find "$STATE_VIEW/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+    fi
+    if [ -d "$STATE_VIEW/locks" ]; then
+        stale_locks=$(find "$STATE_VIEW/locks" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+    fi
+    printf '  run directories    %s\n' "$stale_runs"
+    printf '  branch locks       %s\n' "$stale_locks"
+
+    load_secrets
+    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        printf '  claude credential  CLAUDE_CODE_OAUTH_TOKEN present\n'
+    elif [ -n "$ANTHROPIC_API_KEY" ]; then
+        printf '  claude credential  ANTHROPIC_API_KEY present\n'
+    else
+        printf '  claude credential  MISSING (see docs/secrets.md)\n'; rc=1
+    fi
+    if [ -n "$OPENAI_API_KEY" ]; then
+        printf '  codex credential   OPENAI_API_KEY present\n'
+    else
+        printf '  codex credential   absent (the review step will be skipped)\n'
+    fi
+
+    printf '\n'
+    [ "$rc" = 0 ] && info 'ready' || info 'not ready'
+    return "$rc"
+}
+
+# cmd_clean - remove everything an interrupted run can leave behind.
+#
+# Three kinds of leftover, not one. "sandcastle-" is the sandbox;
+# "agentbox-runner-" is the control plane that created it; and a run directory
+# holds the disposable clone, which can be large. A lock whose run directory
+# is gone would block the branch forever.
+cmd_clean() {
+    local all=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --all) all=1; shift ;;
+            *) fail 2 "clean: unknown option: $1" ;;
+        esac
+    done
+    # A stale lock and a stale run directory can be swept without a container
+    # engine, and they are exactly what is left on a machine where the engine
+    # went away. Missing Podman narrows the sweep; it does not stop it.
+    local ids prefix found=0 n
+    if resolve_podman 2>/dev/null; then
+        for prefix in 'agentbox-runner-' 'sandcastle-'; do
+            ids=$(podman_ ps -a --filter "name=^$prefix" --format '{{.Names}}' 2>/dev/null || true)
+            [ -n "$ids" ] || continue
+            found=1
+            # A while-read over a here-string, not a pipeline: a pipeline runs
+            # the loop in a subshell, where a failed removal cannot stop the
+            # command.
+            while read -r n; do
+                [ -n "$n" ] || continue
+                info "removing container $n"
+                podman_ rm -f "$n" >/dev/null
+            done <<<"$ids"
+        done
+    else
+        warn 'no Podman client here; only locks and run directories are swept'
+    fi
+
+    # A run directory is finished when no LIVE lock names it. That is the right
+    # signal, and age is not: a failed run keeps its directory on purpose, so a
+    # later sweep still has to be able to take it away, while a run that is
+    # still going must not lose the clone from under it.
+    local -a live_dirs=()
+    local d owner run_dir
+    if [ -d "$STATE_VIEW/locks" ]; then
+        for d in "$STATE_VIEW/locks"/*.lock; do
+            [ -d "$d" ] || continue
+            if [ "$all" = 1 ] || lock_is_stale "$d"; then
+                info "removing lock $(basename -- "$d")"
+                rm -rf -- "$d"
+                found=1
+            else
+                owner=$(cat -- "$d/owner" 2>/dev/null || printf '')
+                run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
+                [ -n "$run_dir" ] && live_dirs+=("$run_dir")
+            fi
+        done
+    fi
+
+    if [ -d "$STATE_VIEW/runs" ]; then
+        local host_spelling live l
+        for d in "$STATE_VIEW/runs"/*; do
+            [ -d "$d" ] || continue
+            host_spelling=$(host_path "$d")
+            live=0
+            for l in ${live_dirs[@]+"${live_dirs[@]}"}; do
+                [ "$l" = "$host_spelling" ] && live=1
+            done
+            if [ "$live" = 1 ]; then
+                info "keeping $(basename -- "$d") (a run still holds its branch lock)"
+                continue
+            fi
+            info "removing run directory $(basename -- "$d")"
+            rm -rf -- "$d"
+            found=1
+        done
+    fi
+
+    [ "$found" = 1 ] || info 'nothing to clean'
+}
+
+# ------------------------------------------------------------ run / pipeline --
+
+BRANCH=''
+BASE_BRANCH=agentbox/base
+CLONE_HOST=''
+CLONE_VIEW=''
+CREDENTIAL_FILE_HOST=''
+STAGED_SKILLS=0
+IMPORTED_SHA=''
+IMPORTED_COUNT=0
+
+# require_agent_branch <name> - the two rules a target branch must pass.
+#
+# A prefix test is not a name test. "agent/../../x" passes the prefix and is
+# not a branch; so is "agent/" on its own, and so is a name carrying a shell
+# metacharacter that git happens to allow. git owns these rules, so ask git
+# instead of restating them here.
+require_agent_branch() {
+    local branch=$1
+    case $branch in
+        "$AGENTBOX_BRANCH_PREFIX"*) ;;
+        *) fail 7 "refusing to use the branch \"$branch\"" \
+                "An unattended agent may only write to a branch that starts with \"$AGENTBOX_BRANCH_PREFIX\"." \
+                'This keeps main, and every human branch, out of reach.' ;;
+    esac
+    command -v git >/dev/null 2>&1 ||
+        fail 3 'git is not on PATH' 'agentbox needs git to validate a branch name.'
+    git check-ref-format "refs/heads/$branch" ||
+        fail 7 "not a usable branch name: \"$branch\"" \
+            'git rejects it as a ref. Use a plain name such as agent/my-task.'
+}
+
+# resolve_repo <path> - set REAL_REPO_VIEW and REAL_REPO_HOST, or stop.
+resolve_repo() {
+    local given=$1
+    REAL_REPO_HOST=$(host_path "$given")
+    REAL_REPO_VIEW=$given
+    [ -d "$REAL_REPO_VIEW" ] || REAL_REPO_VIEW=$(view_path "$REAL_REPO_HOST")
+    [ -d "$REAL_REPO_VIEW" ] || REAL_REPO_VIEW=$REAL_REPO_HOST
+    [ -d "$REAL_REPO_VIEW" ] || fail 3 "no such directory: $given"
+    git -C "$REAL_REPO_VIEW" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+        fail 3 "not a Git working tree: $given"
+}
+
+cmd_run() {
+    local mode=$1; shift
+    local repo='' branch='' prompt_file='' review_prompt_file='' base_ref=''
+    local agent=claude model='' review_agent=codex review_model=''
+    local max_iterations=1 effort='' image='' assert_isolation=1 dry_run=0
+    local timeout=$AGENTBOX_TIMEOUT_SECONDS max_commits=$AGENTBOX_MAX_COMMITS
+    local allow_merges=0 ambient=0
+    local -a checks=()
+
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo) repo=${2:?--repo needs a path}; shift 2 ;;
+            --branch) branch=${2:?--branch needs a name}; shift 2 ;;
+            --prompt-file) prompt_file=${2:?--prompt-file needs a path}; shift 2 ;;
+            --base) base_ref=${2:?--base needs a ref}; shift 2 ;;
+            --review-prompt-file) review_prompt_file=${2:?}; shift 2 ;;
+            --agent) agent=${2:?}; shift 2 ;;
+            --model) model=${2:?}; shift 2 ;;
+            --review-agent) review_agent=${2:?}; shift 2 ;;
+            --review-model) review_model=${2:?}; shift 2 ;;
+            --check) checks+=("${2:?--check needs a command}"); shift 2 ;;
+            --max-iterations) max_iterations=${2:?}; shift 2 ;;
+            --max-commits) max_commits=${2:?}; shift 2 ;;
+            --allow-merges) allow_merges=1; shift ;;
+            --timeout) timeout=${2:?}; shift 2 ;;
+            --effort) effort=${2:?}; shift 2 ;;
+            --image) image=${2:?}; shift 2 ;;
+            --use-ambient-credentials) ambient=1; shift ;;
+            --keep-run-dir) KEEP_RUN_DIR=1; shift ;;
+            # The probes run by default: a sandbox that turned out to hold key
+            # material must stop the run, not be discovered afterwards.
+            --assert-isolation) assert_isolation=1; shift ;;
+            --no-isolation-check) assert_isolation=0; shift ;;
+            --dry-run) dry_run=1; shift ;;
+            *) fail 2 "$mode: unknown option: $1" ;;
+        esac
+    done
+
+    [ -n "$repo" ] || fail 2 "$mode: --repo is required"
+    [ -n "$branch" ] || fail 2 "$mode: --branch is required"
+    [ -n "$prompt_file" ] || fail 2 "$mode: --prompt-file is required"
+    [ -r "$prompt_file" ] || fail 2 "$mode: cannot read the prompt file: $prompt_file"
+
+    model=${model:-$AGENTBOX_MODEL}
+    review_model=${review_model:-$AGENTBOX_REVIEW_MODEL}
+    image=${image:-$SANDBOX_REF}
+    BRANCH=$branch
+
+    case $timeout in
+        ''|*[!0-9]*) fail 2 "--timeout must be a whole number of seconds: $timeout" ;;
+    esac
+    [ "$timeout" -ge 60 ] || fail 2 '--timeout must be at least 60 seconds'
+    case $max_commits in
+        ''|*[!0-9]*) fail 2 "--max-commits must be a whole number: $max_commits" ;;
+    esac
+    [ "$max_commits" -ge 1 ] || fail 2 '--max-commits must be at least 1'
+    case $max_iterations in
+        ''|*[!0-9]*) fail 2 "--max-iterations must be a whole number: $max_iterations" ;;
+    esac
+
+    # A check runs as one shell command inside the sandbox. A newline would
+    # silently turn one check into two, and the second would not be reported
+    # under the name the caller gave. Refuse it instead of splitting it.
+    local c
+    for c in ${checks[@]+"${checks[@]}"}; do
+        case $c in
+            *$'\n'*) fail 2 'a --check argument must be a single line' \
+                    'Put a multi-line check in a script and call the script.' ;;
+        esac
+    done
+
+    require_agent_branch "$branch"
+    resolve_repo "$repo"
+
+    # --- the base commit ----------------------------------------------------
+    local base_sha
+    base_sha=$(git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet \
+                   "${base_ref:-HEAD}^{commit}") ||
+        fail 3 "cannot resolve the base ref: ${base_ref:-HEAD}"
+
+    # --- prompts ------------------------------------------------------------
+    local prompt review_prompt
+    prompt=$(cat -- "$prompt_file")
+    if [ -n "$review_prompt_file" ]; then
+        [ -r "$review_prompt_file" ] || fail 2 "cannot read: $review_prompt_file"
+        review_prompt=$(cat -- "$review_prompt_file")
+    else
+        review_prompt=$(cat -- "$REPO_ROOT/config/sandcastle/review-prompt.md")
+    fi
+
+    # A dry run prints the plan and stops. It runs BEFORE the Podman, image and
+    # credential requirements on purpose: what a run would do is the useful
+    # thing to see on a machine where none of them exist yet, which is exactly
+    # the machine someone is setting up.
+    if [ "$dry_run" = 1 ]; then
+        if [ "$ambient" = 1 ]; then load_secrets --ambient; else load_secrets; fi
+        info 'dry run - the plan:'
+        MODE="$mode" REPO="$REAL_REPO_HOST" BRANCH="$branch" BASE="$base_sha" \
+        AGENT="$agent" MODEL="$model" REVIEW_AGENT="$review_agent" \
+        REVIEW_MODEL="$review_model" MAX_ITER="$max_iterations" \
+        MAX_COMMITS="$max_commits" ALLOW_MERGES="$allow_merges" \
+        TIMEOUT="$timeout" EFFORT="$effort" IMAGE="$image" \
+        ASSERT="$assert_isolation" STATE="$STATE_HOST" \
+        CHECKS="$(printf '%s\n' ${checks[@]+"${checks[@]}"})" \
+        python3 -c '
+import json, os
+checks = [c for c in os.environ.get("CHECKS", "").split("\n") if c.strip()]
+plan = {
+    "mode": os.environ["MODE"],
+    "realRepository": os.environ["REPO"],
+    "realRepositoryIsMounted": False,
+    "branch": os.environ["BRANCH"],
+    "baseCommit": os.environ["BASE"],
+    "disposableCloneUnder": os.environ["STATE"] + "/runs/<run-id>/repo",
+    "agent": os.environ["AGENT"],
+    "model": os.environ["MODEL"],
+    "reviewAgent": os.environ["REVIEW_AGENT"],
+    "reviewModel": os.environ["REVIEW_MODEL"],
+    "maxIterations": int(os.environ["MAX_ITER"]),
+    "maxCommits": int(os.environ["MAX_COMMITS"]),
+    "allowMerges": os.environ["ALLOW_MERGES"] == "1",
+    "timeoutSeconds": int(os.environ["TIMEOUT"]),
+    "checks": checks,
+    "sandboxImage": os.environ["IMAGE"],
+    "assertIsolation": os.environ["ASSERT"] == "1",
+    "effort": os.environ.get("EFFORT") or None,
+}
+print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
+        resolve_podman 2>/dev/null ||
+            info 'no Podman client here; a real run needs one'
+        if [ -z "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ]; then
+            info "no Claude credential yet; a real run needs one in $SECRETS_FILE"
+        fi
+        return 0
+    fi
+
+    require_podman
+    podman_ image exists "$RUNNER_REF" 2>/dev/null ||
+        fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
+    podman_ image exists "$image" 2>/dev/null ||
+        fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
+
+    if [ "$ambient" = 1 ]; then load_secrets --ambient; else load_secrets; fi
+    if [ -z "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ]; then
+        fail 6 'no Claude credential' \
+            "Put CLAUDE_CODE_OAUTH_TOKEN in $SECRETS_FILE (mode 600)." \
+            'Mint one on the host with: claude setup-token' \
+            'Pass --use-ambient-credentials to take one from this shell instead.' \
+            'See docs/secrets.md.'
+    fi
+    collect_redactions
+
+    # --- the per-run scratch area and the branch lock -----------------------
+    local run_id
+    run_id=$(new_run_id)
+    make_run_dir "$run_id"
+    take_lock "$REAL_REPO_HOST" "$branch" "$timeout"
+
+    info "run id           $run_id"
+    info "repository       $REAL_REPO_HOST"
+    info "branch           $branch"
+    info "base commit      ${base_sha:0:12}"
+
+    # --- the baseline the import is judged against --------------------------
+    repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/before"
+    local target_before
+    target_before=$(git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet \
+                        "refs/heads/$branch") || target_before=''
+
+    # --- the disposable clone ----------------------------------------------
+    create_clone "$REAL_REPO_VIEW" "$base_sha"
+
+    # --- the staged copies the sandbox is allowed to see --------------------
+    stage_policy_and_skills
+    stage_script orchestrate.mjs
+    write_credential_file claude codex
+
+    local mounts_json
+    mounts_json=$(sandbox_mounts_json)
+
+    # --- the configuration document ----------------------------------------
+    #
+    # It is written to a file, not to an argument: a prompt can be long, and
+    # nothing about a run belongs in a process listing.
+    MODE="$mode" RUN_ID="$run_id" CLONE="$CLONE_HOST" BRANCH_="$branch" \
+    BASE_BRANCH="$BASE_BRANCH" BASE="$base_sha" PROMPT="$prompt" \
+    REVIEW_PROMPT="$review_prompt" AGENT="$agent" MODEL="$model" \
+    REVIEW_AGENT="$review_agent" REVIEW_MODEL="$review_model" \
+    MAX_ITER="$max_iterations" EFFORT="$effort" IMAGE="$image" \
+    MOUNTS="$mounts_json" ASSERT="$assert_isolation" TIMEOUT="$timeout" \
+    HAS_CLAUDE="$( [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] && printf 1 || printf 0 )" \
+    HAS_CODEX="$( [ -n "$OPENAI_API_KEY" ] && printf 1 || printf 0 )" \
+    FORBIDDEN="$(printf '%s\n%s\n%s\n%s\n' "$REAL_REPO_HOST" "$REAL_REPO_HOST/.git" \
+                     "$HOST_HOME/.agents" "$SKILLS_DIR")" \
+    CHECKS="$(printf '%s\n' ${checks[@]+"${checks[@]}"})" \
+    python3 -c '
+import json, os
+checks = [c for c in os.environ.get("CHECKS", "").split("\n") if c.strip()]
+forbidden = [p for p in os.environ.get("FORBIDDEN", "").split("\n") if p.strip()]
+cfg = {
+    "mode": os.environ["MODE"],
+    "runId": os.environ["RUN_ID"],
+    "repo": os.environ["CLONE"],
+    "branch": os.environ["BRANCH_"],
+    "baseBranch": os.environ["BASE_BRANCH"],
+    "baseCommit": os.environ["BASE"],
+    "prompt": os.environ["PROMPT"],
+    "reviewPrompt": os.environ["REVIEW_PROMPT"],
+    "agent": os.environ["AGENT"],
+    "model": os.environ["MODEL"],
+    "reviewAgent": os.environ["REVIEW_AGENT"],
+    "reviewModel": os.environ["REVIEW_MODEL"],
+    "maxIterations": int(os.environ["MAX_ITER"]),
+    "checks": checks,
+    "sandboxImage": os.environ["IMAGE"],
+    "mounts": json.loads(os.environ["MOUNTS"]),
+    "assertIsolation": os.environ["ASSERT"] == "1",
+    "timeoutSeconds": int(os.environ["TIMEOUT"]),
+    "credentials": {"claude": os.environ["HAS_CLAUDE"] == "1",
+                    "codex": os.environ["HAS_CODEX"] == "1"},
+    "credentialPath": "/opt/agents/credential/agent.env",
+    "forbiddenPaths": forbidden,
+}
+if os.environ.get("EFFORT"):
+    cfg["effort"] = os.environ["EFFORT"]
+print(json.dumps(cfg))' > "$RUN_DIR_VIEW/staging/config.json"
+    chmod 600 -- "$RUN_DIR_VIEW/staging/config.json"
+
+    # --- the run ------------------------------------------------------------
+    local rc=0
+    run_in_runner orchestrate.mjs "$RUN_DIR_HOST/staging/config.json" "$timeout" || rc=$?
+
+    if [ "$rc" != 0 ]; then
+        KEEP_RUN_DIR=1
+        shred_credentials
+        if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+            fail 10 "the run passed its ${timeout}s wall-clock limit" \
+                "Nothing was imported. The disposable clone is at $CLONE_HOST"
+        fi
+        fail 8 "the agent run failed (exit $rc)" \
+            "Nothing was imported. The disposable clone is at $CLONE_HOST"
+    fi
+    shred_credentials
+    remove_run_sandboxes
+
+    # --- the repository must not have moved --------------------------------
+    #
+    # It cannot have: it was never mounted. The comparison is defense in depth,
+    # and it also catches a human, a hook or another tool moving the target
+    # branch while the run was in progress.
+    repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/after"
+    local violations
+    if ! violations=$(diff_snapshot "$RUN_DIR_VIEW/meta/before" "$RUN_DIR_VIEW/meta/after"); then
+        KEEP_RUN_DIR=1
+        fail 9 'the repository changed while the run was in progress' \
+            "${violations//$'\n'/ | }" \
+            'Nothing was imported.'
+    fi
+    info 'repository integrity: unchanged during the run'
+
+    # --- the transfer -------------------------------------------------------
+    sanitize_clone
+    import_result "$REAL_REPO_VIEW" "$branch" "$base_sha" "$target_before" \
+        "$max_commits" "$allow_merges" "$run_id"
+
+    # --- and exactly one ref moved -----------------------------------------
+    repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/final"
+    if ! violations=$(diff_snapshot "$RUN_DIR_VIEW/meta/before" \
+                          "$RUN_DIR_VIEW/meta/final" "refs/heads/$branch"); then
+        KEEP_RUN_DIR=1
+        fail 9 'the import changed more than the agent branch' \
+            "${violations//$'\n'/ | }"
+    fi
+
+    info "imported         $IMPORTED_COUNT commit(s) as $branch"
+    info "branch tip       $IMPORTED_SHA"
+    info 'nothing else in the repository changed'
+}
+
+# ------------------------------------------------------------------ selftest --
+#
+# The selftest proves the lifecycle without a model credential, so it costs
+# nothing and can run on every machine. --adversarial goes further: the
+# sandbox attacks its git directory on purpose, and the host then proves that
+# the real repository did not move, that only the disposable clone did, and
+# that a corrupted result is refused at import.
+
+SELF_PASSED=0
+SELF_FAILED=0
+declare -a SELF_FAILURES=()
+
+self_pass() { printf '  PASS  %s\n' "$1"; SELF_PASSED=$(( SELF_PASSED + 1 )); }
+self_fail() {
+    printf '  FAIL  %s\n' "$1"
+    [ $# -gt 1 ] && printf '        %s\n' "$2"
+    SELF_FAILED=$(( SELF_FAILED + 1 ))
+    SELF_FAILURES+=("$1")
+}
+self_check() {
+    local name=$1; shift
+    if "$@" >/dev/null 2>&1; then self_pass "$name"; else self_fail "$name"; fi
+}
+
+# selinux_labels <path> <out-file> - one line per file, path and context.
+#
+# Returns 1 when this side cannot see SELinux contexts at all, which is the
+# normal case inside a container. The caller then skips the comparison rather
+# than reporting a false pass.
+selinux_labels() {
+    local path=$1 out=$2
+    [ -d /sys/fs/selinux ] || return 1
+    find "$path" -printf '%P %Z\n' >"$out" 2>/dev/null || return 1
+    [ -s "$out" ] || return 1
+    LC_ALL=C sort -o "$out" "$out"
+    # A machine without SELinux prints "?" for every context. That is not a
+    # baseline anything can be compared against.
+    if grep -q ' ?$' "$out"; then return 1; fi
+    return 0
+}
+
+# compare_labels <label> <path> <slot> - the contexts must be what they were.
+#
+# Only paths under the run directory may gain a container label. A canonical
+# workstation path that changed is a design failure, not a warning.
+compare_labels() {
+    local what=$1 path=$2 slot=$3
+    local before=$RUN_DIR_VIEW/meta/labels-$slot-before
+    local after=$RUN_DIR_VIEW/meta/labels-$slot-after
+    if ! selinux_labels "$path" "$after"; then
+        self_fail "$what SELinux labels are unchanged" 'could not read them again'
+        return 0
+    fi
+    if cmp -s -- "$before" "$after"; then
+        self_pass "$what SELinux labels are unchanged"
+    else
+        self_fail "$what SELinux labels are unchanged" \
+            "$(diff -- "$before" "$after" | head -3 | tr '\n' ' ')"
+    fi
+}
+
+# make_throwaway_repo <dir> - a small repository with a hook and two commits.
+make_throwaway_repo() {
+    local dir=$1
+    mkdir -p -- "$dir"
+    git -C "$dir" init --quiet -b main
+    printf 'one\n' > "$dir/a.txt"
+    git -C "$dir" add a.txt
+    git -C "$dir" -c user.name=agentbox -c user.email=agentbox@localhost \
+        commit --quiet -m 'first'
+    printf 'two\n' > "$dir/b.txt"
+    git -C "$dir" add b.txt
+    git -C "$dir" -c user.name=agentbox -c user.email=agentbox@localhost \
+        commit --quiet -m 'second'
+    # A real hook, so "the hooks did not change" is a claim about content and
+    # not only about an empty directory.
+    printf '#!/bin/sh\nexit 0\n' > "$dir/.git/hooks/pre-commit"
+    chmod 755 -- "$dir/.git/hooks/pre-commit"
+    git -C "$dir" config agentbox.selftest marker
+}
+
+cmd_selftest() {
+    local repo='' image='' adversarial=0 script=selftest.mjs timeout=600
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --repo) repo=${2:?--repo needs a path}; shift 2 ;;
+            --image) image=${2:?}; shift 2 ;;
+            --adversarial) adversarial=1; script=adversarial.mjs; shift ;;
+            --timeout) timeout=${2:?--timeout needs seconds}; shift 2 ;;
+            --keep-run-dir) KEEP_RUN_DIR=1; shift ;;
+            *) fail 2 "selftest: unknown option: $1" ;;
+        esac
+    done
+    image=${image:-$SANDBOX_REF}
+    case $timeout in
+        ''|*[!0-9]*) fail 2 "--timeout must be a whole number of seconds: $timeout" ;;
+    esac
+    [ "$timeout" -ge 60 ] || fail 2 '--timeout must be at least 60 seconds'
+
+    require_podman
+    podman_ image exists "$RUNNER_REF" 2>/dev/null ||
+        fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
+    podman_ image exists "$image" 2>/dev/null ||
+        fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
+
+    local run_id
+    run_id=$(new_run_id)
+    make_run_dir "$run_id"
+
+    # Without --repo the selftest owns its target, so it can prove the whole
+    # claim without touching anything a human cares about.
+    local own_repo=0
+    if [ -z "$repo" ]; then
+        own_repo=1
+        repo=$RUN_DIR_VIEW/target
+        make_throwaway_repo "$repo"
+    fi
+    resolve_repo "$repo"
+
+    BRANCH=agent/selftest-$run_id
+    require_agent_branch "$BRANCH"
+    take_lock "$REAL_REPO_HOST" "$BRANCH" "$timeout"
+
+    local base_sha
+    base_sha=$(git -C "$REAL_REPO_VIEW" rev-parse --verify HEAD^{commit})
+
+    printf '%s selftest%s\n\n' "$PROGRAM" \
+        "$( [ "$adversarial" = 1 ] && printf ' (adversarial)' || printf '' )"
+    printf '  repository       %s\n' "$REAL_REPO_HOST"
+    printf '  branch           %s\n' "$BRANCH"
+    printf '  base commit      %s\n' "${base_sha:0:12}"
+    printf '  run directory    %s\n\n' "$RUN_DIR_HOST"
+
+    # --- the labels and the integrity baseline ------------------------------
+    local labels_ok=1
+    selinux_labels "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/labels-repo-before" || labels_ok=0
+    if [ "$labels_ok" = 1 ]; then
+        selinux_labels "$REPO_ROOT/config/agents" \
+            "$RUN_DIR_VIEW/meta/labels-policy-before" || labels_ok=0
+    fi
+    if [ "$labels_ok" = 1 ] && [ -d "$SKILLS_VIEW" ]; then
+        selinux_labels "$SKILLS_VIEW" "$RUN_DIR_VIEW/meta/labels-skills-before" || labels_ok=0
+    fi
+
+    repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/before"
+    local target_before
+    target_before=$(git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet \
+                        "refs/heads/$BRANCH") || target_before=''
+
+    create_clone "$REAL_REPO_VIEW" "$base_sha"
+    stage_policy_and_skills
+    stage_script "$script"
+    # No model credential is needed and none is written. The directory still
+    # exists, because the sandbox mount points at it.
+    write_credential_file
+
+    local mounts_json
+    mounts_json=$(sandbox_mounts_json)
+
+    RUN_ID="$run_id" CLONE="$CLONE_HOST" BRANCH_="$BRANCH" \
+    BASE_BRANCH="$BASE_BRANCH" BASE="$base_sha" IMAGE="$image" \
+    MOUNTS="$mounts_json" \
+    FORBIDDEN="$(printf '%s\n%s\n%s\n%s\n' "$REAL_REPO_HOST" "$REAL_REPO_HOST/.git" \
+                     "$HOST_HOME/.agents" "$SKILLS_DIR")" \
+    python3 -c '
+import json, os
+forbidden = [p for p in os.environ.get("FORBIDDEN", "").split("\n") if p.strip()]
+print(json.dumps({
+    "runId": os.environ["RUN_ID"],
+    "repo": os.environ["CLONE"],
+    "branch": os.environ["BRANCH_"],
+    "baseBranch": os.environ["BASE_BRANCH"],
+    "baseCommit": os.environ["BASE"],
+    "sandboxImage": os.environ["IMAGE"],
+    "mounts": json.loads(os.environ["MOUNTS"]),
+    "forbiddenPaths": forbidden,
+    "checks": ["git --version"],
+}))' > "$RUN_DIR_VIEW/staging/config.json"
+
+    local rc=0
+    run_in_runner "$script" "$RUN_DIR_HOST/staging/config.json" "$timeout" || rc=$?
+    printf '\n'
+    if [ "$rc" = 0 ]; then
+        self_pass 'the sandbox lifecycle completed'
+    elif [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+        self_fail 'the sandbox lifecycle completed' \
+            "it passed the ${timeout}s limit; raise it with --timeout"
+    else
+        self_fail 'the sandbox lifecycle completed' "exit $rc"
+    fi
+    remove_run_sandboxes
+
+    # --- the real repository did not move -----------------------------------
+    repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/after"
+    local violations
+    if violations=$(diff_snapshot "$RUN_DIR_VIEW/meta/before" "$RUN_DIR_VIEW/meta/after"); then
+        self_pass 'the real repository refs, HEAD, config, hooks and working tree are unchanged'
+    else
+        self_fail 'the real repository refs, HEAD, config, hooks and working tree are unchanged' \
+            "${violations//$'\n'/ | }"
+    fi
+
+    # --- the labels of the canonical paths did not move ---------------------
+    if [ "$labels_ok" = 1 ]; then
+        compare_labels 'the real repository' "$REAL_REPO_VIEW" repo
+        compare_labels 'the canonical agent policy' "$REPO_ROOT/config/agents" policy
+        if [ -f "$RUN_DIR_VIEW/meta/labels-skills-before" ]; then
+            compare_labels 'the canonical skill store' "$SKILLS_VIEW" skills
+        fi
+    else
+        printf '  SKIP  the SELinux label comparison (no readable contexts on this side)\n'
+    fi
+
+    # --- what the adversarial run has to prove ------------------------------
+    if [ "$adversarial" = 1 ]; then
+        # The attack must actually have happened. A test whose attack silently
+        # did nothing proves nothing.
+        local gitdir=$CLONE_VIEW/.git
+        if [ -f "$gitdir/hooks/post-checkout" ]; then
+            self_pass 'the sandbox did install a hook in the DISPOSABLE clone'
+        else
+            self_fail 'the sandbox did install a hook in the DISPOSABLE clone' \
+                'the attack did not run, so nothing was proven'
+        fi
+        if ! cmp -s -- "$gitdir/config" "$RUN_DIR_VIEW/meta/clone-config.pristine"; then
+            self_pass 'the sandbox did rewrite the DISPOSABLE clone git config'
+        else
+            self_fail 'the sandbox did rewrite the DISPOSABLE clone git config' \
+                'the attack did not run, so nothing was proven'
+        fi
+        if git --git-dir="$gitdir" rev-parse --verify --quiet \
+               refs/heads/agentbox-attacker >/dev/null; then
+            self_pass 'the sandbox did create an arbitrary ref in the DISPOSABLE clone'
+        else
+            self_fail 'the sandbox did create an arbitrary ref in the DISPOSABLE clone' \
+                'the attack did not run, so nothing was proven'
+        fi
+        local clone_main
+        clone_main=$(git --git-dir="$gitdir" rev-parse --verify --quiet \
+                         refs/heads/main || printf '')
+        if [ -n "$clone_main" ] && [ "$clone_main" != "$base_sha" ]; then
+            self_pass 'the sandbox did move main in the DISPOSABLE clone'
+        else
+            self_fail 'the sandbox did move main in the DISPOSABLE clone' \
+                'the attack did not run, so nothing was proven'
+        fi
+
+        # And the same attack must not have reached the real repository.
+        self_check 'the real repository has no post-checkout hook' \
+            test ! -e "$REAL_REPO_VIEW/.git/hooks/post-checkout"
+        local real_main
+        real_main=$(git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet \
+                        refs/heads/main || printf '')
+        if [ "$real_main" = "$base_sha" ]; then
+            self_pass 'the real repository main is exactly where it was'
+        else
+            self_fail 'the real repository main is exactly where it was' \
+                "expected $base_sha, found ${real_main:-none}"
+        fi
+        if git -C "$REAL_REPO_VIEW" config --local --get alias.pwn >/dev/null 2>&1; then
+            self_fail 'the real repository has no injected git alias'
+        else
+            self_pass 'the real repository has no injected git alias'
+        fi
+        if git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet \
+               refs/heads/agentbox-attacker >/dev/null 2>&1; then
+            self_fail 'the real repository has no attacker ref'
+        else
+            self_pass 'the real repository has no attacker ref'
+        fi
+    fi
+
+    # --- the transfer -------------------------------------------------------
+    sanitize_clone
+    self_check 'the disposable clone has no hooks after sanitising' \
+        test -z "$(ls -A -- "$CLONE_VIEW/.git/hooks" 2>/dev/null)"
+
+    if import_result "$REAL_REPO_VIEW" "$BRANCH" "$base_sha" "$target_before" \
+           "$AGENTBOX_MAX_COMMITS" 0 "$run_id"; then
+        self_pass "the validated commits imported as $BRANCH"
+    else
+        self_fail "the validated commits imported as $BRANCH" "$IMPORT_REFUSAL"
+    fi
+
+    repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/final"
+    if violations=$(diff_snapshot "$RUN_DIR_VIEW/meta/before" \
+                        "$RUN_DIR_VIEW/meta/final" "refs/heads/$BRANCH"); then
+        self_pass "the import moved refs/heads/$BRANCH and nothing else"
+    else
+        self_fail "the import moved refs/heads/$BRANCH and nothing else" \
+            "${violations//$'\n'/ | }"
+    fi
+
+    # --- a corrupted result must be refused ---------------------------------
+    if [ "$adversarial" = 1 ]; then
+        local imported=$IMPORTED_SHA orphan
+        # A commit with no parent cannot descend from the base, so it is the
+        # smallest possible proof that the descent rule is enforced.
+        orphan=$(printf 'orphan\n' |
+            GIT_AUTHOR_NAME=agentbox GIT_AUTHOR_EMAIL=agentbox@localhost \
+            GIT_COMMITTER_NAME=agentbox GIT_COMMITTER_EMAIL=agentbox@localhost \
+            sgit commit-tree "$(sgit rev-parse "$base_sha^{tree}")" -F -)
+        sgit update-ref "refs/heads/$BRANCH" "$orphan"
+
+        IMPORT_SOFT=1
+        if import_result "$REAL_REPO_VIEW" "$BRANCH" "$base_sha" "$imported" \
+               "$AGENTBOX_MAX_COMMITS" 0 "$run_id-corrupt"; then
+            self_fail 'a corrupted result is refused at import' 'it was imported'
+        else
+            self_pass 'a corrupted result is refused at import'
+        fi
+        IMPORT_SOFT=0
+
+        local tip
+        tip=$(git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet "refs/heads/$BRANCH" || printf '')
+        if [ "$tip" = "$imported" ]; then
+            self_pass 'the refused import left the agent branch where it was'
+        else
+            self_fail 'the refused import left the agent branch where it was' \
+                "expected $imported, found ${tip:-none}"
+        fi
+
+        repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/refused"
+        if violations=$(diff_snapshot "$RUN_DIR_VIEW/meta/final" \
+                            "$RUN_DIR_VIEW/meta/refused"); then
+            self_pass 'the refused import changed nothing at all'
+        else
+            self_fail 'the refused import changed nothing at all' \
+                "${violations//$'\n'/ | }"
+        fi
+    fi
+
+    # --- leave the target as it was found -----------------------------------
+    if [ "$own_repo" = 0 ]; then
+        # Only ever a branch this selftest created, in the agent/ namespace.
+        case $BRANCH in
+            "$AGENTBOX_BRANCH_PREFIX"selftest-*)
+                git -C "$REAL_REPO_VIEW" update-ref -d "refs/heads/$BRANCH" \
+                    >/dev/null 2>&1 || true ;;
+        esac
+    fi
+
+    printf '\npassed %d   failed %d\n' "$SELF_PASSED" "$SELF_FAILED"
+    if [ "$SELF_FAILED" -gt 0 ]; then
+        local f
+        printf 'failed checks:\n'
+        for f in "${SELF_FAILURES[@]}"; do printf '  - %s\n' "$f"; done
+        KEEP_RUN_DIR=1
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------- main --
+
+case ${1:-help} in
+    build)    shift; cmd_build "$@" ;;
+    doctor)   shift; cmd_doctor "$@" ;;
+    clean)    shift; cmd_clean "$@" ;;
+    selftest) shift; cmd_selftest "$@" ;;
+    run)      shift; cmd_run run "$@" ;;
+    pipeline) shift; cmd_run pipeline "$@" ;;
+    version|--version) printf '%s %s\n' "$PROGRAM" "$VERSION" ;;
+    # Print the header comment block, and stop at the first line of code, so
+    # the help never has to be kept in step with a line number.
+    help|-h|--help)
+        awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0" ;;
+    *) fail 2 "unknown command: $1" 'Run "agentbox help".' ;;
+esac

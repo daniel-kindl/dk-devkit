@@ -1,0 +1,107 @@
+# sandbox-web - the disposable sandbox for the TypeScript/web pilot.
+#
+# Sandcastle creates one container from this image per run, bind-mounts the
+# git worktree into it, runs the agent, and destroys the container afterwards.
+# Nothing in this image is trusted to survive a run.
+#
+# The image holds NO credential. The Claude token and the optional Codex key
+# arrive as a read-only bind mount of one file, mode 600, at
+# /opt/agents/credential/agent.env. bin/agent-cli-shim turns that file into the
+# environment variable the CLI expects, inside the CLI's own process, so no
+# credential value is ever an argument to podman and none is in the container
+# environment. Nothing is written to a layer.
+#
+# Sandcastle's bind-mount providers require:
+#   * a non-root user, because the agent CLIs refuse to run as root
+#   * git, for the commits and the branch operations
+#   * gh, for issue lookups
+#   * the agent CLI on PATH
+#
+# Build with:  agentbox build
+
+ARG SANDBOX_BASE=docker.io/library/node:22-bookworm-slim
+FROM ${SANDBOX_BASE}
+
+# The provider passes --user <uid>:<gid> and --userns=keep-id, so the user
+# inside the image must carry the same numeric id as the host user. The base
+# image already uses 1000 for its own "node" user; rename it to the "agent"
+# name and home directory Sandcastle expects rather than adding a second uid.
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+RUN set -eux; \
+    groupmod -n agent "$(getent group ${AGENT_GID} | cut -d: -f1)"; \
+    usermod -l agent -d /home/agent -m "$(getent passwd ${AGENT_UID} | cut -d: -f1)"; \
+    usermod -s /bin/bash agent
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl git jq less ripgrep unzip; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*
+
+# The read-only policy, skill and credential mounts land here. Creating the
+# mount points in the image keeps the run-time mount from having to create
+# them.
+RUN install -d -o agent -g agent \
+        /opt/agents/policy /opt/agents/skills /opt/agents/credential /opt/agents/bin
+
+USER agent
+WORKDIR /home/agent
+ENV HOME=/home/agent
+ENV PATH=/home/agent/.local/bin:$PATH
+
+# The same native installers that manifests/toolchain.env pins for web-dev.
+# They self-update, so the image records what was verified, not a hard pin.
+# They run BEFORE the credential shim is on PATH, so an installer that probes
+# for an existing CLI finds the real one or nothing, never the shim.
+ARG CLAUDE_CODE_INSTALLER=https://claude.ai/install.sh
+ARG CODEX_INSTALLER=https://chatgpt.com/codex/install.sh
+RUN set -eux; \
+    curl -fsSL "${CLAUDE_CODE_INSTALLER}" | bash; \
+    curl -fsSL "${CODEX_INSTALLER}" | bash; \
+    "$HOME/.local/bin/claude" --version; \
+    "$HOME/.local/bin/codex" --version
+
+# The credential shim, linked under every agent CLI name. /opt/agents/bin comes
+# first on PATH from here on, so the shim runs before the real CLI does, reads
+# the mounted credential file, and execs the real CLI with the value exported
+# in that process alone.
+# COPY writes as root whatever the current USER is, so the ownership has to be
+# stated here: a later RUN as "agent" cannot chmod a root-owned file.
+COPY --chown=agent:agent --chmod=0755 bin/agent-cli-shim /opt/agents/bin/agent-cli-shim
+RUN set -eux; \
+    test -x /opt/agents/bin/agent-cli-shim; \
+    ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/claude; \
+    ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/codex
+ENV PATH=/opt/agents/bin:/home/agent/.local/bin:$PATH
+
+# The shim must be what PATH finds, and it must still reach the real CLI.
+RUN set -eux; \
+    test "$(command -v claude)" = /opt/agents/bin/claude; \
+    test "$(command -v codex)" = /opt/agents/bin/codex; \
+    claude --version; \
+    codex --version
+
+# The shared agent policy is mounted read-only at /opt/agents/policy. Both
+# clients read their global instructions through these links, so the sandbox
+# agent obeys the same AGENTS.md as an interactive agent.
+# /opt/agents/skills is the read-only staged skill store. Claude Code accepts
+# one directory link for the whole store; Codex needs one link per skill, which
+# agentbox creates at run time in the writable home.
+RUN set -eux; \
+    mkdir -p /home/agent/.claude /home/agent/.codex; \
+    ln -sfn /opt/agents/policy/AGENTS.md /home/agent/.claude/CLAUDE.md; \
+    ln -sfn /opt/agents/policy/AGENTS.md /home/agent/.codex/AGENTS.md; \
+    ln -sfn /opt/agents/skills          /home/agent/.claude/skills
+
+# Sandcastle overrides the entrypoint with "sleep infinity" and drives the
+# container through "podman exec".
+CMD ["sleep", "infinity"]

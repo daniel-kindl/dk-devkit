@@ -36,7 +36,18 @@ Edit it only through this repository.
 6. **Verify before you claim.** `./verify.sh` must pass. When you change the
    router, `bin/devbox-verify` must also pass.
 
-7. **Do not special-case a repository.** The router already resolves an
+7. **Keep the unattended agent boundary closed.** `bin/agentbox` runs model
+   output with no human watching. The boundary is a **disposable clone**: an
+   unattended sandbox never receives the real repository, its `.git`, the
+   canonical `~/.agents`, or the canonical skill store. Only commits that pass
+   host-side validation enter the real repository, and only on an `agent/`
+   branch. Never bind-mount a canonical path into a sandbox, never pass a
+   credential value as an argument, never run a command the disposable clone
+   configures, and never weaken the import validation. `verify.sh` module 8
+   checks each of these, `agentbox selftest --adversarial` proves them on a
+   live machine, and `docs/sandcastle.md` says why.
+
+8. **Do not special-case a repository.** The router already resolves an
    environment from `.devbox`, from the git-common-dir, from `repos.tsv`, and
    from the inference rules. Add a generic rule, not an exception.
 

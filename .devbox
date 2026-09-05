@@ -6,7 +6,8 @@
 # repos.tsv. The declaration is committed so that every clone routes the same
 # way.
 #
-# web-dev is the environment the repository is edited from. The agent-runner
-# environment is the Sandcastle control plane and is not a development
-# environment for this repository.
+# web-dev is the environment the repository is edited from. The Sandcastle
+# control plane is NOT a Distrobox and needs no entry here: it is a plain
+# non-privileged OCI image that bin/agentbox starts per run. See
+# docs/sandcastle.md for why a Distrobox cannot be used for it.
 web-dev

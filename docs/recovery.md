@@ -115,7 +115,38 @@ devbox exec web-dev -- codex login
 
 Both open a browser on the host.
 
-## 8. MANUAL: install and register Orca
+## 8. MANUAL: prepare unattended agent runs
+
+`bootstrap/host.sh` already installed `agentbox` and created
+`~/.config/agentbox/secrets.env` as an empty, commented template. Two steps
+remain, and both are yours.
+
+Mint a **dedicated** token for unattended use, and put it in that file:
+
+```bash
+claude setup-token                      # on the host; opens a browser
+$EDITOR ~/.config/agentbox/secrets.env  # set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Do not copy the token out of an interactive session. A dedicated token can be
+revoked on its own. `OPENAI_API_KEY` in the same file is optional; without it,
+the pipeline skips the independent review step and says so.
+
+Then build the images and check the result:
+
+```bash
+agentbox build      # a few minutes; it pulls two base images
+agentbox doctor     # expect: ready
+```
+
+`agentbox selftest` proves the whole sandbox lifecycle on a throw-away
+repository it creates itself, without spending a token.
+`agentbox selftest --adversarial` goes further: the sandbox attacks its own git
+directory on purpose, and the run proves that the real repository, its config,
+its hooks and its SELinux labels are all unchanged. Run both after a rebuild.
+See `docs/sandcastle.md`.
+
+## 9. MANUAL: install and register Orca
 
 1. Download the Orca AppImage and put it in `~/AppImages/`.
 2. Make it executable and start it once. Gear Lever, which
@@ -128,7 +159,7 @@ Both open a browser on the host.
 The container-side wrappers need no separate step. `bootstrap/web-dev.sh`
 already links `orca` and `orca-ide` inside the box to the tracked bridge script.
 
-## 9. Restore the repository assignment, if you want it
+## 10. Restore the repository assignment, if you want it
 
 The router resolves `dkkb` from its `package.json` with no configuration. The
 existing `devbox-verify` suite expects an explicit assignment, so add it if you
@@ -139,7 +170,7 @@ git clone git@github.com:<owner>/dkkb.git ~/projects/dkkb
 devbox assign web-dev ~/projects/dkkb
 ```
 
-## 10. Verify
+## 11. Verify
 
 ```bash
 ~/projects/workstation/verify.sh
@@ -162,6 +193,9 @@ run them again.
 | Codex cannot see a skill | `sync-agent-skills` |
 | A client rewrote its own status line | `~/.agents/statusline/install.sh` |
 | Routing resolves the wrong environment | `devbox doctor` |
+| An unattended agent run fails to start | `agentbox doctor` |
+| A sandbox container, lock or run directory was left behind | `agentbox clean`, or `agentbox clean --all` |
+| The agent images are stale | `agentbox build --force` |
 | The container is broken beyond repair | see below |
 
 ### Recreating the web-dev container
