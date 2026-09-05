@@ -21,6 +21,8 @@ What is proved here:
     the child's exit code, its summary and its evidence survive the new layer
     an interrupt reaches the caller, and the evidence it produced is on disk
     two issues at a time never report each other's progress
+    two issues at a time never interleave one another's blocks, on the
+        terminal or in the evidence log
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -759,6 +762,213 @@ class TestConcurrentAttribution(unittest.TestCase):
                 continue
             number = line.split("#", 1)[1].split()[0]
             self.assertIn(f"iteration 1/4 of {number}", line)
+
+
+class YieldingStream:
+    """A stream that lets the scheduler switch on every write.
+
+    ``io.StringIO`` is effectively atomic per call under the GIL, so a test
+    that used one would pass whether or not the renderer holds its lock. This
+    one sleeps between writes, which is what a real terminal or a real file
+    does under contention. An unserialised writer then interleaves every time,
+    and a serialised one cannot interleave at all.
+    """
+
+    encoding = "utf-8"
+
+    def __init__(self, delay=0.002):
+        self.delay = delay
+        self._chunks = []
+        self._guard = threading.Lock()   # protects the list, nothing else
+
+    def write(self, text):
+        with self._guard:
+            self._chunks.append(text)
+        time.sleep(self.delay)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+    def getvalue(self):
+        with self._guard:
+            return "".join(self._chunks)
+
+
+class TestConcurrentSerialisation(unittest.TestCase):
+    """A block written by one issue is never split by another.
+
+    Attribution says which issue a line belongs to. This says that the lines
+    of one block arrive together. A failure block whose evidence had another
+    issue's progress line in the middle of it would be worse than no block:
+    a reader would attach the wrong output to the wrong failure.
+    """
+
+    MARKS = ("MARK-86", "MARK-87")
+
+    def _run_in_two_threads(self, worker, timeout=15):
+        errors = []
+
+        def guarded(mark):
+            try:
+                worker(mark)
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=guarded, args=(m,))
+                   for m in self.MARKS]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=timeout)
+            self.assertFalse(thread.is_alive(), "a worker did not finish")
+        self.assertEqual(errors, [])
+
+    def _assert_blocks_are_contiguous(self, text, first, last):
+        """Between one mark's first and last line, no other mark appears."""
+        lines = text.splitlines()
+        for mine in self.MARKS:
+            others = [m for m in self.MARKS if m != mine]
+            starts = [i for i, l in enumerate(lines) if first(mine) in l]
+            ends = [i for i, l in enumerate(lines) if last(mine) in l]
+            self.assertEqual(len(starts), 1, f"{mine}\n{text}")
+            self.assertEqual(len(ends), 1, f"{mine}\n{text}")
+            self.assertLess(starts[0], ends[0], text)
+            for line in lines[starts[0]:ends[0] + 1]:
+                for other in others:
+                    self.assertNotIn(other, line, f"interleaved:\n{text}")
+
+    def test_a_failure_block_is_never_split_by_another_issue(self):
+        stream = YieldingStream()
+        ui = StageUi(stream, level="compact", tty=False, clock=StepClock(),
+                     unicode=True, multi=True)
+
+        def worker(mark):
+            ui.failure(
+                Stage.CHECK, f"pnpm check {mark}",
+                tail=[f"evidence {mark} line {i}" for i in range(5)],
+                log_path=f"/logs/{mark}.log",
+                retry=f"retry 1/2 {mark}",
+            )
+
+        self._run_in_two_threads(worker)
+        self._assert_blocks_are_contiguous(
+            stream.getvalue(),
+            lambda m: f"pnpm check {m}",
+            lambda m: f"retry 1/2 {m}",
+        )
+
+    def test_an_issue_frame_is_never_split_by_another_issue(self):
+        stream = YieldingStream()
+        ui = StageUi(stream, level="verbose", tty=False, clock=StepClock(),
+                     unicode=True, multi=True)
+
+        def worker(mark):
+            number = int(mark.split("-")[1])
+            ui.issue_start(1, 2, number, f"title {mark}")
+            ui.note(f"note {mark}", level="verbose")
+            ui.stage(Stage.CLAIM, Status.OK, f"branch {mark}")
+            ui.issue_end(number, Status.OK, f"finished {mark}")
+
+        self._run_in_two_threads(worker)
+        # Each thread's own lines must not be torn apart mid-line.
+        for line in stream.getvalue().splitlines():
+            present = [m for m in self.MARKS if m in line]
+            self.assertLessEqual(len(present), 1, f"torn line: {line!r}")
+
+    def test_the_evidence_log_receives_each_block_whole(self):
+        """The canonical run log, written from two threads through a real file."""
+        from agentqueue.cli import _RunLog
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "runs", "testrun", "queue.log")
+        run_log = _RunLog(path)
+        self.assertTrue(os.path.exists(path))
+        stream = YieldingStream()
+        ui = StageUi(stream, level="quiet", tty=False, clock=StepClock(),
+                     unicode=True, multi=True, transcript=run_log.write)
+
+        def worker(mark):
+            ui.failure(
+                Stage.CHECK, f"pnpm check {mark}",
+                tail=[f"evidence {mark} line {i}" for i in range(5)],
+                retry=f"retry 1/2 {mark}",
+            )
+
+        self._run_in_two_threads(worker)
+        run_log.close()
+        with open(path, "r", encoding="utf-8") as handle:
+            written = handle.read()
+        self._assert_blocks_are_contiguous(
+            written,
+            lambda m: f"pnpm check {m}",
+            lambda m: f"retry 1/2 {m}",
+        )
+        # A quiet terminal printed the failure and nothing else; the log has
+        # the same block. The level changed the terminal, not the evidence.
+        self.assertIn("evidence MARK-86 line 4", written)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_the_evidence_log_loses_no_line_under_several_writers(self):
+        from agentqueue.cli import _RunLog
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "queue.log")
+        run_log = _RunLog(path)
+        writers, per_writer = 4, 60
+        expected = {
+            f"writer {w} line {i}"
+            for w in range(writers) for i in range(per_writer)
+        }
+
+        def worker(index):
+            for i in range(per_writer):
+                run_log.write(f"writer {index} line {i}")
+
+        threads = [threading.Thread(target=worker, args=(w,))
+                   for w in range(writers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+            self.assertFalse(thread.is_alive())
+        run_log.close()
+        with open(path, "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        # Every line is whole, none is lost, and none was written twice.
+        self.assertEqual(len(lines), writers * per_writer)
+        self.assertEqual(set(lines), expected)
+
+    def test_a_closed_run_log_refuses_a_late_write(self):
+        from agentqueue.cli import _RunLog
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "queue.log")
+        run_log = _RunLog(path)
+        run_log.write("before")
+        run_log.close()
+        run_log.write("after")          # must not raise, and must not appear
+        run_log.close()                 # closing twice is harmless
+        with open(path, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(), ["before"])
+
+    def test_the_json_stream_writes_one_whole_object_per_line(self):
+        stream = YieldingStream()
+        ui = ui_mod.JsonUi(stream)
+
+        def worker(mark):
+            number = int(mark.split("-")[1])
+            ui.issue_start(1, 2, number, f"title {mark}")
+            for stage in (Stage.CLAIM, Stage.PUSH, Stage.PR):
+                ui.stage(stage, Status.OK, f"detail {mark}")
+            ui.issue_end(number, Status.OK, f"done {mark}")
+
+        self._run_in_two_threads(worker)
+        for line in stream.getvalue().splitlines():
+            record = json.loads(line)          # a torn line fails here
+            self.assertIn("event", record)
 
 
 class OverlappingRunner(fakes.FakeRunner):

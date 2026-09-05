@@ -659,7 +659,8 @@ Compact output is a display choice. Nothing is lost.
 ```
 
 `queue.log` holds every line the display received, at every level, including
-the ones the level did not print. The per-issue `*.log` files hold the raw
+the ones the level did not print. It is one file, written from every worker
+thread under one lock, so a line is never torn and a block is never split. The per-issue `*.log` files hold the raw
 `agentbox` stream, written **as the child speaks**, so a run that was
 interrupted still leaves its evidence behind. Every one of these files is
 created mode 600.
@@ -776,9 +777,15 @@ the heartbeat is off. See "A terminal, a file and a pipe".
 
 Every piece of per-issue progress is held per thread, in the coordinator and in
 both renderers, so one issue can never report another's stage, iteration or
-result. The queue-wide counters behind `[2/5]` are taken under a lock. The
-tests force a real overlap with a barrier to prove it, because two issues run
-one after the other would prove nothing.
+result. The queue-wide counters behind `[2/5]` are taken under a lock.
+
+Two issues share one terminal and one run log, so a multi-line block — a
+failure with its evidence, an issue frame, the final summary — is written
+under one hold of the renderer lock. A failure block with another issue's
+progress line in the middle of it would be worse than no block at all: a
+reader would attach the wrong output to the wrong failure. `verify.sh` module
+8b proves statically that no write path of either renderer sits outside that
+lock, and the tests force a real overlap to prove the blocks arrive whole.
 
 ## Honest limits
 

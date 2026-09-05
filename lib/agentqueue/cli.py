@@ -36,6 +36,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 from typing import List, Optional
 
@@ -313,11 +314,17 @@ class _RunLog:
     display received, including the ones it did not print, is appended here.
     The file is readable by its owner only, and it lives beside the per-run
     agentbox logs in the state directory the coordinator already owns.
+
+    One file, and with maxParallel above 1 several worker threads reach it.
+    Writing a line and flushing it are two operations, so both are taken under
+    one lock: a torn line in the evidence log is worse than a slow one, and
+    this is the file a human reads after a run that went wrong.
     """
 
     def __init__(self, path: str):
         self.path = path
         self._handle = None
+        self._lock = threading.Lock()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -326,21 +333,23 @@ class _RunLog:
             self._handle = None
 
     def write(self, line: str) -> None:
-        if self._handle is None:
-            return
-        try:
-            self._handle.write(line.rstrip("\n") + "\n")
-            self._handle.flush()
-        except (OSError, ValueError):
-            self._handle = None
+        with self._lock:
+            if self._handle is None:
+                return
+            try:
+                self._handle.write(line.rstrip("\n") + "\n")
+                self._handle.flush()
+            except (OSError, ValueError):
+                self._handle = None
 
     def close(self) -> None:
-        if self._handle is not None:
-            try:
-                self._handle.close()
-            except (OSError, ValueError):
-                pass
-            self._handle = None
+        with self._lock:
+            if self._handle is not None:
+                try:
+                    self._handle.close()
+                except (OSError, ValueError):
+                    pass
+                self._handle = None
 
 
 def _build_ui(args, pol, run_log):

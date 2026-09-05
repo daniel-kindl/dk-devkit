@@ -292,19 +292,31 @@ class StageUi(NullUi):
     def wants_raw(self) -> bool:
         return self.level == "debug"
 
+    # Every write below takes the renderer lock, and the lock is re-entrant,
+    # so a public method may hold it across a whole block and the primitives
+    # still take it when they are called on their own. The lock is at the
+    # BOTTOM as well as the top on purpose: a write path added later cannot
+    # bypass it by forgetting the outer "with".
+    #
+    # A multi-line block is written under one hold. Two issues at a time means
+    # two threads, and a failure block whose evidence had another issue's
+    # progress line in the middle of it would be worse than no block at all.
+
     def _record(self, text: str) -> None:
         if self.transcript is None:
             return
-        for line in text.split("\n"):
-            self.transcript(line)
+        with self._lock:
+            for line in text.split("\n"):
+                self.transcript(line)
 
     def _shows(self, level: str) -> bool:
         return LEVELS.index(self.level) >= LEVELS.index(level)
 
     def _finish_pending(self) -> None:
-        if self._pending:
-            self.stream.write("\n")
-            self._pending = ""
+        with self._lock:
+            if self._pending:
+                self.stream.write("\n")
+                self._pending = ""
 
     def _write(self, text: str) -> None:
         """Emit one finished line. It is never overwritten again.
@@ -313,29 +325,31 @@ class StageUi(NullUi):
         with a blank line and a block that starts with one both exist for the
         same reason, and the reader only needs the gap once.
         """
-        self._finish_pending()
-        text = text.rstrip()
-        if not text:
-            if self._last_blank:
-                return
-            self._last_blank = True
-        else:
-            self._last_blank = False
-        self.stream.write(text + "\n")
-        self.stream.flush()
+        with self._lock:
+            self._finish_pending()
+            text = text.rstrip()
+            if not text:
+                if self._last_blank:
+                    return
+                self._last_blank = True
+            else:
+                self._last_blank = False
+            self.stream.write(text + "\n")
+            self.stream.flush()
 
     def _repaint(self, text: str) -> None:
         """Emit the active line. On a TTY it replaces the previous frame."""
-        text = text.rstrip()
-        if self.in_place:
-            self.stream.write("\r\x1b[2K" + text)
-            self._pending = text
-        else:
-            self._finish_pending()
-            self.stream.write(text + "\n")
-        self.stream.flush()
-        self._last_blank = False
-        self._painted_at = self.clock()
+        with self._lock:
+            text = text.rstrip()
+            if self.in_place:
+                self.stream.write("\r\x1b[2K" + text)
+                self._pending = text
+            else:
+                self._finish_pending()
+                self.stream.write(text + "\n")
+            self.stream.flush()
+            self._last_blank = False
+            self._painted_at = self.clock()
 
     # -------------------------------------------------------------- header --
 
@@ -344,55 +358,62 @@ class StageUi(NullUi):
         shape = "sequential" if parallel <= 1 else f"{parallel} at a time"
         head = f"agentqueue {version}"
         sub = f"{slug} {self.dot} {runnable} runnable issue{plural} {self.dot} {shape}"
-        self._record(head)
-        self._record(sub)
-        if self._shows("compact"):
-            self._write(head)
-            self._write(sub)
-        self._record(f"run id {run_id}")
-        if log_path:
-            self._record(f"run log {log_path}")
-        if self._shows("verbose"):
-            self._write(f"run id {run_id}")
+        with self._lock:
+            self._record(head)
+            self._record(sub)
+            if self._shows("compact"):
+                self._write(head)
+                self._write(sub)
+            self._record(f"run id {run_id}")
             if log_path:
-                self._write(f"run log {log_path}")
-        if self._shows("compact"):
-            self._write("")
+                self._record(f"run log {log_path}")
+            if self._shows("verbose"):
+                self._write(f"run id {run_id}")
+                if log_path:
+                    self._write(f"run log {log_path}")
+            if self._shows("compact"):
+                self._write("")
 
     def wave(self, index, numbers):
         text = "wave " + str(index) + ": " + ", ".join(f"#{n}" for n in numbers)
-        self._record(text)
-        if self._shows("verbose"):
-            self._write(text)
+        with self._lock:
+            self._record(text)
+            if self._shows("verbose"):
+                self._write(text)
 
     # --------------------------------------------------------------- issue --
 
     def issue_start(self, index, total, number, title):
-        self._close_stage()
-        self._issue = number
+        # The thread-local fields are this thread's, but the shared ones and
+        # the stream are not, so the whole frame is opened under one hold.
         self._local.issue = number
         self._local.started = self.clock()
-        self._issue_started = self.clock()
         title = (title or "").strip()
         text = f"[{index}/{total}] #{number}" + (f" {title}" if title else "")
-        self._record(text)
-        if self._shows("compact"):
-            self._write(text)
+        with self._lock:
+            self._close_stage()
+            self._issue = number
+            self._issue_started = self._local.started
+            self._record(text)
+            if self._shows("compact"):
+                self._write(text)
 
     def issue_end(self, number, status, detail=""):
-        self._close_stage()
         started = getattr(self._local, "started", self._issue_started)
         elapsed = human_duration(self.clock() - started)
         detail = detail.strip()
         joined = f"{detail} {self.dot} {elapsed}" if detail else elapsed
-        line = self._stage_line(Stage.DONE, status, joined, issue=number)
-        self._record(line)
-        if self._shows("compact") or status in (
-            Status.FAILED, Status.ATTENTION, Status.SECURITY
-        ):
-            self._write(line)
-        if self._shows("compact"):
-            self._write("")
+        with self._lock:
+            self._close_stage()
+            line = self._stage_line(Stage.DONE, status, joined, issue=number)
+            self._record(line)
+            if self._shows("compact") or status in (
+                Status.FAILED, Status.ATTENTION, Status.SECURITY
+            ):
+                self._write(line)
+            if self._shows("compact"):
+                self._write("")
+        self._local.issue = 0
         self._issue = 0
 
     # --------------------------------------------------------------- stage --
@@ -531,24 +552,22 @@ class StageUi(NullUi):
     # ---------------------------------------------------------------- text --
 
     def note(self, text, level="verbose"):
-        self._record(text)
-        if not self._shows(level):
-            return
         with self._lock:
-            self._write("    " + text)
+            self._record(text)
+            if self._shows(level):
+                self._write("    " + text)
 
     def warn(self, text):
-        self._record("warning: " + text)
         with self._lock:
+            self._record("warning: " + text)
             self._write(f"  {self.marks[Status.ATTENTION]} warning: {text}")
 
     def raw(self, line):
         line = line.rstrip("\n")
-        self._record(line)
-        if self.level != "debug":
-            return
         with self._lock:
-            self._write("      " + line)
+            self._record(line)
+            if self.level == "debug":
+                self._write("      " + line)
 
     # ------------------------------------------------------------- failure --
 
@@ -584,14 +603,15 @@ class StageUi(NullUi):
     # ------------------------------------------------------------- summary --
 
     def summary(self, report, policy, extra_lines=()):
-        self._close_stage()
-        for line in render_compact_summary(self, report, policy):
-            self._record(line)
-            self._write(line)
-        for line in extra_lines:
-            self._record(line)
-            if self._shows("verbose"):
+        with self._lock:
+            self._close_stage()
+            for line in render_compact_summary(self, report, policy):
+                self._record(line)
                 self._write(line)
+            for line in extra_lines:
+                self._record(line)
+                if self._shows("verbose"):
+                    self._write(line)
 
     # ----------------------------------------------------------- heartbeat --
 
@@ -619,6 +639,9 @@ class StageUi(NullUi):
         self._thread.start()
 
     def close(self):
+        # The heartbeat thread takes the same lock, so it is stopped and joined
+        # BEFORE the lock is taken here. Joining while holding it would wait
+        # for a thread that is waiting for it.
         self._stop.set()
         thread, self._thread = self._thread, None
         if thread is not None:
@@ -679,8 +702,8 @@ class JsonUi(NullUi):
         with self._lock:
             self.stream.write(line + "\n")
             self.stream.flush()
-        if self.transcript is not None:
-            self.transcript(line)
+            if self.transcript is not None:
+                self.transcript(line)
 
     def run_header(self, version, slug, runnable, parallel, run_id, log_path=""):
         self._emit("run.start", version=version, repository=slug,

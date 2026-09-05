@@ -220,6 +220,56 @@ check_contains 'P15c the JSON stream attributes an event per thread' \
     'self._local = threading.local()' "$UI_CODE"
 check_contains 'P15d the output modes are one group, --json included' \
     'level.add_argument("--json"' "$CLI_CODE_ALL"
+check_contains 'P15e the run log serialises its writers' \
+    'self._lock = threading.Lock()' "$CLI_CODE_ALL"
+
+# One terminal and one run log, reached by several worker threads. Every write
+# path of the renderers must sit inside the renderer lock, and a path added
+# later must not be able to forget it. This finds that statically, the way F1
+# finds a write method that skipped the dry-run guard, rather than hoping a
+# timing test happens to catch the interleaving.
+if command -v python3 >/dev/null 2>&1; then
+    unlocked=$(python3 - "$AQ_LIB" <<'LOCKCHECK'
+import ast, os, sys
+
+WRITES = ("self._write(", "self._repaint(", "self._record(",
+          "self.stream.write", "self._finish_pending(")
+LOCKED = ("self._lock", "self._guard")
+
+source = open(os.path.join(sys.argv[1], "ui.py")).read()
+tree = ast.parse(source)
+bad = []
+for klass in tree.body:
+    if not isinstance(klass, ast.ClassDef) or klass.name not in ("StageUi", "JsonUi"):
+        continue
+    for fn in klass.body:
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        guarded = set()
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.With):
+                continue
+            head = (ast.get_source_segment(source, node) or "")[:80]
+            if not any(name in head for name in LOCKED):
+                continue
+            for inner in ast.walk(node):
+                guarded.add(id(inner))
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            call = ast.get_source_segment(source, node) or ""
+            if not call.startswith(WRITES):
+                continue
+            if id(node) not in guarded:
+                bad.append(f"{klass.name}.{fn.name}")
+print(" ".join(sorted(set(bad))))
+LOCKCHECK
+)
+    check_eq 'P15f every renderer write path is inside the renderer lock' \
+        '' "$unlocked"
+else
+    skip 'P15f every renderer write path is inside the renderer lock' 'no python3'
+fi
 
 # The four levels exist, and they are the only four.
 if command -v python3 >/dev/null 2>&1; then
