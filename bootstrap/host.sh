@@ -12,15 +12,15 @@
 #     wrappers into ~/.local/bin as symlinks into this checkout
 #   * generates the claude and codex host shims with 'devbox new-shim'
 #   * installs the devbox router configuration into ~/.config/devbox-router
-#   * creates the web-dev Distrobox from distrobox/web-dev.ini when it is absent
+#   * creates the web-dev and python-dev Distroboxes when they are absent
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
 #   * installs the agentbox CLI and prepares its credential file location
 #   * installs the agentqueue host shim, which delegates into the container
 #
 # What it never does:
-#   * install a Node or npm toolchain on the host
+#   * install a Node, npm, Python, or uv toolchain on the host
 #   * install the agentqueue runtime on the host: the host gets the shim only
-#   * touch an existing web-dev container
+#   * touch an existing development container
 #   * write any credential
 #   * overwrite live devbox repository assignments
 
@@ -152,25 +152,30 @@ done
 
 section 'devbox router configuration (~/.config/devbox-router)'
 CFG=$HOME/.config/devbox-router
-link_into "$REPO_ROOT/config/devbox-router/README.md"                  "$CFG/README.md"
-link_into "$REPO_ROOT/config/devbox-router/settings.env"               "$CFG/settings.env"
-link_into "$REPO_ROOT/config/devbox-router/inference.tsv"              "$CFG/inference.tsv"
-link_into "$REPO_ROOT/config/devbox-router/environments.d/web-dev.env" "$CFG/environments.d/web-dev.env"
+link_into "$REPO_ROOT/config/devbox-router/README.md"                    "$CFG/README.md"
+link_into "$REPO_ROOT/config/devbox-router/settings.env"                 "$CFG/settings.env"
+link_into "$REPO_ROOT/config/devbox-router/inference.tsv"                "$CFG/inference.tsv"
+link_into "$REPO_ROOT/config/devbox-router/environments.d/web-dev.env"   "$CFG/environments.d/web-dev.env"
+link_into "$REPO_ROOT/config/devbox-router/environments.d/python-dev.env" "$CFG/environments.d/python-dev.env"
 # repos.tsv holds absolute host paths. It is machine state: seed it once, then
 # leave it to 'devbox assign'.
 install_if_absent "$REPO_ROOT/config/devbox-router/repos.tsv.template" "$CFG/repos.tsv"
 
 # ---------------------------------------------------------------- Distrobox --
-section 'Distrobox environment: web-dev'
+section 'Distrobox development environments'
 if ! have distrobox; then
     warn 'distrobox is not installed'
     manual 'Install distrobox on the host, then re-run bootstrap/host.sh'
-elif podman container exists web-dev 2>/dev/null; then
-    ok 'container web-dev already exists (left untouched)'
-    info 'to recreate it deliberately, see docs/recovery.md'
 else
-    run distrobox assemble create --file "$REPO_ROOT/distrobox/web-dev.ini" &&
-        change 'created container web-dev'
+    for dev_env in web-dev python-dev; do
+        if podman container exists "$dev_env" 2>/dev/null; then
+            ok "container $dev_env already exists (left untouched)"
+        else
+            run distrobox assemble create --file "$REPO_ROOT/distrobox/$dev_env.ini" &&
+                change "created container $dev_env"
+        fi
+    done
+    info 'to recreate a development container deliberately, see docs/recovery.md'
 fi
 
 # ------------------------------------------------------- Codex host settings --
@@ -241,6 +246,7 @@ fi
 manual 'Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519'
 manual 'Authenticate GitHub on the host: gh auth login --git-protocol ssh'
 manual 'Mint an unattended Claude token on the host with "claude setup-token", then put it in ~/.config/agentbox/secrets.env'
-manual 'Run bootstrap/web-dev.sh inside the container: devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh (it installs the agentqueue runtime the host shim delegates to)'
+manual 'Bootstrap web-dev: devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh'
+manual 'Bootstrap python-dev: devbox exec python-dev --cwd ~/projects/workstation -- ./bootstrap/python-dev.sh'
 
 summary
