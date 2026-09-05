@@ -785,7 +785,7 @@ def render_compact_summary(ui, report, policy) -> List[str]:
     arrow = getattr(ui, "arrow", _ARROW_ASCII)
 
     stopped = bool(report.stopped_for_security)
-    lines = ["", "agentqueue stopped" if stopped else "agentqueue complete", ""]
+    lines = ["", "agentq stopped" if stopped else "agentq complete", ""]
 
     status_of = {
         Outcome.SUCCESS: Status.OK,

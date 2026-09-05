@@ -302,7 +302,7 @@ class TestCompactOutput(unittest.TestCase):
             issues=[(86, "One"), (87, "Two")],
         )
         harness.run()
-        self.assertIn("agentqueue complete", harness.text)
+        self.assertIn("agentq complete", harness.text)
         self.assertRegex(harness.text, r"✓ #86 → PR #\d+ merged")
         self.assertRegex(harness.text, r"✓ #87 → PR #\d+ merged")
         self.assertIn("2 completed · 0 failed · 0 human intervention", harness.text)
@@ -405,9 +405,9 @@ class TestFailureOutput(unittest.TestCase):
         self.assertIn("a security or integrity failure, not a failing test",
                       harness.text)
         self.assertIn("THE QUEUE STOPPED", harness.text)
-        self.assertIn("agentqueue stopped", harness.text)
+        self.assertIn("agentq stopped", harness.text)
         # An ordinary failure marker must not be the only thing a reader sees.
-        self.assertNotIn("agentqueue complete", harness.text)
+        self.assertNotIn("agentq complete", harness.text)
 
     def test_a_credential_in_the_diff_stops_the_queue_visibly(self):
         harness = Harness(script=[green()])
@@ -434,8 +434,8 @@ class TestOutputLevels(unittest.TestCase):
         self.assertNotIn("✓ CLAIM", harness.text)
         self.assertNotIn("● IMPLEMENT", harness.text)
         self.assertNotIn("a model sentence", harness.text)
-        self.assertNotIn("== agentqueue summary ==", harness.text)
-        self.assertIn("agentqueue complete", harness.text)
+        self.assertNotIn("== agentq summary ==", harness.text)
+        self.assertIn("agentq complete", harness.text)
         self.assertIn("1 completed", harness.text)
 
     def test_quiet_still_shows_a_failure(self):
@@ -459,7 +459,7 @@ class TestOutputLevels(unittest.TestCase):
         self.assertIn("✓ CLAIM", harness.text)
         self.assertIn("wave 1: #86", harness.text)
         self.assertIn("pull request #501", harness.text)
-        self.assertIn("== agentqueue summary ==", harness.text)
+        self.assertIn("== agentq summary ==", harness.text)
         # Verbose is not debug: the model's own sentences stay out.
         self.assertNotIn("a model sentence", harness.text)
 
