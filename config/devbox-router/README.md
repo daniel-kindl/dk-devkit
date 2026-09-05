@@ -14,7 +14,7 @@ optional `.devbox` file, and using one is a project's own decision.
     ~/.local/bin/devbox-verify       the verification suite
     ~/.local/bin/claude              host shim -> devbox agent claude
     ~/.local/bin/codex               host shim -> devbox agent codex
-    ~/.local/bin/agentqueue          pinned shim -> devbox exec web-dev
+    ~/.local/bin/agentq          pinned shim -> devbox exec web-dev
     ~/.local/bin/devbox-run          compatibility wrapper -> devbox run
     ~/.local/bin/web-dev-run         compatibility wrapper -> devbox exec web-dev
 
@@ -100,7 +100,7 @@ That is right for a toolchain command. `claude` in a Rust repository belongs in
 
 A **pinned** shim names the environment:
 
-    exec "$router" exec web-dev --cwd "$PWD" -- agentqueue "$@"
+    exec "$router" exec web-dev --cwd "$PWD" -- agentq "$@"
 
 That is right for a command that is installed in exactly one environment. The
 working directory still crosses the boundary, so a command that resolves its
@@ -111,7 +111,7 @@ A path in an ARGUMENT is a different case. The user types it on the host, the
 tool reads it inside the container, and argv used to cross over untouched.
 `--map-path` names the option that carries such a path:
 
-    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentqueue "$@"
+    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentq "$@"
 
 The router then translates that value the way it translates the working
 directory: under the workspace it becomes the workspace path, and anywhere else

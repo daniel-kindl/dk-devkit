@@ -393,7 +393,7 @@ check 'J1 no repository policy file is tracked here' -- \
 
 aq_stale=$(grep -rIln --exclude-dir=.git --exclude-dir=__pycache__ \
     --exclude-dir=.worktrees --exclude='agentqueue-cli.test.py' \
-    --exclude='85-agentq.sh' -e 'agentqueue drain' -e 'cmd_drain' \
+    --exclude='85-agentq.sh' -e 'agentq drain' -e 'agentqueue drain' -e 'cmd_drain' \
     -- "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/docs" "$REPO_ROOT/config" \
        "$REPO_ROOT/manifests" "$REPO_ROOT/verify" "$REPO_ROOT/README.md" \
        "$REPO_ROOT/AGENTS.md" 2>/dev/null | tr '\n' ' ')

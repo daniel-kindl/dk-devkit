@@ -330,7 +330,7 @@ section 'O. pinned host shims (devbox new-shim --env)'
 #
 # A resolved shim asks the repository which environment owns it. A pinned shim
 # does not: the tool is installed in ONE environment, so the working directory
-# decides the path and never the destination. agentqueue is the first user.
+# decides the path and never the destination. agentq is the first user.
 #
 # The shims below are written into the scratch directory, so the real
 # ~/.local/bin is untouched.
