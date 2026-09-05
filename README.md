@@ -77,6 +77,7 @@ to see what a run would change.
 | `bin/` | The router, its verification suite, and the workstation's own tools |
 | `verify/` | The verification modules that `./verify.sh` runs |
 | `docs/` | Architecture, bootstrap, recovery, and the secret policy |
+| `.devbox` | The router declaration: this repository is edited in `web-dev` |
 
 ## Verify
 

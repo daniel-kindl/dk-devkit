@@ -1,0 +1,12 @@
+# Development environment for this repository, read by the devbox router.
+# See config/devbox-router/README.md.
+#
+# This repository holds no language-toolchain marker, so inference.tsv cannot
+# resolve it. Without this file the router depends on a machine-local entry in
+# repos.tsv. The declaration is committed so that every clone routes the same
+# way.
+#
+# web-dev is the environment the repository is edited from. The agent-runner
+# environment is the Sandcastle control plane and is not a development
+# environment for this repository.
+web-dev

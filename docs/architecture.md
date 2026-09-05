@@ -58,6 +58,11 @@ fails with exit code 7. It does not guess.
 `config/devbox-router/README.md` holds the full reference, including the exit
 codes and the environment file keys.
 
+This repository uses rule 2 on itself. It holds no language-toolchain marker,
+so `inference.tsv` cannot resolve it, and a `repos.tsv` entry would be machine
+state. The tracked `.devbox` file at the repository root declares `web-dev`, so
+every clone routes the same way.
+
 ### Why the agent shims exist
 
 Orca launches a bare `claude` or `codex` from the host. Both names resolve to a
