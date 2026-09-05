@@ -7,11 +7,11 @@ validated `agent/*` branch. Everything after that was manual: write a prompt
 file, start a run, push the branch, open a pull request, wait for the checks,
 merge, then choose the next issue.
 
-`agentqueue` is that missing half. One command drains a backlog:
+`agentqueue` is that missing half. One command runs a backlog:
 
 ```bash
 cd ~/projects/dkkb
-agentqueue drain --repo .
+agentqueue run
 ```
 
 The command runs on the host. The coordinator runs inside `web-dev`. See
@@ -208,7 +208,7 @@ A push is publication. A credential that reaches GitHub cannot be recalled by
 deleting the branch afterwards. The whole diff of `base...branch` therefore
 goes through `bin/scan-secrets --stdin` before every push, including the push
 after a repair. A finding is a **queue-global** failure: nothing is pushed, and
-the drain stops.
+the run stops.
 
 ## The merge gates
 
@@ -249,7 +249,7 @@ review means is a policy choice, and it is written down rather than inferred:
 The pull request body states which of these happened. It never claims a check
 or a review that did not run.
 
-An unattended backlog drain needs `optional` plus `mergeWithoutReview: true`,
+An unattended backlog run needs `optional` plus `mergeWithoutReview: true`,
 and that combination is an explicit two-key decision on purpose.
 
 ## The failure taxonomy
@@ -337,10 +337,10 @@ what it may do with the backlog. Neither reads the other.
 The shipped defaults refuse an automatic merge. A repository turns it on
 deliberately.
 
-### A policy for an autonomous drain
+### A policy for an autonomous run
 
-`agentqueue init --repo <path>` writes a starting point. A repository that
-should drain without waiting for a human review needs this:
+`agentqueue init` writes a starting point into the repository you stand in. A
+repository that should run without waiting for a human review needs this:
 
 ```json
 {
@@ -386,18 +386,56 @@ The prompt names no credential and no credential path. A unit test asserts that.
 
 ## The commands
 
-Run them from a host terminal. `PATH` may be relative, and `.` is the usual
-choice, because the working directory travels with the command.
+Run them from a host terminal.
 
 ```bash
-agentqueue drain  --repo PATH [options]   drain the backlog
-agentqueue plan   --repo PATH             the plan, an alias of drain --dry-run
-agentqueue doctor --repo PATH             what is ready, what is missing
-agentqueue policy --repo PATH [--json]    the resolved policy and its sources
-agentqueue init   --repo PATH [--local]   write a policy file to start from
+agentqueue run    [options]   run the eligible issues
+agentqueue plan   [options]   the plan, an alias of run --dry-run
+agentqueue doctor [options]   what is ready, what is missing
+agentqueue policy [--json]    the resolved policy and its sources
+agentqueue init   [--local]   write a policy file to start from
 ```
 
-Options for `drain`:
+### Which repository
+
+Every command works on ONE repository, and it is the Git working tree you
+stand in. The normal case says nothing at all:
+
+```bash
+cd ~/projects/dkkb
+agentqueue run
+```
+
+A subdirectory resolves to the top of the same working tree, and a linked
+worktree resolves to its own top rather than to the main one.
+
+`--repo PATH` names another repository, for a run started from somewhere else:
+
+```bash
+agentqueue run --repo ~/projects/dkkb
+agentqueue run --repo=~/projects/dkkb
+agentqueue run --repo /srv/checkouts/other
+agentqueue run --repo ../other
+```
+
+You type a HOST path there, and the coordinator reads it inside the container.
+The router translates it, exactly as it translates the working directory, so
+no form asks you to know a container path. A relative value resolves against
+the directory you are standing in, and a leading `~` expands against your host
+home in both spellings: the shell expands `--repo ~/x` before the shim runs,
+and the router expands `--repo=~/x`, which the shell leaves alone.
+`--map-path` in the generated shim is what asks for that;
+`manifests/agentqueue.env` names the options.
+
+The queue never guesses. A directory that is not inside a Git working tree is
+a usage error, exit 2, and it names the directory it refused:
+
+```text
+agentqueue: not a Git working tree: /workspace
+  run agentqueue inside a repository, or name one with --repo PATH
+```
+
+Options for `run`:
 
 ```
 --label NAME          override the ready label
@@ -438,7 +476,7 @@ method skipped the guard.
 
 ## What the terminal shows
 
-A drain runs for hours with nobody watching it. The default output is
+A run lasts for hours with nobody watching it. The default output is
 therefore a **compact stage view**: one line per stage of one issue, and
 nothing else.
 
@@ -606,7 +644,7 @@ agentqueue stopped
 
   ⚠ THE QUEUE STOPPED: #86: the branch diff matches a credential pattern ...
   This is a security or integrity failure, not a failing test. Read the run
-  log before starting another drain.
+  log before starting another run.
 ```
 
 The exit code is 4, as it always was.
@@ -614,11 +652,11 @@ The exit code is 4, as it always was.
 ### The four levels, and JSON
 
 ```bash
-agentqueue drain --repo .             # compact stage output, the default
-agentqueue drain --repo . --verbose   # the stages and the coordinator's notes
-agentqueue drain --repo . --debug     # everything, raw agentbox stream included
-agentqueue drain --repo . --quiet     # failures and the final summary only
-agentqueue drain --repo . --json      # one JSON object per event
+agentqueue run             # compact stage output, the default
+agentqueue run --verbose   # the stages and the coordinator's notes
+agentqueue run --debug     # everything, raw agentbox stream included
+agentqueue run --quiet     # failures and the final summary only
+agentqueue run --json      # one JSON object per event
 ```
 
 | Level | What reaches the terminal |
@@ -675,7 +713,7 @@ and no credential value is ever an argument. See `docs/secrets.md`.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | the queue drained, or it is empty, or what is left is legitimately blocked |
+| 0 | the queue ran out of runnable work, or it is empty, or what is left is legitimately blocked |
 | 1 | a coordinator defect |
 | 2 | a usage error |
 | 3 | the policy is unusable |
@@ -693,28 +731,30 @@ You type the command **on the host**, in a normal terminal:
 
 ```bash
 cd ~/projects/dkkb
-agentqueue plan  --repo .
-agentqueue drain --repo .
+agentqueue plan
+agentqueue run
 ```
 
 `~/.local/bin/agentqueue` on the host is a devbox router shim, the same kind of
 file as the `claude` and `codex` shims. It holds no runtime, no state and no
 credential. `bootstrap/host.sh` generates it with
 
-    devbox new-shim agentqueue --env web-dev --print
+    devbox new-shim agentqueue --env web-dev --map-path --repo --print
 
-and the environment name comes from `AGENTQUEUE_ENVIRONMENT` in
-`manifests/agentqueue.env`. The whole shim is one line of routing:
+and both the environment name and the translated options come from
+`manifests/agentqueue.env`: `AGENTQUEUE_ENVIRONMENT` and
+`AGENTQUEUE_HOST_PATH_OPTIONS`. The whole shim is one line of routing:
 
-    exec "$router" exec web-dev --cwd "$PWD" -- agentqueue "$@"
+    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentqueue "$@"
 
 ### What the delegation preserves
 
 | Property | How |
 | --- | --- |
 | the working directory | `--cwd "$PWD"`. The router maps the host path to the container path, so `~/projects/dkkb` becomes `/workspace/dkkb` |
-| `--repo .` | the coordinator resolves `.` against the **translated** directory, so it means the same repository |
-| the arguments | `"$@"` to the router, positional arguments to the container, `exec "$@"` inside it. Spaces, quotes and newlines survive |
+| the repository | the shim resolves none. The coordinator resolves it on the far side, from the **translated** directory, so standing in `~/projects/dkkb` reaches `/workspace/dkkb`. A shim that resolved it first would hand over a host path that does not exist inside the container |
+| `--repo PATH` | the value is a HOST path, so the router translates it the same way it translates the working directory: `~/projects/dkkb` becomes `/workspace/dkkb`, and a path outside the workspace becomes `/run/host/...`. A relative value resolves against the host working directory first, and a leading `~` expands against the host home, so `--repo .`, `--repo ../other` and `--repo=~/projects/dkkb` all name the directory you meant. See [the router README](../config/devbox-router/README.md) for why a relative value cannot simply cross over |
+| the arguments | `"$@"` to the router, positional arguments to the container, `exec "$@"` inside it. The router carries them as an array and never as a stream, so spaces, quotes and newlines survive, in a translated value too |
 | the exit status | every step is an `exec`, so no process sits between the coordinator and your shell |
 | Ctrl-C | the interrupt reaches the coordinator, the shell sees 130, and nothing is left running inside the container |
 | the environment | the shim assigns nothing and exports nothing. What the coordinator sees is what `devbox exec` gives it |
@@ -737,7 +777,7 @@ enough:
 Inside the container the direct call keeps working, and it is the same command:
 
 ```bash
-devbox exec web-dev -- agentqueue plan --repo ~/projects/dkkb
+devbox exec web-dev --cwd ~/projects/dkkb -- agentqueue plan
 ```
 
 ### The exit codes a router adds
@@ -806,14 +846,14 @@ lock, and the tests force a real overlap to prove the blocks arrive whole.
 - A merge queue, a required approval or a `CODEOWNERS` rule will refuse the
   merge call. The queue reports that and asks for a human. It does not try to
   work around it.
-- Nothing schedules a drain. `agentqueue drain` runs when a human starts it.
+- Nothing schedules a run. `agentqueue run` runs when a human starts it.
 - **`kill -TERM` against the host process is not a clean stop.** Ctrl-C in the
   terminal is: `bin/devbox-verify` checks that the coordinator ends and that
   nothing survives inside the container. A `SIGTERM` sent to the host-side
   process id ends that process and leaves the coordinator running inside
   `web-dev`, because `podman exec` does not forward it. This is a property of
   `distrobox enter`, and it is the same for `devbox exec`, `devbox run` and the
-  `claude` and `codex` shims. Stop a drain with Ctrl-C.
+  `claude` and `codex` shims. Stop a run with Ctrl-C.
 
 ## Related documents
 

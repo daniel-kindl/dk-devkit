@@ -199,7 +199,7 @@ read-only file, never as an argument.
 that carries the result the rest of the way:
 
     cd ~/projects/dkkb
-    agentqueue drain --repo .
+    agentqueue run
 
 It selects a runnable issue, drives `agentbox`, pushes the validated branch,
 opens the pull request, waits for the GitHub checks, merges when every gate
@@ -231,8 +231,18 @@ translates the working directory and delegates.
 
     host terminal                     web-dev container
     cd ~/projects/dkkb
-    agentqueue drain --repo .  ---->  cd /workspace/dkkb
-                                      agentqueue drain --repo .
+    agentqueue run             ---->  cd /workspace/dkkb
+                                      agentqueue run
+
+The shim resolves no repository. It carries the working directory across the
+boundary, and the coordinator resolves the repository on the far side, from the
+directory the router already translated. A shim that resolved it first would
+hand over a host path that does not exist inside the container.
+
+An explicit `--repo` is the same problem in the other direction: there the user
+types a host path and the coordinator reads it inside. The router translates
+that value too, because the shim names the option with `--map-path` and the
+router owns the mapping. Git discovery still happens only in the coordinator.
 
 A pinned shim differs from the `claude` and `codex` shims in one way. Those ask
 the repository which environment owns it, because a repository decides where

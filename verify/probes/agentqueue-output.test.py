@@ -93,7 +93,7 @@ class StepClock:
 
 
 class Harness:
-    """One scripted drain, rendered into a string."""
+    """One scripted run, rendered into a string."""
 
     def __init__(self, level="compact", tty=False, script=None, issues=None,
                  policy=None, unicode=True, multi=False, clock=None):
@@ -120,7 +120,7 @@ class Harness:
         ]
         self._tmp = tempfile.mkdtemp()
 
-    def drain(self):
+    def run(self):
         coordinator = Coordinator(
             self.github, self.git, self.policy, self.runner, self._tmp,
             os.path.join(_ROOT, "bin", "scan-secrets"),
@@ -129,7 +129,7 @@ class Harness:
             agent_identities=(fakes.AGENT_IDENTITY,),
             sleep=lambda _s: None, ui=self.ui,
         )
-        report = coordinator.drain()
+        report = coordinator.run()
         from agentqueue import report as report_mod
 
         self.ui.summary(
@@ -224,7 +224,7 @@ class TestEventParsing(unittest.TestCase):
 class TestCompactOutput(unittest.TestCase):
     def test_the_header_states_the_repository_and_the_shape(self):
         harness = Harness(script=[green()])
-        harness.drain()
+        harness.run()
         self.assertIn("agentqueue 0.2.0", harness.lines[0])
         self.assertIn("acme/widget · 1 runnable issue · sequential", harness.text)
 
@@ -234,14 +234,14 @@ class TestCompactOutput(unittest.TestCase):
             issues=[(86, "Implement entry-selection module"),
                     (87, "Implement validate-content rule-checker split")],
         )
-        harness.drain()
+        harness.run()
         self.assertIn("[1/2] #86 Implement entry-selection module", harness.text)
         self.assertIn("[2/2] #87 Implement validate-content rule-checker split",
                       harness.text)
 
     def test_the_stages_appear_in_lifecycle_order(self):
         harness = Harness(script=[green()])
-        harness.drain()
+        harness.run()
         order = [
             line.split()[1] for line in harness.stage_lines()
             if len(line.split()) > 1 and line.split()[1].isupper()
@@ -258,7 +258,7 @@ class TestCompactOutput(unittest.TestCase):
 
     def test_a_skipped_review_says_so_and_says_why(self):
         harness = Harness(script=[green()])
-        harness.drain()
+        harness.run()
         self.assertIn("- REVIEW", harness.text)
         self.assertIn("skipped · no Codex credential", harness.text)
         # It must never read as a review that ran.
@@ -266,7 +266,7 @@ class TestCompactOutput(unittest.TestCase):
 
     def test_a_passing_local_check_is_reported_with_its_duration(self):
         harness = Harness(script=[green()])
-        harness.drain()
+        harness.run()
         check = [l for l in harness.stage_lines() if l.startswith("✓ CHECK")]
         self.assertEqual(len(check), 1)
         self.assertIn("1 check passed", check[0])
@@ -274,7 +274,7 @@ class TestCompactOutput(unittest.TestCase):
 
     def test_agent_progress_is_the_real_iteration_not_a_percentage(self):
         harness = Harness(script=[green()])
-        harness.drain()
+        harness.run()
         self.assertIn("iteration 1/4", harness.text)
         self.assertIn("iteration 2/4", harness.text)
         self.assertNotIn("%", harness.text)
@@ -290,7 +290,7 @@ class TestCompactOutput(unittest.TestCase):
             return [CheckRun("Quality", "completed", "success")]
 
         harness.github.check_runs = check_runs
-        harness.drain()
+        harness.run()
         self.assertIn("● CI", harness.text)
         self.assertIn("pending: Quality", harness.text)
         self.assertIn("✓ CI", harness.text)
@@ -301,7 +301,7 @@ class TestCompactOutput(unittest.TestCase):
             script=[green(), green(sha="sha-87")],
             issues=[(86, "One"), (87, "Two")],
         )
-        harness.drain()
+        harness.run()
         self.assertIn("agentqueue complete", harness.text)
         self.assertRegex(harness.text, r"✓ #86 → PR #\d+ merged")
         self.assertRegex(harness.text, r"✓ #87 → PR #\d+ merged")
@@ -310,7 +310,7 @@ class TestCompactOutput(unittest.TestCase):
     def test_no_raw_child_output_reaches_a_compact_terminal(self):
         noise = [f"thinking about line {n}" for n in range(300)]
         harness = Harness(script=[green(raw=noise)])
-        harness.drain()
+        harness.run()
         self.assertNotIn("thinking about line", harness.text)
         # It is not lost: the transcript holds every one of them.
         self.assertIn("thinking about line 299", "\n".join(harness.transcript))
@@ -318,7 +318,7 @@ class TestCompactOutput(unittest.TestCase):
     def test_a_compact_run_stays_short(self):
         noise = [f"tool call {n}" for n in range(500)]
         harness = Harness(script=[green(raw=noise)])
-        harness.drain()
+        harness.run()
         self.assertLess(len(harness.lines), 40, harness.text)
 
 
@@ -347,7 +347,7 @@ class TestFailureOutput(unittest.TestCase):
     def test_a_failing_check_shows_the_command_the_evidence_and_the_retry(self):
         harness = Harness(script=self._failing_check_script())
         harness.policy.maxRetries = 2
-        harness.drain()
+        harness.run()
         self.assertIn("✗ CHECK", harness.text)
         self.assertIn("pnpm check", harness.text)
         self.assertIn("Last output:", harness.text)
@@ -357,7 +357,7 @@ class TestFailureOutput(unittest.TestCase):
 
     def test_a_failure_names_the_log_that_holds_the_whole_output(self):
         harness = Harness(script=self._failing_check_script())
-        harness.drain()
+        harness.run()
         self.assertIn("log: ", harness.text)
         self.assertIn("implement.log", harness.text)
 
@@ -372,7 +372,7 @@ class TestFailureOutput(unittest.TestCase):
             "resultCommit": "sha-86",
         }
         harness = Harness(script=[{"summary": summary}] * 3)
-        harness.drain()
+        harness.run()
         blocks = harness.text.count("Last output:")
         shown = [l for l in harness.lines if "failure line" in l]
         self.assertGreaterEqual(blocks, 1)
@@ -382,14 +382,14 @@ class TestFailureOutput(unittest.TestCase):
 
     def test_an_exhausted_retry_budget_asks_for_a_human(self):
         harness = Harness(script=self._failing_check_script())
-        report = harness.drain()
+        report = harness.run()
         self.assertIn("! NEEDS_HUMAN", harness.text)
         self.assertIs(report.results[0].outcome, Outcome.NEEDS_HUMAN)
         self.assertIn("1 human intervention", harness.text)
 
     def test_an_agentbox_failure_states_the_exit_code(self):
         harness = Harness(script=[{"exit": 8, "output": "the agent gave up"}])
-        report = harness.drain()
+        report = harness.run()
         self.assertIn("✗ IMPLEMENT", harness.text)
         self.assertIn("agentbox exited 8", harness.text)
         self.assertIs(report.results[0].outcome, Outcome.FAILED_TRANSIENT)
@@ -399,7 +399,7 @@ class TestFailureOutput(unittest.TestCase):
             "exit": 9,
             "output": "DISPOSABLE CLONE INTEGRITY FAILED: 2 change(s)",
         }])
-        report = harness.drain()
+        report = harness.run()
         self.assertTrue(report.stopped_for_security)
         self.assertIn("⚠ SECURITY", harness.text)
         self.assertIn("a security or integrity failure, not a failing test",
@@ -414,7 +414,7 @@ class TestFailureOutput(unittest.TestCase):
         harness.git.diffs["agent/issue-86-implement-entry-selection-module"] = (
             "+const key = 'AKIA" + "0123456789ABCDEF';\n"
         )
-        report = harness.drain()
+        report = harness.run()
         self.assertTrue(report.stopped_for_security)
         self.assertIn("⚠ SECURITY", harness.text)
         self.assertIn("nothing was pushed", harness.text)
@@ -430,7 +430,7 @@ class TestOutputLevels(unittest.TestCase):
 
     def test_quiet_shows_the_summary_and_nothing_else(self):
         harness = Harness(level="quiet", script=self._script())
-        harness.drain()
+        harness.run()
         self.assertNotIn("✓ CLAIM", harness.text)
         self.assertNotIn("● IMPLEMENT", harness.text)
         self.assertNotIn("a model sentence", harness.text)
@@ -441,7 +441,7 @@ class TestOutputLevels(unittest.TestCase):
     def test_quiet_still_shows_a_failure(self):
         harness = Harness(level="quiet",
                           script=[{"exit": 8, "output": "the agent gave up"}])
-        harness.drain()
+        harness.run()
         self.assertIn("✗ IMPLEMENT", harness.text)
         self.assertIn("agentbox exited 8", harness.text)
 
@@ -449,13 +449,13 @@ class TestOutputLevels(unittest.TestCase):
         harness = Harness(level="quiet", script=[{
             "exit": 9, "output": "DISPOSABLE CLONE INTEGRITY FAILED: 1 change",
         }])
-        harness.drain()
+        harness.run()
         self.assertIn("⚠ SECURITY", harness.text)
         self.assertIn("THE QUEUE STOPPED", harness.text)
 
     def test_verbose_adds_the_coordinator_notes_and_keeps_the_stages(self):
         harness = Harness(level="verbose", script=self._script())
-        harness.drain()
+        harness.run()
         self.assertIn("✓ CLAIM", harness.text)
         self.assertIn("wave 1: #86", harness.text)
         self.assertIn("pull request #501", harness.text)
@@ -465,7 +465,7 @@ class TestOutputLevels(unittest.TestCase):
 
     def test_debug_adds_every_raw_line(self):
         harness = Harness(level="debug", script=self._script())
-        harness.drain()
+        harness.run()
         self.assertIn("a model sentence", harness.text)
         self.assertIn("another model sentence", harness.text)
         self.assertIn("✓ CLAIM", harness.text)
@@ -488,7 +488,7 @@ class TestOutputLevels(unittest.TestCase):
                     stderr, sys.stderr = sys.stderr, quiet
                     try:
                         parser.parse_args(
-                            ["drain", "--repo", ".", first, second]
+                            ["run", "--repo", ".", first, second]
                         )
                     finally:
                         sys.stderr = stderr
@@ -498,7 +498,7 @@ class TestOutputLevels(unittest.TestCase):
 
         parser = build_parser()
         for flag in ("--quiet", "--verbose", "--debug", "--json"):
-            args = parser.parse_args(["drain", "--repo", ".", flag])
+            args = parser.parse_args(["run", "--repo", ".", flag])
             self.assertTrue(
                 args.quiet or args.verbose or args.debug or args.json_out
             )
@@ -510,7 +510,7 @@ class TestJsonOutput(unittest.TestCase):
         ui = ui_mod.JsonUi(stream)
         harness = Harness(script=[green()])
         harness.ui = ui
-        report = harness.drain()
+        report = harness.run()
         records = [json.loads(line) for line in stream.getvalue().splitlines()]
         kinds = [r["event"] for r in records]
         self.assertIn("run.start", kinds)
@@ -526,7 +526,7 @@ class TestJsonOutput(unittest.TestCase):
         stream = io.StringIO()
         harness = Harness(script=[green()])
         harness.ui = ui_mod.JsonUi(stream)
-        harness.drain()
+        harness.run()
         self.assertNotIn("\x1b", stream.getvalue())
         self.assertNotIn("\r", stream.getvalue())
 
@@ -537,26 +537,26 @@ class TestJsonOutput(unittest.TestCase):
 class TestTerminalBehaviour(unittest.TestCase):
     def test_a_redirected_stream_receives_no_control_sequence(self):
         harness = Harness(tty=False, script=[green()])
-        harness.drain()
+        harness.run()
         self.assertNotIn("\x1b", harness.text)
         self.assertNotIn("\r", harness.text)
 
     def test_a_redirected_stream_keeps_one_line_per_transition(self):
         harness = Harness(tty=False, script=[green()])
-        harness.drain()
+        harness.run()
         for line in harness.lines:
             self.assertEqual(line, line.rstrip())
         self.assertGreater(len([l for l in harness.lines if l.startswith("  ")]), 5)
 
     def test_an_interactive_terminal_repaints_the_active_line(self):
         harness = Harness(tty=True, script=[green()])
-        harness.drain()
+        harness.run()
         self.assertIn("\r\x1b[2K", harness.text)
 
     def test_an_interactive_terminal_and_a_file_carry_the_same_lines(self):
         def rendered(tty):
             harness = Harness(tty=tty, script=[green()], clock=StepClock())
-            harness.drain()
+            harness.run()
             text = harness.text.replace("\r\x1b[2K", "\n")
             return [
                 l.strip() for l in text.splitlines()
@@ -572,7 +572,7 @@ class TestTerminalBehaviour(unittest.TestCase):
 
     def test_ascii_markers_are_available_for_a_terminal_that_needs_them(self):
         harness = Harness(script=[green()], unicode=False)
-        harness.drain()
+        harness.run()
         self.assertNotIn("✓", harness.text)
         self.assertIn("+ CLAIM", harness.text)
         self.assertIn("- REVIEW", harness.text)
@@ -652,7 +652,7 @@ class TestSeveralIssuesAtATime(unittest.TestCase):
                                      checks=["pnpm check"], maxParallel=2),
             multi=True,
         )
-        harness.drain()
+        harness.run()
         stages = [l for l in harness.lines if l.startswith("  ✓")]
         self.assertTrue(stages)
         for line in stages:
@@ -664,7 +664,7 @@ class TestSeveralIssuesAtATime(unittest.TestCase):
             policy=fakes.make_policy(autoMerge=True, mergeWithoutReview=True,
                                      checks=["pnpm check"], maxParallel=2),
         )
-        harness.drain()
+        harness.run()
         self.assertNotIn("\x1b", harness.text)
 
 
@@ -1028,7 +1028,7 @@ class OverlappingRunner(fakes.FakeRunner):
 class TestConcurrentDrain(unittest.TestCase):
     """The same defect, through the coordinator, with two issues at once."""
 
-    def _drain(self):
+    def _run(self):
         stream = io.StringIO()
         ui = StageUi(stream, level="compact", tty=False, clock=StepClock(),
                      unicode=True, multi=True)
@@ -1056,12 +1056,12 @@ class TestConcurrentDrain(unittest.TestCase):
             agent_identities=(fakes.AGENT_IDENTITY,),
             sleep=lambda _s: None, ui=ui,
         )
-        report = coordinator.drain()
+        report = coordinator.run()
         ui.close()
         return report, stream.getvalue()
 
     def test_both_issues_report_their_own_implementation(self):
-        report, text = self._drain()
+        report, text = self._run()
         self.assertEqual(
             [r.outcome for r in report.results],
             [Outcome.SUCCESS, Outcome.SUCCESS],
@@ -1077,7 +1077,7 @@ class TestConcurrentDrain(unittest.TestCase):
         )
 
     def test_every_stage_line_names_the_issue_it_belongs_to(self):
-        _, text = self._drain()
+        _, text = self._run()
         for line in text.splitlines():
             stripped = line.strip()
             if not stripped.startswith(("✓", "-", "●", "!")):
@@ -1085,7 +1085,7 @@ class TestConcurrentDrain(unittest.TestCase):
             self.assertRegex(stripped, r"^[✓\-●!] #(86|87) ", text)
 
     def test_each_issue_reaches_its_own_position_in_the_counter(self):
-        _, text = self._drain()
+        _, text = self._run()
         headers = [l for l in text.splitlines() if l.startswith("[")]
         self.assertEqual(sorted(headers)[0].split("]")[0], "[1/2")
         self.assertEqual(sorted(headers)[1].split("]")[0], "[2/2")

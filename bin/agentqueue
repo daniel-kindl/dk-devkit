@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """agentqueue - the trusted GitHub backlog coordinator.
 
-    agentqueue drain --repo ~/projects/dkkb
+    agentqueue run                       # the current repository
+    agentqueue run --repo ~/projects/dkkb
 
 It selects a runnable issue, drives bin/agentbox against a disposable clone,
 pushes the validated branch, opens the pull request, waits for the checks and

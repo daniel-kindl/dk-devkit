@@ -1,6 +1,6 @@
-"""What the operator sees while the queue drains.
+"""What the operator sees while the queue runs.
 
-An unattended drain runs for hours. The terminal is the only thing a human
+An unattended run lasts for hours. The terminal is the only thing a human
 looks at, so it must answer four questions at a glance:
 
     which issue is being worked on
@@ -833,6 +833,6 @@ def render_compact_summary(ui, report, policy) -> List[str]:
         )
         lines.append(
             "  This is a security or integrity failure, not a failing test. "
-            "Read the run log before starting another drain."
+            "Read the run log before starting another run."
         )
     return lines

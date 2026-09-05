@@ -722,7 +722,7 @@ class TestLifecycle(unittest.TestCase):
         self.assertEqual(self.github.merge_calls, [])
 
 
-# ------------------------------------------------------------------- draining --
+# ---------------------------------------------------------------- the run loop --
 
 
 class TestDrain(unittest.TestCase):
@@ -744,7 +744,7 @@ class TestDrain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_coordinator(
                 self.github, self.git, self.policy, runner, tmp
-            ).drain()
+            ).run()
         self.assertEqual([r.issue for r in report.results], [85, 86])
         self.assertEqual(report.merged, 2)
         self.assertGreaterEqual(report.waves, 2)
@@ -760,7 +760,7 @@ class TestDrain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_coordinator(
                 self.github, self.git, self.policy, runner, tmp
-            ).drain()
+            ).run()
         outcomes = {r.issue: r.outcome for r in report.results}
         self.assertIs(outcomes[1], Outcome.FAILED_TRANSIENT)
         self.assertIs(outcomes[2], Outcome.SUCCESS)
@@ -777,7 +777,7 @@ class TestDrain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_coordinator(
                 self.github, self.git, self.policy, runner, tmp
-            ).drain()
+            ).run()
         self.assertTrue(report.stopped_for_security)
         self.assertEqual([r.issue for r in report.results], [1])
         self.assertEqual(len(runner.calls), 1)
@@ -792,15 +792,15 @@ class TestDrain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_coordinator(
                 self.github, self.git, self.policy, runner, tmp
-            ).drain()
+            ).run()
         self.assertTrue(report.stopped_for_security)
         self.assertEqual(self.git.pushed, [])
 
-    def test_an_empty_queue_drains_immediately(self):
+    def test_an_empty_queue_finishes_immediately(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_coordinator(
                 self.github, self.git, self.policy, fakes.FakeRunner(self.git), tmp
-            ).drain()
+            ).run()
         self.assertEqual(report.results, [])
         self.assertEqual(report.merged, 0)
 

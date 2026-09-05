@@ -61,13 +61,29 @@ canon() {
     realpath -m -- "$1"
 }
 
-expand_tilde() {
-    local v=$1
-    case $v in
-        '~') v=$HOME ;;
-        '~/'*) v=$HOME/${v#'~/'} ;;
+# Canonical absolute path, into the global CANON.
+#
+# canon() hands its result back through $( ), which strips every trailing
+# newline. A directory name is allowed to end in one, and a value that the
+# router translates has to reach the far side intact, so this variant carries
+# the result over a NUL instead.
+canon_into() {
+    CANON=''
+    IFS= read -r -d '' CANON < <(realpath -mz -- "$1") || true
+}
+
+# Tilde expansion, into the global TILDE. Same reason: no $( ).
+expand_tilde_into() {
+    TILDE=$1
+    case $TILDE in
+        '~') TILDE=$HOME ;;
+        '~/'*) TILDE=$HOME/${TILDE#'~/'} ;;
     esac
-    printf '%s' "$v"
+}
+
+expand_tilde() {
+    expand_tilde_into "$1"
+    printf '%s' "$TILDE"
 }
 
 pretty() {
@@ -394,17 +410,102 @@ require_resolution() {
 
 # ------------------------------------------------------------ path mapping ---
 
-# Host directory -> path inside the container.
-guest_path() {
+# Host directory -> path inside the container, into the global GUEST_PATH.
+# This is the whole mapping. guest_path() is the $( ) spelling of it.
+guest_path_into() {
     local hp ws
-    hp=$(canon "$1")
+    canon_into "$1"; hp=$CANON
     if [[ -n $E_WS_HOST ]]; then
-        ws=$(canon "$E_WS_HOST")
-        if [[ $hp == "$ws" ]]; then printf '%s\n' "$E_WS_GUEST"; return; fi
-        if [[ $hp == "$ws"/* ]]; then printf '%s\n' "$E_WS_GUEST/${hp#"$ws"/}"; return; fi
+        canon_into "$E_WS_HOST"; ws=$CANON
+        if [[ $hp == "$ws" ]]; then GUEST_PATH=$E_WS_GUEST; return; fi
+        if [[ $hp == "$ws"/* ]]; then GUEST_PATH=$E_WS_GUEST/${hp#"$ws"/}; return; fi
     fi
     # Every Distrobox mounts the host root at /run/host, so this always resolves.
-    printf '%s\n' "/run/host$hp"
+    GUEST_PATH=/run/host$hp
+}
+
+# Host directory -> path inside the container.
+guest_path() {
+    guest_path_into "$1"
+    printf '%s\n' "$GUEST_PATH"
+}
+
+# map_one_value <value>   -> the global MAPPED_VALUE
+#
+# One declared host-directory value, translated into the container.
+#
+# TILDE. The shell expands '--repo ~/x' before the shim ever runs, but it does
+# NOT expand '--repo=~/x': after an '=' in an ordinary word the tilde is left
+# alone. The router expands it here, against the HOST home, so both spellings
+# name the same directory. Left alone, the literal '~' crosses over and the far
+# side expands it against the ISOLATED container home, which is a different
+# directory that almost never exists.
+#
+# RELATIVE. Resolved against the host working directory FIRST, then mapped. It
+# cannot be passed through untouched. The two trees do not have the same shape
+# at the workspace root: '~/projects' is three levels down, '/workspace' is one,
+# and outside the workspace the '/run/host' prefix adds another. A '..' that
+# stays inside the root resolves the same on both sides, but one that ESCAPES it
+# does not, so it silently names a different directory on the far side.
+#
+# This is one resolution and not two: the value becomes an absolute HOST path
+# against the host cwd, and the guest path it maps to is absolute, so the far
+# side has nothing left to resolve.
+#
+# Nothing here uses $( ), so a value that ends in a newline keeps it.
+map_one_value() {
+    expand_tilde_into "$1"
+    local v=$TILDE
+    [[ $v == /* ]] || v=$MAP_CWD/$v
+    guest_path_into "$v"
+    MAPPED_VALUE=$GUEST_PATH
+}
+
+# map_argv_paths <option-list> <argv...>   -> the global MAPPED_ARGV
+#
+# Translate the value of each named option in a delegated command line, the
+# same way --cwd is translated.
+#
+# A pinned shim hands the tool the arguments the user typed on the HOST. The
+# working directory crosses the boundary translated; a path the user typed as
+# an argument did not, so a tool that takes a directory saw a host path that
+# does not exist inside the container. This is the general fix, and the router
+# owns it because the router owns the mapping.
+#
+# The result is an ARRAY and not a stream. An argument is allowed to hold a
+# newline, and a newline-delimited round trip would split it into two.
+#
+# <option-list> is a comma-separated list of option names, for example
+# '--repo,--config'. Both '--repo VALUE' and '--repo=VALUE' are recognised.
+map_argv_paths() {
+    local list=$1; shift
+    local -a names=()
+    local arg name matched
+    # The option NAMES are validated on the way in and hold no newline, so this
+    # round trip is safe. The VALUES never take it.
+    mapfile -t names < <(printf '%s\n' "${list//,/$'\n'}")
+    MAPPED_ARGV=()
+    while (( $# )); do
+        arg=$1; shift
+        matched=0
+        for name in "${names[@]}"; do
+            [[ -z $name ]] && continue
+            if [[ $arg == "$name" ]] && (( $# )); then
+                map_one_value "$1"
+                MAPPED_ARGV+=("$arg" "$MAPPED_VALUE")
+                shift
+                matched=1
+                break
+            fi
+            if [[ $arg == "$name"=* ]]; then
+                map_one_value "${arg#*=}"
+                MAPPED_ARGV+=("$name=$MAPPED_VALUE")
+                matched=1
+                break
+            fi
+        done
+        (( matched )) || MAPPED_ARGV+=("$arg")
+    done
 }
 
 # ---------------------------------------------------------------- container --
@@ -851,13 +952,16 @@ cmd_doctor() {
 }
 
 cmd_exec() {
-    local env cwd=$PWD
-    (( $# >= 1 )) || fail 2 "usage: devbox exec <environment> [--cwd DIR] [--] <command> [args...]"
+    local env cwd=$PWD maps=""
+    (( $# >= 1 )) || fail 2 "usage: devbox exec <environment> [--cwd DIR] [--map-path OPT] [--] <command> [args...]"
     env=$1; shift
     while (( $# )); do
         case $1 in
             --cwd) (( $# >= 2 )) || fail 2 "--cwd needs a value"; cwd=$2; shift 2 ;;
             --cwd=*) cwd=${1#--cwd=}; shift ;;
+            --map-path) (( $# >= 2 )) || fail 2 "--map-path needs a value"
+                        maps=${maps:+$maps,}$2; shift 2 ;;
+            --map-path=*) maps=${maps:+$maps,}${1#--map-path=}; shift ;;
             --) shift; break ;;
             -*) fail 2 "unknown option: $1" ;;
             *) break ;;
@@ -869,6 +973,14 @@ cmd_exec() {
     load_environment "$env"
     RES_SOURCE=explicit; RES_DETAIL="devbox exec"
     [[ -d $cwd ]] || fail 2 "not a directory: $cwd"
+    if [[ -n $maps ]]; then
+        # guest_path needs the loaded environment, so the mapping happens here
+        # and not while the options are parsed. A relative value resolves
+        # against the working directory of the HOST, which is this one.
+        canon_into "$cwd"; MAP_CWD=$CANON
+        map_argv_paths "$maps" "$@"
+        (( ${#MAPPED_ARGV[@]} )) && set -- "${MAPPED_ARGV[@]}"
+    fi
     run_in_env "$cwd" "$@"
 }
 
@@ -934,19 +1046,37 @@ cmd_new_env() {
 #   $1  the tool name
 #   $2  the environment it is pinned to, or empty to resolve from the working
 #       directory
+#   $3  a comma-separated list of options whose value is a host DIRECTORY, for
+#       example '--repo'. The router translates each one the way it translates
+#       the working directory. Pinned shims only.
 #
 # A shim holds no runtime and no credential. It is a router entry point and
-# nothing else, so the generated text is a pure function of these two values
-# and of this router.
+# nothing else, so the generated text is a pure function of these values and
+# of this router.
 shim_text() {
-    local tool=$1 env=${2:-} note route
+    local tool=$1 env=${2:-} maps=${3:-} note route mapflags="" m
     if [[ -n $env ]]; then
         # A pinned shim. The tool is installed in ONE environment, so the
         # working directory decides the path, never the destination.
         note="# It is pinned to the '$env' environment, because the real command is
 # installed only there. The working directory, the arguments and the exit
 # status pass through unchanged, and the shim adds nothing to the environment."
-        route="exec \"\$router\" exec $env --cwd \"\$PWD\" -- $tool \"\$@\""
+        if [[ -n $maps ]]; then
+            local names=""
+            while IFS= read -r m; do
+                [[ -z $m ]] && continue
+                mapflags+=" --map-path $m"
+                names+="${names:+, }$m"
+            done < <(printf '%s\n' "${maps//,/$'\n'}")
+            note="$note
+#
+# The router also translates the value of $names, because the user types a HOST
+# path there and the tool reads it on the far side. An absolute value maps
+# directly, a relative one resolves against the working directory first, and a
+# leading '~' expands against the host home, so every spelling of a directory
+# names the same directory on both sides."
+        fi
+        route="exec \"\$router\" exec $env --cwd \"\$PWD\"$mapflags -- $tool \"\$@\""
     else
         note="# The environment is resolved from the current Git repository."
         route="exec \"\$router\" agent $tool \"\$@\""
@@ -978,20 +1108,35 @@ SHIM
 }
 
 cmd_new_shim() {
-    local tool="" env="" to_stdout=0 dir=${DEVBOX_SHIM_DIR:-$HOME/.local/bin} dest
+    local tool="" env="" maps="" to_stdout=0 dir=${DEVBOX_SHIM_DIR:-$HOME/.local/bin} dest
     while (( $# )); do
         case $1 in
             --env) (( $# >= 2 )) || fail 2 "--env needs a value"; env=$2; shift 2 ;;
             --env=*) env=${1#--env=}; shift ;;
+            --map-path) (( $# >= 2 )) || fail 2 "--map-path needs a value"
+                        maps=${maps:+$maps,}$2; shift 2 ;;
+            --map-path=*) maps=${maps:+$maps,}${1#--map-path=}; shift ;;
             --print) to_stdout=1; shift ;;
             --) shift ;;
             -*) fail 2 "unknown option: $1" ;;
-            *) [[ -n $tool ]] && fail 2 "usage: devbox new-shim <tool> [--env ENV] [--print]"
+            *) [[ -n $tool ]] && fail 2 "usage: devbox new-shim <tool> [--env ENV] [--map-path OPT] [--print]"
                tool=$1; shift ;;
         esac
     done
-    [[ -n $tool ]] || fail 2 "usage: devbox new-shim <tool> [--env ENV] [--print]"
+    [[ -n $tool ]] || fail 2 "usage: devbox new-shim <tool> [--env ENV] [--map-path OPT] [--print]"
     is_valid_name "$tool" || fail 2 "invalid tool name: $tool"
+    if [[ -n $maps ]]; then
+        [[ -n $env ]] || fail 2 "--map-path needs --env" \
+            "Only a pinned shim knows which environment to translate into."
+        local shim_map
+        while IFS= read -r shim_map; do
+            [[ -z $shim_map ]] && continue
+            [[ $shim_map == --?* ]] ||
+                fail 2 "--map-path wants a long option name, for example --repo: $shim_map"
+            [[ $shim_map == *[[:space:]]* ]] &&
+                fail 2 "--map-path name must not hold a space: $shim_map"
+        done < <(printf '%s\n' "${maps//,/$'\n'}")
+    fi
     if [[ -n $env ]]; then
         is_valid_name "$env" || fail 2 "invalid environment name: $env"
         # A pin at a name that is not configured yet is reported, not refused:
@@ -1003,7 +1148,7 @@ cmd_new_shim() {
     fi
 
     if (( to_stdout )); then
-        shim_text "$tool" "$env"
+        shim_text "$tool" "$env" "$maps"
         return 0
     fi
 
@@ -1011,7 +1156,7 @@ cmd_new_shim() {
     [[ -e $dest ]] && fail 8 "refusing to overwrite existing file: $(pretty "$dest")" \
         "Print the current text with: devbox new-shim $tool${env:+ --env $env} --print"
     mkdir -p -- "$dir"
-    shim_text "$tool" "$env" > "$dest"
+    shim_text "$tool" "$env" "$maps" > "$dest"
     chmod 0755 -- "$dest"
     printf '%s: created %s\n' "$PROGRAM" "$(pretty "$dest")"
 }
@@ -1036,13 +1181,21 @@ Usage:
   devbox check [ENV...]              verify the Distrobox containers exist
   devbox doctor [DIR]                full routing diagnostics
   devbox new-env NAME [--box N] [--workspace HOST:GUEST]
-  devbox new-shim TOOL [--env ENV] [--print]
+  devbox new-shim TOOL [--env ENV] [--map-path OPT] [--print]
                                      create a host shim for another CLI. With
                                      --env the shim is pinned to one
                                      environment instead of resolving one from
-                                     the repository; --print writes the text to
+                                     the repository; --map-path names an option
+                                     whose value is a host directory, so the
+                                     router translates it the way it translates
+                                     the working directory (pinned shims only,
+                                     repeatable); --print writes the text to
                                      standard output instead of installing it
-  devbox exec ENV [--cwd DIR] -- CMD...   run CMD in a named environment
+  devbox exec ENV [--cwd DIR] [--map-path OPT] -- CMD...
+                                     run CMD in a named environment. --map-path
+                                     translates the value of that option from a
+                                     host path into the container; absolute,
+                                     relative and '~' values alike, repeatable
   devbox run [--cwd DIR] -- CMD...        run CMD in the environment owning CWD
   devbox agent TOOL [ARGS...]        agent shim entry point (claude, codex, ...)
   devbox verify                      run the routing verification suite

@@ -26,6 +26,32 @@ agentqueue_environment() {
     printf '%s' "$value"
 }
 
+# agentqueue_path_options <repo-root>
+#
+# The options whose value is a host directory, read from the manifest. Empty is
+# allowed and means "translate nothing". One value drives the shim and the
+# check that the shim has not drifted.
+agentqueue_path_options() {
+    sed -n 's/^AGENTQUEUE_HOST_PATH_OPTIONS=//p' "$1/manifests/agentqueue.env" |
+        head -1 | tr -d '"'"'"' \t\r'
+}
+
+# agentqueue_shim_args <repo-root> <environment>
+#
+# The whole argument list for 'devbox new-shim', so that the installer and the
+# verification build the same text from the same two manifest values.
+agentqueue_shim_args() {
+    local opts option
+    printf '%s\n' agentqueue --env "$2"
+    opts=$(agentqueue_path_options "$1")
+    if [ -n "$opts" ]; then
+        printf '%s\n' "$opts" | tr ',' '\n' | while IFS= read -r option; do
+            [ -n "$option" ] && printf '%s\n%s\n' --map-path "$option"
+        done
+    fi
+    printf '%s\n' --print
+}
+
 # install_agentqueue <repo-root> <link-root> [home]
 #
 # The CONTAINER half. Links the command into ~/.local/bin and creates the run
@@ -63,13 +89,17 @@ install_agentqueue() {
 install_agentqueue_host_shim() {
     local repo_root=$1
     local home=${2:-$HOME}
-    local env tmp dest=$home/.local/bin/agentqueue rc=0
+    local env opts tmp dest=$home/.local/bin/agentqueue rc=0
+    local shim_args=()
 
     env=$(agentqueue_environment "$repo_root")
     info "pinned to the $env environment (manifests/agentqueue.env)"
+    opts=$(agentqueue_path_options "$repo_root")
+    [ -n "$opts" ] && info "the router translates $opts into the container"
 
+    mapfile -t shim_args < <(agentqueue_shim_args "$repo_root" "$env")
     tmp=$(mktemp) || die 'cannot create a temporary file'
-    "$repo_root/bin/devbox" new-shim agentqueue --env "$env" --print > "$tmp" || rc=$?
+    "$repo_root/bin/devbox" new-shim "${shim_args[@]}" > "$tmp" || rc=$?
     if [ "$rc" != 0 ]; then
         rm -f -- "$tmp"
         die "the devbox router could not generate the agentqueue host shim (exit $rc)"

@@ -64,9 +64,10 @@ and a new run regenerates them. A queue policy that a repository **can** carry
 belongs in that repository, as a tracked `.agentqueue.json`.
 
 `~/.local/bin/agentqueue` on the host is generated too. `bootstrap/host.sh`
-writes it with `devbox new-shim agentqueue --env <environment> --print`, so the
-router is the one source of truth for its text and this repository tracks the
-generator rather than the result.
+writes it with `devbox new-shim agentqueue --env <environment>
+--map-path <option> --print`, from the two values `manifests/agentqueue.env`
+names, so the router is the one source of truth for its text and this
+repository tracks the generator rather than the result.
 
 ## Machine-specific router state
 

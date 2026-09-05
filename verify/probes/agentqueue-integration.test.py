@@ -11,7 +11,7 @@ What this proves that the unit tests cannot:
     the adoption audit reads real commits, real authors and real merge bases
     the push reaches a real remote, and a non-fast-forward push is refused
     the diff of a real branch reaches bin/scan-secrets
-    a whole drain leaves the real repository in the state it claims
+    a whole run leaves the real repository in the state it claims
 
 Nothing here touches a repository a human owns.
 
@@ -279,7 +279,7 @@ class TestRealGit(IntegrationCase):
 
 
 class TestRealDrain(IntegrationCase):
-    def test_a_whole_drain_pushes_real_commits_and_merges(self):
+    def test_a_whole_run_pushes_real_commits_and_merges(self):
         self.github.add_issue(85, "Implement the module", labels=(READY,))
         self.github.add_issue(86, "Use the module", labels=(READY,))
         self.github.dependencies[86] = [85]
@@ -291,7 +291,7 @@ class TestRealDrain(IntegrationCase):
         original = self.github.check_runs
         self.github.check_runs = lambda sha: [CheckRun("Quality", "completed", "success")]
 
-        report = self.coordinator(runner).drain()
+        report = self.coordinator(runner).run()
 
         self.assertEqual([r.issue for r in report.results], [85, 86])
         self.assertEqual(report.merged, 2)
@@ -324,7 +324,7 @@ class TestRealDrain(IntegrationCase):
             [{"path": "src/leak.mjs",
               "content": "const key = 'AKIA" + "0123456789ABCDEF';\n"}],
         )
-        report = self.coordinator(runner).drain()
+        report = self.coordinator(runner).run()
         self.assertTrue(report.stopped_for_security)
         self.assertNotIn(
             "agent/issue-85",

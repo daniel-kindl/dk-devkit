@@ -31,6 +31,31 @@ class GitError(Exception):
     pass
 
 
+def discover_root(start: str) -> Optional[str]:
+    """The top of the Git working tree that holds ``start``.
+
+    It answers ``None`` when ``start`` is not inside a working tree, when the
+    directory does not exist, and when git itself is unusable. The caller
+    turns that into the usage error, because only the caller knows whether
+    the path came from ``--repo`` or from the current directory.
+
+    The top of the tree is the answer, not ``start`` itself, so a command run
+    from a subdirectory reaches the same repository as one run from the top.
+    A linked worktree answers with its own top, not with the main one.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", start, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    root = proc.stdout.strip()
+    return root if proc.returncode == 0 and root else None
+
+
 @dataclasses.dataclass(frozen=True)
 class BranchAudit:
     """The result of judging one existing ``agent/*`` branch."""

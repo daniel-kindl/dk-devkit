@@ -148,7 +148,7 @@ directory on purpose, and the run proves that the real repository, its config,
 its hooks and its SELinux labels are all unchanged. Run both after a rebuild.
 See `docs/sandcastle.md`.
 
-## 8b. Prepare the backlog coordinator, if you want an unattended drain
+## 8b. Prepare the backlog coordinator, if you want an unattended run
 
 `bootstrap/web-dev.sh` installed the coordinator inside the container, and
 `bootstrap/host.sh` installed the `agentqueue` command on the host. The
@@ -160,15 +160,15 @@ SSH key from step 2, and it never writes either to disk.
 
 ```bash
 cd ~/projects/dkkb
-agentqueue doctor --repo .
-agentqueue plan   --repo .
+agentqueue doctor
+agentqueue plan
 ```
 
 The explicit form still works, and it is the one to reach for when the shim
 itself is what you doubt:
 
 ```bash
-devbox exec web-dev -- agentqueue doctor --repo ~/projects/dkkb
+devbox exec web-dev --cwd ~/projects/dkkb -- agentqueue doctor
 ```
 
 `plan` reads GitHub and changes nothing. It prints which issues are runnable
@@ -176,7 +176,8 @@ and which are blocked, and it ends with the count of attempted mutations, which
 must be zero.
 
 A repository opts in to an automatic merge in its own tracked
-`.agentqueue.json`. `agentqueue init --repo <path>` writes a starting point.
+`.agentqueue.json`. `agentqueue init` writes a starting point into the
+repository you stand in.
 Read `docs/agentqueue.md` before turning `autoMerge` on.
 
 ## 9. MANUAL: install and register Orca
@@ -229,8 +230,8 @@ run them again.
 | An unattended agent run fails to start | `agentbox doctor` |
 | `agentqueue: command not found` on the host | run `bootstrap/host.sh`; the shim lives in `~/.local/bin` |
 | `agentqueue` exits 127 | the runtime is missing in the container; run `bootstrap/web-dev.sh` |
-| A backlog drain will not start | `agentqueue doctor --repo <path>` |
-| The queue merged nothing, and every issue looks blocked | `agentqueue plan --repo <path>` |
+| A backlog run will not start | `agentqueue doctor` |
+| The queue merged nothing, and every issue looks blocked | `agentqueue plan` |
 | An issue is stuck with `agent-in-progress` | the claim goes stale on its own; `agentqueue plan` reports it |
 | A sandbox container, lock or run directory was left behind | `agentbox clean`, or `agentbox clean --all` |
 | The agent images are stale | `agentbox build --force` |

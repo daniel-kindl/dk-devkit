@@ -80,6 +80,8 @@ workspace".
     devbox new-env rust-dev --box rust-dev --workspace ~/projects:/workspace
     devbox new-shim gemini           add a host shim for another agent CLI
     devbox new-shim aq --env web-dev add a host shim pinned to one environment
+    devbox new-shim aq --env web-dev --map-path --repo
+                                     ... and translate the value of --repo
     devbox new-shim aq --print       print the shim text instead of writing it
 
 Exit codes: 2 usage, 3 not a repository, 4 unresolved, 5 environment not
@@ -101,8 +103,30 @@ A **pinned** shim names the environment:
     exec "$router" exec web-dev --cwd "$PWD" -- agentqueue "$@"
 
 That is right for a command that is installed in exactly one environment. The
-working directory still crosses the boundary, so a relative path such as
-`--repo .` keeps its meaning; only the destination is fixed.
+working directory still crosses the boundary, so a command that resolves its
+repository from the working directory resolves it against the translated one.
+Only the destination is fixed.
+
+A path in an ARGUMENT is a different case. The user types it on the host, the
+tool reads it inside the container, and argv used to cross over untouched.
+`--map-path` names the option that carries such a path:
+
+    exec "$router" exec web-dev --cwd "$PWD" --map-path --repo -- agentqueue "$@"
+
+The router then translates that value the way it translates the working
+directory: under the workspace it becomes the workspace path, and anywhere else
+it becomes `/run/host/...`.
+
+A relative value resolves against the host working directory before it is
+mapped. It cannot be passed through untouched: the two trees do not have the
+same shape at the workspace root, `~/projects` being three levels down and
+`/workspace` one, so a `..` that ESCAPES the root names a different directory on
+each side. A leading `~` expands against the host home, because the shell
+expands `--repo ~/x` but leaves `--repo=~/x` alone.
+
+An option the shim did not name is left alone, and so is every argument that is
+not one of these values: they are carried as an array, so a space, a quote or a
+newline survives. The option is repeatable and needs `--env`.
 
 Both kinds refuse to run inside a container and exit 8, and the router strips
 this directory from the container `PATH`, so a shim can never call itself.
