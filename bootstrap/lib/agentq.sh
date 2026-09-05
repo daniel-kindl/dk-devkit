@@ -38,6 +38,19 @@ agentq_shim_args() {
     printf '%s\n' --print
 }
 
+remove_obsolete_agentqueue_command() {
+    local home=$1
+    local obsolete=$home/.local/bin/agentqueue
+    if [ -e "$obsolete" ] || [ -L "$obsolete" ]; then
+        if [ "${DRY_RUN:-0}" = 1 ]; then
+            info "would remove obsolete $obsolete"
+        else
+            rm -f -- "$obsolete"
+            change "removed obsolete $obsolete"
+        fi
+    fi
+}
+
 # install_agentq <repo-root> <link-root> [home]
 #
 # Install the real container-side command. State/config directories retain
@@ -49,6 +62,7 @@ install_agentq() {
     local home=${3:-$HOME}
 
     link_into "$link_root/bin/agentq" "$home/.local/bin/agentq"
+    remove_obsolete_agentqueue_command "$home"
 
     local state_dir=$home/.local/share/agentqueue
     ensure_dir "$state_dir"
@@ -81,12 +95,5 @@ install_agentq_host_shim() {
 
     # Clean-break command rename: convergence removes the obsolete executable
     # rather than leaving an alias or compatibility wrapper behind.
-    if [ -e "$home/.local/bin/agentqueue" ] || [ -L "$home/.local/bin/agentqueue" ]; then
-        if [ "${DRY_RUN:-0}" = 1 ]; then
-            info "would remove obsolete $home/.local/bin/agentqueue"
-        else
-            rm -f -- "$home/.local/bin/agentqueue"
-            change "removed obsolete $home/.local/bin/agentqueue"
-        fi
-    fi
+    remove_obsolete_agentqueue_command "$home"
 }
