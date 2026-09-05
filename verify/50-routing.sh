@@ -29,6 +29,14 @@ else CFG=$HOME/.config/devbox-router; fi
 
 check_link 'settings.env -> the repository'  "$CFG/settings.env"  "$REPO_ROOT/config/devbox-router/settings.env"
 check_link 'inference.tsv -> the repository' "$CFG/inference.tsv" "$REPO_ROOT/config/devbox-router/inference.tsv"
+
+# bin/devbox carries the same rules as a heredoc, for a host that has no
+# configuration file yet. The two tables must not drift apart.
+builtin_rules=$(sed -n '/^builtin_rules() {/,/^RULES$/p' "$REPO_ROOT/bin/devbox" |
+    sed -e '1,/^    cat <<.RULES.$/d' -e '/^RULES$/d')
+configured_rules=$(sed -e 's/#.*//' "$REPO_ROOT/config/devbox-router/inference.tsv" | awk 'NF')
+check_eq 'the built-in inference rules match inference.tsv' \
+    "$configured_rules" "$builtin_rules"
 check_link 'environments.d/web-dev.env -> the repository' \
     "$CFG/environments.d/web-dev.env" "$REPO_ROOT/config/devbox-router/environments.d/web-dev.env"
 
@@ -66,8 +74,9 @@ rc=0
 host_sh "DEVBOX_ACTIVE_ENV=web-dev '$HOST_HOME/.local/bin/claude' --version" >/dev/null 2>&1 || rc=$?
 check_eq 'claude shim refuses to run inside an environment (exit 8)' '8' "$rc"
 
-# Inference must resolve the four planned environments from repository markers.
-for marker_env in "web-dev:package.json" "rust-dev:Cargo.toml" "dotnet-dev:global.json" "android-dev:gradlew"; do
+# Inference must resolve the five planned environments from repository markers.
+for marker_env in "web-dev:package.json" "python-dev:pyproject.toml" "rust-dev:Cargo.toml" \
+    "dotnet-dev:global.json" "android-dev:gradlew"; do
     envname=${marker_env%%:*}
     marker=${marker_env#*:}
     grep -q "^$envname"$'\t' "$REPO_ROOT/config/devbox-router/inference.tsv" &&

@@ -264,6 +264,9 @@ web-dev	.nvmrc
 web-dev	yarn.lock
 web-dev	package-lock.json
 web-dev	bun.lockb
+python-dev	pyproject.toml
+python-dev	uv.lock
+python-dev	.python-version
 dotnet-dev	*.sln
 dotnet-dev	*.slnx
 dotnet-dev	*.csproj
