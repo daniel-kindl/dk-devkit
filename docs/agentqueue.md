@@ -413,13 +413,19 @@ worktree resolves to its own top rather than to the main one.
 
 ```bash
 agentqueue run --repo ~/projects/dkkb
+agentqueue run --repo=~/projects/dkkb
 agentqueue run --repo /srv/checkouts/other
+agentqueue run --repo ../other
 ```
 
 You type a HOST path there, and the coordinator reads it inside the container.
 The router translates it, exactly as it translates the working directory, so
-neither form asks you to know a container path. `--map-path` in the generated
-shim is what asks for that; `manifests/agentqueue.env` names the options.
+no form asks you to know a container path. A relative value resolves against
+the directory you are standing in, and a leading `~` expands against your host
+home in both spellings: the shell expands `--repo ~/x` before the shim runs,
+and the router expands `--repo=~/x`, which the shell leaves alone.
+`--map-path` in the generated shim is what asks for that;
+`manifests/agentqueue.env` names the options.
 
 The queue never guesses. A directory that is not inside a Git working tree is
 a usage error, exit 2, and it names the directory it refused:
@@ -747,8 +753,8 @@ and both the environment name and the translated options come from
 | --- | --- |
 | the working directory | `--cwd "$PWD"`. The router maps the host path to the container path, so `~/projects/dkkb` becomes `/workspace/dkkb` |
 | the repository | the shim resolves none. The coordinator resolves it on the far side, from the **translated** directory, so standing in `~/projects/dkkb` reaches `/workspace/dkkb`. A shim that resolved it first would hand over a host path that does not exist inside the container |
-| `--repo PATH` | an absolute value is a HOST path, so the router translates it the same way it translates the working directory: `~/projects/dkkb` becomes `/workspace/dkkb`, and a path outside the workspace becomes `/run/host/...`. A relative value crosses over unchanged, because it resolves against the working directory, which already crossed over translated |
-| the arguments | `"$@"` to the router, positional arguments to the container, `exec "$@"` inside it. Spaces, quotes and newlines survive |
+| `--repo PATH` | the value is a HOST path, so the router translates it the same way it translates the working directory: `~/projects/dkkb` becomes `/workspace/dkkb`, and a path outside the workspace becomes `/run/host/...`. A relative value resolves against the host working directory first, and a leading `~` expands against the host home, so `--repo .`, `--repo ../other` and `--repo=~/projects/dkkb` all name the directory you meant. See [the router README](../config/devbox-router/README.md) for why a relative value cannot simply cross over |
+| the arguments | `"$@"` to the router, positional arguments to the container, `exec "$@"` inside it. The router carries them as an array and never as a stream, so spaces, quotes and newlines survive, in a translated value too |
 | the exit status | every step is an `exec`, so no process sits between the coordinator and your shell |
 | Ctrl-C | the interrupt reaches the coordinator, the shell sees 130, and nothing is left running inside the container |
 | the environment | the shim assigns nothing and exports nothing. What the coordinator sees is what `devbox exec` gives it |

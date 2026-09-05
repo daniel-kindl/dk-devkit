@@ -640,7 +640,7 @@ check_contains 'L3 ~/projects maps to the workspace inside the container' \
     'guest_cwd=/workspace' "$aq_out"
 check_contains 'L4 argv[0] is the coordinator, not the shim' \
     'argv[0]=agentqueue' "$aq_out"
-check_contains 'L5 --repo . reaches the coordinator unchanged' 'argv[3]=.' "$aq_out"
+check_contains 'L5 the --repo option reaches the coordinator' 'argv[2]=--repo' "$aq_out"
 
 # The reported defect, as a path mapping: a repository under ~/projects on the
 # host is the same repository under /workspace in the container. The name below
@@ -714,12 +714,29 @@ if [ "$aq_gen_ok" = 1 ]; then
     check_contains 'L16 the --repo=PATH form is translated too' \
         "argv[2]=--repo=/run/host$aq_outside" "$aq_out"
 
-    # A relative value is NOT translated. It resolves against the working
-    # directory, and the working directory already crossed over translated, so
-    # translating it here would resolve it twice.
+    # A relative value resolves against the HOST working directory and is then
+    # mapped. It cannot cross over untouched: the two trees do not have the
+    # same shape at the workspace root, so a '..' that escapes it would name a
+    # different directory on each side.
     aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo .")
-    check_contains 'L17 a relative --repo still crosses over verbatim' \
-        'argv[3]=.' "$aq_out"
+    check_contains 'L17 a relative --repo resolves against the working directory' \
+        'argv[3]=/workspace' "$aq_out"
+    aq_home_canon=$(on_host realpath -m "$HOST_HOME" 2>/dev/null || printf '%s' "$HOST_HOME")
+    aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo ..")
+    check_contains 'L21 a relative --repo that escapes the workspace is translated' \
+        "argv[3]=/run/host$aq_home_canon" "$aq_out"
+
+    # The shell expands '--repo ~/x' but leaves '--repo=~/x' alone, so the
+    # router expands it, against the HOST home and not the isolated box home.
+    aq_out=$(aq_gsh "~" "run --repo='~/projects/a repo'")
+    check_contains 'L22 a tilde in the --repo=PATH form expands against the host home' \
+        'argv[2]=--repo=/workspace/a repo' "$aq_out"
+
+    # argv is carried as an array, so an argument that holds a newline stays
+    # one argument instead of becoming two.
+    aq_out=$(aq_gsh "'$HOST_HOME/projects'" "run --repo . --label \$'a\\nb'")
+    aq_argv_max=$(printf '%s\n' "$aq_out" | sed -n 's/^argv\[\([0-9]*\)\]=.*/\1/p' | sort -n | tail -1)
+    check_eq 'L23 an argument that holds a newline stays one argument' 5 "$aq_argv_max"
 
     # Only the named option is translated. Another argument that happens to
     # look like a path is not the router's business.
@@ -740,10 +757,13 @@ else
         'L14 the host spelling does not survive the crossing' \
         'L15 a host path outside the workspace arrives through /run/host' \
         'L16 the --repo=PATH form is translated too' \
-        'L17 a relative --repo still crosses over verbatim' \
+        'L17 a relative --repo resolves against the working directory' \
         'L18 an option the manifest does not name is untouched' \
         'L19 a translated path keeps a space' \
-        'L20 an argument after it still survives'
+        'L20 an argument after it still survives' \
+        'L21 a relative --repo that escapes the workspace is translated' \
+        'L22 a tilde in the --repo=PATH form expands against the host home' \
+        'L23 an argument that holds a newline stays one argument'
     do
         skip "$aq_name" "could not generate a shim from $AQ_CHECKOUT on the host"
     done

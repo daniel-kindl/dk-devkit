@@ -71,9 +71,10 @@ standard output, which is how a bootstrap compares before it writes.
 
 The user types a host path in that option, and the tool reads it inside the
 container. The router then translates the value the way it translates the
-working directory. Only an absolute value is translated; a relative one already
-resolves against the translated working directory. The option is repeatable,
-and it needs `--env`, because only a pinned shim knows the destination.
+working directory. An absolute value maps directly, a relative one resolves
+against the host working directory first, and a leading `~` expands against the
+host home. The option is repeatable, and it needs `--env`, because only a pinned
+shim knows the destination.
 
 ## `bootstrap/web-dev.sh`
 
