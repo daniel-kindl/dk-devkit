@@ -315,6 +315,16 @@ check_contains 'H1c the wall-clock limit keeps the client in this process group'
 check_contains 'H2 a branch can only be claimed by one run' 'take_lock' "$AB_CODE"
 check_contains 'H3 a stale lock is broken, not obeyed' \
     'breaking a stale lock' "$AB_CODE"
+# take_lock and clean must share the rule. When they did not, a lock kept its
+# run directory alive and the run directory kept the lock alive.
+check_eq 'H3a one staleness rule, used by both take_lock and clean' '2' \
+    "$(printf '%s' "$AB_CODE" | grep -c 'lock_is_stale "\$')"
+check_contains 'H3b a lock whose process is gone is stale' \
+    'kill -0 "$pid"' "$AB_CODE"
+# A PID means nothing across the host/container boundary: the same number
+# exists in both namespaces and names two different processes.
+check_contains 'H3c the pid is only trusted on the side that recorded it' \
+    '"$host" = "$(lock_host_id)"' "$AB_CODE"
 check_contains 'H4 a finished run directory is swept' \
     'removing run directory' "$AB_CODE"
 # A live branch lock, not the directory age, is what says a run is still going.

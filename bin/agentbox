@@ -480,33 +480,66 @@ lock_key() {
     printf '%s\n%s\n' "$1" "$2" | sha256sum | cut -c1-16
 }
 
+# lock_host_id - which side of the host/container boundary took a lock.
+#
+# A PID means nothing across that boundary: the same number exists in both
+# namespaces and names two different processes. The marker is what lets the
+# staleness test know whether it may look at the PID at all.
+lock_host_id() { printf '%s:%s' "$(uname -n)" "$IN_CONTAINER"; }
+
+# lock_is_stale <lock-dir> [grace-seconds] - true when no run still holds it.
+#
+# Three signals, in order of certainty:
+#   * the run directory it names is gone
+#   * it was taken by a process on THIS side that no longer exists
+#   * it is older than the longest a run could hold it
+#
+# take_lock and cmd_clean must agree on this. When they did not, a lock kept
+# its run directory alive and the run directory kept the lock alive, and
+# neither could ever be swept.
+lock_is_stale() {
+    local dir=$1 grace=${2:-$(( AGENTBOX_TIMEOUT_SECONDS + 600 ))}
+    local owner run_dir dir_view host pid started now
+
+    owner=$(cat -- "$dir/owner" 2>/dev/null) || return 0
+    [ -n "$owner" ] || return 0
+
+    run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
+    [ -n "$run_dir" ] || return 0
+    dir_view=$(view_path "$run_dir")
+    [ -d "$dir_view" ] || [ -d "$run_dir" ] || return 0
+
+    # "kill -0" fails for a process that is gone, and succeeds for one this
+    # user owns. A live run therefore never looks stale; only the reverse.
+    host=$(printf '%s\n' "$owner" | sed -n 's/^host=//p')
+    pid=$(printf '%s\n' "$owner" | sed -n 's/^pid=//p')
+    if [ -n "$host" ] && [ "$host" = "$(lock_host_id)" ] && [ -n "$pid" ]; then
+        kill -0 "$pid" 2>/dev/null || return 0
+    fi
+
+    started=$(printf '%s\n' "$owner" | sed -n 's/^started=//p')
+    now=$(date +%s)
+    if [ -n "$started" ] && [ "$(( now - started ))" -gt "$grace" ]; then
+        return 0
+    fi
+    return 1
+}
+
 take_lock() {
-    local repo=$1 branch=$2 timeout=$3 key dir owner now started
+    local repo=$1 branch=$2 timeout=$3 key dir owner
     key=$(lock_key "$repo" "$branch")
     dir=$STATE_VIEW/locks/$key.lock
     mkdir -p -- "$STATE_VIEW/locks"
 
     if ! mkdir -- "$dir" 2>/dev/null; then
-        owner=$(cat -- "$dir/owner" 2>/dev/null || printf '')
-        started=$(printf '%s\n' "$owner" | sed -n 's/^started=//p')
-        now=$(date +%s)
-        local run_dir
-        run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
-        local stale=0
-        if [ -z "$owner" ]; then
-            stale=1
-        elif [ -n "$run_dir" ] && [ ! -d "$(view_path "$run_dir")" ] && [ ! -d "$run_dir" ]; then
-            stale=1
-        elif [ -n "$started" ] && [ "$(( now - started ))" -gt "$(( timeout + 600 ))" ]; then
-            stale=1
-        fi
-        if [ "$stale" = 1 ]; then
+        if lock_is_stale "$dir" "$(( timeout + 600 ))"; then
             warn "breaking a stale lock on $branch"
             rm -rf -- "$dir"
             mkdir -- "$dir" 2>/dev/null ||
                 fail 11 "the branch $branch is claimed by another run" \
                     "lock: $dir"
         else
+            owner=$(cat -- "$dir/owner" 2>/dev/null || printf '')
             fail 11 "the branch $branch is claimed by another run" \
                 "lock: $dir" \
                 "${owner:-(no owner recorded)}" \
@@ -515,8 +548,9 @@ take_lock() {
     fi
 
     LOCK_DIR=$dir
-    printf 'repo=%s\nbranch=%s\nrunDir=%s\nstarted=%s\npid=%s\n' \
-        "$repo" "$branch" "$RUN_DIR_HOST" "$(date +%s)" "$$" > "$dir/owner"
+    printf 'repo=%s\nbranch=%s\nrunDir=%s\nstarted=%s\npid=%s\nhost=%s\n' \
+        "$repo" "$branch" "$RUN_DIR_HOST" "$(date +%s)" "$$" "$(lock_host_id)" \
+        > "$dir/owner"
 }
 
 # --------------------------------------------- git against the disposable clone --
@@ -1087,21 +1121,18 @@ cmd_clean() {
     # later sweep still has to be able to take it away, while a run that is
     # still going must not lose the clone from under it.
     local -a live_dirs=()
-    local d owner run_dir dir_view
+    local d owner run_dir
     if [ -d "$STATE_VIEW/locks" ]; then
         for d in "$STATE_VIEW/locks"/*.lock; do
             [ -d "$d" ] || continue
-            owner=$(cat -- "$d/owner" 2>/dev/null || printf '')
-            run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
-            dir_view=''
-            [ -n "$run_dir" ] && dir_view=$(view_path "$run_dir")
-            if [ "$all" = 1 ] || [ -z "$run_dir" ] ||
-               { [ ! -d "$dir_view" ] && [ ! -d "$run_dir" ]; }; then
+            if [ "$all" = 1 ] || lock_is_stale "$d"; then
                 info "removing lock $(basename -- "$d")"
                 rm -rf -- "$d"
                 found=1
             else
-                live_dirs+=("$run_dir")
+                owner=$(cat -- "$d/owner" 2>/dev/null || printf '')
+                run_dir=$(printf '%s\n' "$owner" | sed -n 's/^runDir=//p')
+                [ -n "$run_dir" ] && live_dirs+=("$run_dir")
             fi
         done
     fi

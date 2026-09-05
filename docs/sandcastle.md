@@ -404,7 +404,7 @@ is a larger exposure than an independent review is worth.
 | Control | What it does |
 | --- | --- |
 | `--timeout SECONDS` | wall-clock limit for the whole run; `AGENTBOX_TIMEOUT_SECONDS` sets the default. `timeout --foreground --kill-after=30s` bounds the control plane, and the orchestrator aborts the agent a minute earlier so the sandbox can still be destroyed cleanly |
-| branch lock | two runs cannot claim the same branch of the same repository. A lock whose run directory is gone, or which is older than the run could be, is broken once and reported |
+| branch lock | two runs cannot claim the same branch of the same repository. A lock is stale, and is broken once and reported, when the run directory it names is gone, when the process that took it is gone, or when it is older than the longest a run could hold it. `take_lock` and `agentbox clean` share that one rule: when they did not, a lock kept its run directory alive and the run directory kept the lock alive, and neither could be swept. The PID is only trusted on the side that recorded it, because the same number names a different process across the host/container boundary |
 | `--max-commits N` | the import bound |
 | `--allow-merges` | accepts merge commits in the imported range |
 | `--check CMD` | a deterministic check. A newline in the argument is refused, not split into two checks |
