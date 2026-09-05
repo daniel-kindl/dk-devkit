@@ -287,6 +287,28 @@ relabelled no longer exist.
 repository, of `config/agents` and of the skill store before the run, reads
 them again afterwards, and fails on any difference.
 
+### Undoing an earlier relabelling
+
+A path an older `agentbox` relabelled keeps `container_file_t` until it is put
+back by hand. Plain `restorecon` will not do it:
+
+```bash
+restorecon -R -v ~/projects/example
+# ... not reset as customized by admin to system_u:object_r:container_file_t:s0
+```
+
+`container_file_t` is in the shipped `customizable_types` list, and `restorecon`
+leaves a customizable type alone unless `-F` forces it:
+
+```bash
+restorecon -R -F -v ~/projects/example
+```
+
+`restorecon` is a no-op for anything under `/run/user/<uid>/`: the shipped
+`file_contexts` maps `/run/user/[^/]+/.+` to `<<none>>`, so there is no default
+context to restore. Recreate the file instead — for the Podman API socket,
+`systemctl --user restart podman.socket`.
+
 The control plane keeps one deliberate relaxation: it runs with
 `--security-opt label=disable`, because SELinux denies a confined container
 process the `connect()` on the Podman socket, and the alternative is the
