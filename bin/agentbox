@@ -27,6 +27,12 @@
 #   --review-agent NAME      codex (default), claude, or none
 #   --review-model NAME      overrides the manifest default
 #   --check CMD              a deterministic check; repeatable
+#   --max-fix-rounds N       how many times the sandbox may re-run the agent
+#                            against its own failing checks, default from the
+#                            manifest
+#   --continue               work on an EXISTING agent/ branch, based on its
+#                            own tip. This is how a repair reaches work that
+#                            is already imported
 #   --max-iterations N       agent iterations, default 1
 #   --max-commits N          the import limit, default from the manifest
 #   --allow-merges           accept merge commits in the imported range
@@ -63,6 +69,13 @@
 # config, cannot install a hook, and cannot touch the checked-out working
 # tree, because none of those paths exists inside it. The pre-run and post-run
 # integrity comparison stays, as defense in depth, not as the boundary.
+#
+# The implementer runs behind a feedback loop. After the agent stops, the
+# sandbox runs the configured checks. A failing check goes back to the same
+# agent, in the same sandbox, with the failure as evidence, up to
+# --max-fix-rounds times. The loop is inside the sandbox because that is where
+# the code, the toolchain and the agent already are: a repair that needed a new
+# clone would cost a whole run.
 #
 # What agentbox never does:
 #   * push a branch, open a pull request, or merge anything
@@ -1260,7 +1273,8 @@ cmd_run() {
     local agent=claude model='' review_agent=codex review_model=''
     local max_iterations=1 effort='' image='' assert_isolation=1 dry_run=0
     local timeout=$AGENTBOX_TIMEOUT_SECONDS max_commits=$AGENTBOX_MAX_COMMITS
-    local allow_merges=0 ambient=0
+    local allow_merges=0 ambient=0 continuation=0
+    local max_fix_rounds=$AGENTBOX_MAX_FIX_ROUNDS
     local -a checks=()
 
     while [ $# -gt 0 ]; do
@@ -1275,6 +1289,8 @@ cmd_run() {
             --review-agent) review_agent=${2:?}; shift 2 ;;
             --review-model) review_model=${2:?}; shift 2 ;;
             --check) checks+=("${2:?--check needs a command}"); shift 2 ;;
+            --max-fix-rounds) max_fix_rounds=${2:?}; shift 2 ;;
+            --continue) continuation=1; shift ;;
             --max-iterations) max_iterations=${2:?}; shift 2 ;;
             --max-commits) max_commits=${2:?}; shift 2 ;;
             --allow-merges) allow_merges=1; shift ;;
@@ -1313,6 +1329,14 @@ cmd_run() {
     case $max_iterations in
         ''|*[!0-9]*) fail 2 "--max-iterations must be a whole number: $max_iterations" ;;
     esac
+    case $max_fix_rounds in
+        ''|*[!0-9]*) fail 2 "--max-fix-rounds must be a whole number: $max_fix_rounds" ;;
+    esac
+    # A fix round with no check to run is a second agent turn with no evidence.
+    # Saying so is better than running it.
+    if [ "$max_fix_rounds" -gt 0 ] && [ "${#checks[@]}" -eq 0 ]; then
+        max_fix_rounds=0
+    fi
 
     # A check runs as one shell command inside the sandbox. A newline would
     # silently turn one check into two, and the second would not be reported
@@ -1327,6 +1351,29 @@ cmd_run() {
 
     require_agent_branch "$branch"
     resolve_repo "$repo"
+
+    # --- continuation mode --------------------------------------------------
+    #
+    # A repair has to reach a branch that agentbox already imported. The safe
+    # way is to make that branch its own base: the clone starts at the current
+    # tip, the agent adds commits on top, and every import invariant then holds
+    # unchanged. The result must still descend from the base, the range is
+    # still bounded, and the ref update is still a compare and swap against the
+    # tip this run started from.
+    #
+    # The alternative, editing an imported branch on the host with an
+    # untrusted agent, would put model output outside the sandbox. It is not
+    # available here.
+    if [ "$continuation" = 1 ]; then
+        [ -z "$base_ref" ] ||
+            fail 2 '--continue and --base cannot be used together' \
+                'In continuation mode the branch is its own base.'
+        git -C "$REAL_REPO_VIEW" rev-parse --verify --quiet \
+            "refs/heads/$branch^{commit}" >/dev/null ||
+            fail 7 "--continue needs the branch $branch to exist already" \
+                'Run without --continue to create it.'
+        base_ref=refs/heads/$branch
+    fi
 
     # --- the base commit ----------------------------------------------------
     local base_sha
@@ -1355,6 +1402,7 @@ cmd_run() {
         AGENT="$agent" MODEL="$model" REVIEW_AGENT="$review_agent" \
         REVIEW_MODEL="$review_model" MAX_ITER="$max_iterations" \
         MAX_COMMITS="$max_commits" ALLOW_MERGES="$allow_merges" \
+        MAX_FIX="$max_fix_rounds" CONTINUATION="$continuation" \
         TIMEOUT="$timeout" EFFORT="$effort" IMAGE="$image" \
         ASSERT="$assert_isolation" STATE="$STATE_HOST" \
         GIT_NAME="$AGENTBOX_GIT_NAME" GIT_EMAIL="$AGENTBOX_GIT_EMAIL" \
@@ -1374,6 +1422,8 @@ plan = {
     "reviewAgent": os.environ["REVIEW_AGENT"],
     "reviewModel": os.environ["REVIEW_MODEL"],
     "maxIterations": int(os.environ["MAX_ITER"]),
+    "maxFixRounds": int(os.environ["MAX_FIX"]),
+    "continuation": os.environ["CONTINUATION"] == "1",
     "maxCommits": int(os.environ["MAX_COMMITS"]),
     "allowMerges": os.environ["ALLOW_MERGES"] == "1",
     "timeoutSeconds": int(os.environ["TIMEOUT"]),
@@ -1419,6 +1469,9 @@ print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
     info "repository       $REAL_REPO_HOST"
     info "branch           $branch"
     info "base commit      ${base_sha:0:12}"
+    if [ "$continuation" = 1 ]; then
+        info 'mode             continuation (the branch is its own base)'
+    fi
 
     # --- the baseline the import is judged against --------------------------
     repo_snapshot "$REAL_REPO_VIEW" "$RUN_DIR_VIEW/meta/before"
@@ -1446,6 +1499,7 @@ print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
     REVIEW_PROMPT="$review_prompt" AGENT="$agent" MODEL="$model" \
     REVIEW_AGENT="$review_agent" REVIEW_MODEL="$review_model" \
     MAX_ITER="$max_iterations" EFFORT="$effort" IMAGE="$image" \
+    MAX_FIX="$max_fix_rounds" \
     MOUNTS="$mounts_json" ASSERT="$assert_isolation" TIMEOUT="$timeout" \
     HAS_CLAUDE="$( [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] && printf 1 || printf 0 )" \
     HAS_CODEX="$( [ -n "$OPENAI_API_KEY" ] && printf 1 || printf 0 )" \
@@ -1471,6 +1525,7 @@ cfg = {
     "reviewAgent": os.environ["REVIEW_AGENT"],
     "reviewModel": os.environ["REVIEW_MODEL"],
     "maxIterations": int(os.environ["MAX_ITER"]),
+    "maxFixRounds": int(os.environ["MAX_FIX"]),
     "checks": checks,
     "sandboxImage": os.environ["IMAGE"],
     "mounts": json.loads(os.environ["MOUNTS"]),

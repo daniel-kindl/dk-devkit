@@ -146,6 +146,28 @@ directory on purpose, and the run proves that the real repository, its config,
 its hooks and its SELinux labels are all unchanged. Run both after a rebuild.
 See `docs/sandcastle.md`.
 
+## 8b. Prepare the backlog coordinator, if you want an unattended drain
+
+`bootstrap/web-dev.sh` already installed `agentqueue` inside the container. It
+lives there and not on the host, because it needs `gh` and the forwarded
+ssh-agent.
+
+It needs no credential of its own. It uses the `gh` sign-in from step 6 and the
+SSH key from step 2, and it never writes either to disk.
+
+```bash
+devbox exec web-dev -- agentqueue doctor --repo ~/projects/dkkb
+devbox exec web-dev -- agentqueue plan   --repo ~/projects/dkkb
+```
+
+`plan` reads GitHub and changes nothing. It prints which issues are runnable
+and which are blocked, and it ends with the count of attempted mutations, which
+must be zero.
+
+A repository opts in to an automatic merge in its own tracked
+`.agentqueue.json`. `agentqueue init --repo <path>` writes a starting point.
+Read `docs/agentqueue.md` before turning `autoMerge` on.
+
 ## 9. MANUAL: install and register Orca
 
 1. Download the Orca AppImage and put it in `~/AppImages/`.
@@ -194,6 +216,9 @@ run them again.
 | A client rewrote its own status line | `~/.agents/statusline/install.sh` |
 | Routing resolves the wrong environment | `devbox doctor` |
 | An unattended agent run fails to start | `agentbox doctor` |
+| A backlog drain will not start | `agentqueue doctor --repo <path>` |
+| The queue merged nothing, and every issue looks blocked | `agentqueue plan --repo <path>` |
+| An issue is stuck with `agent-in-progress` | the claim goes stale on its own; `agentqueue plan` reports it |
 | A sandbox container, lock or run directory was left behind | `agentbox clean`, or `agentbox clean --all` |
 | The agent images are stale | `agentbox build --force` |
 | The container is broken beyond repair | see below |

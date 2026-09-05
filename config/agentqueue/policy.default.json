@@ -1,0 +1,62 @@
+{
+  "$comment": [
+    "Built-in queue policy. bin/agentqueue loads this file first, then overlays",
+    "the repository policy on top of it. A repository policy therefore only has",
+    "to state what it changes.",
+    "",
+    "A target repository declares its own policy in <repo>/.agentqueue.json.",
+    "That file is tracked with the repository it governs, because the policy is",
+    "a property of the project and not of this machine. When a repository",
+    "cannot carry the file yet, ~/.config/agentqueue/repos/<owner>--<name>.json",
+    "holds the same document as machine state.",
+    "",
+    "See docs/agentqueue.md for the full reference."
+  ],
+
+  "version": 1,
+
+  "baseBranch": "main",
+  "branchPrefix": "agent/",
+
+  "issueLabel": "ready-for-agent",
+  "inProgressLabel": "agent-in-progress",
+  "humanLabel": "ready-for-human",
+  "failedLabel": "agent-failed",
+
+  "dependencySources": ["github", "prose"],
+
+  "checks": [],
+
+  "requiredChecks": [],
+  "requireCiChecks": true,
+  "ciTimeoutSeconds": 1800,
+  "ciPollSeconds": 20,
+  "ciGraceSeconds": 180,
+
+  "reviewPolicy": "optional",
+  "mergeWithoutReview": false,
+
+  "autoMerge": false,
+  "mergeMethod": "squash",
+  "deleteRemoteBranchOnMerge": true,
+  "deleteLocalBranchOnMerge": false,
+  "closeIssueIfPullRequestDidNot": false,
+
+  "maxParallel": 1,
+  "maxRetries": 2,
+  "maxFixRounds": 2,
+  "maxCommits": 20,
+  "maxIterations": 4,
+  "agentTimeoutSeconds": 3600,
+  "staleClaimSeconds": 7200,
+
+  "adoptExistingBranch": true,
+  "adoptExistingPullRequest": true,
+  "requireAgentAuthoredCommits": true,
+
+  "scanDiffForSecrets": true,
+
+  "referencedIssueDepth": 1,
+  "maxReferencedIssues": 6,
+  "maxPromptBytes": 60000
+}

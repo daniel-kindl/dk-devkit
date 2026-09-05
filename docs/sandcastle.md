@@ -210,10 +210,14 @@ keeps the run directory for inspection.
 | devbox + purpose-specific Distroboxes | the interactive development runtime | this repository |
 | Sandcastle behind `agentbox` | unattended and parallel agent orchestration | this repository |
 | Podman | the local sandbox provider | the host |
+| `agentqueue` | the trusted GitHub authority: issues, push, pull requests, merge | this repository |
 | GitHub | durable issue, pull request and CI state | remote |
 
-`agentbox` stops at the branch. It never pushes, so GitHub only ever sees what a
-human decides to send.
+`agentbox` stops at the branch. It never pushes, so GitHub only ever sees what
+a human, or `agentqueue`, decides to send. `agentqueue` is a separate program
+for exactly that reason: the half that holds a GitHub credential and the half
+that runs model output are not the same process, and neither is a sandbox.
+See [agentqueue.md](agentqueue.md).
 
 ## Why the control plane is not a Distrobox
 
@@ -311,17 +315,77 @@ worktrees are created inside the disposable clone.
    the sandbox
 9. run the implementer agent (Claude)
 10. deterministic verification
-11. optional independent reviewer (Codex)
-12. deterministic verification
-13. destroy the sandbox
-14. compare the real repository against the baseline; it must be identical
-15. sanitize the clone, validate the result, and import it as `agent/<name>`
-16. compare again; exactly one ref may have moved
-17. remove the credential file, the clone and the run directory
+11. feed a failing check back to the same agent, in the same sandbox, up to
+    `--max-fix-rounds` times, and verify again after each round
+12. optional independent reviewer (Codex)
+13. deterministic verification
+14. destroy the sandbox
+15. compare the real repository against the baseline; it must be identical
+16. sanitize the clone, validate the result, and import it as `agent/<name>`
+17. compare again; exactly one ref may have moved
+18. remove the credential file, the clone and the run directory
 
 The branch strategy is always an explicit named branch. Sandcastle's `head` and
 `merge-to-head` strategies are never selected, so nothing `agentbox` configures
 merges into the checked-out branch.
+
+## The implementation feedback loop
+
+A single-shot agent that is graded afterwards wastes a whole run on a typo.
+
+Sandcastle keeps one sandbox across several `run()` calls, and commits
+accumulate on the same branch. The orchestrator uses that: after the
+implementer stops, it runs the configured checks, and a failure goes straight
+back to the **same agent**, in the **same sandbox**, with the failing command
+and the tail of its output as the whole evidence.
+
+    implement -> check -> fix -> check -> fix -> check ...
+
+`--max-fix-rounds` bounds the loop, default 2. Nothing is cloned again and no
+container is created again, so a round costs one agent turn and the time the
+checks take. `verify.sh` module 8 asserts that a run still creates exactly one
+sandbox.
+
+Two details matter for anything that reads the result:
+
+- **The last state of the checks decides.** A run that failed a check, repaired
+  itself and then passed reports `checksPassed: true`. Reporting the earlier
+  failure would send a coordinator into a repair loop of its own for work that
+  is already correct.
+- The summary publishes `finalChecks` and `failedChecks`, so a reader never has
+  to work out which of the per-phase arrays is the current one.
+
+The evidence is bounded: 40 lines and 4000 bytes per failing check. A full test
+log is far longer than a prompt should be.
+
+## Continuation mode
+
+A GitHub check can only fail after the sandbox is gone. A repair therefore has
+to reach a branch that `agentbox` already imported, and
+`agentbox pipeline --continue` is how:
+
+```bash
+agentbox pipeline --repo ~/projects/example \
+  --branch agent/issue-85-thing --continue \
+  --prompt-file ./repair.md --check 'pnpm check'
+```
+
+The branch becomes its own base. Every import invariant then holds unchanged,
+because none of them was relaxed to make this work:
+
+- the clone starts at the current tip of that branch
+- the result must still descend from that base
+- the range is still bounded by `--max-commits`
+- the ref update is still a compare and swap against the tip the run started
+  from
+- the target is still inside `agent/`
+
+`--continue` refuses a branch that does not exist, and it refuses `--base`,
+because in continuation mode the branch **is** the base.
+
+The alternative, editing an imported branch on the host with an untrusted
+agent, would put model output outside the sandbox. It is deliberately not
+available.
 
 ## The run directory
 
@@ -490,6 +554,8 @@ is a larger exposure than an independent review is worth.
 | `--max-commits N` | the import bound |
 | `--allow-merges` | accepts merge commits in the imported range |
 | `--check CMD` | a deterministic check. A newline in the argument is refused, not split into two checks |
+| `--max-fix-rounds N` | how many times the sandbox may re-run the implementer against its own failing checks, inside one sandbox. `AGENTBOX_MAX_FIX_ROUNDS` sets the default. A run with no `--check` sets it to 0, because there is no evidence to feed back |
+| `--continue` | work on an existing `agent/` branch, based on its own tip |
 | `INT` and `TERM` | remove the control plane, remove this run's sandboxes, remove the credential file, release the lock |
 | `agentbox clean` | sweeps stray containers, stale locks, and every run directory no live lock names |
 
@@ -583,8 +649,19 @@ agentbox pipeline \
   --prompt-file ./prompt.md \
   --check 'npm test' \
   --check 'npm run typecheck' \
+  --max-fix-rounds 2 \
   --timeout 1800
+
+agentbox pipeline \
+  --repo ~/projects/example \
+  --branch agent/example \
+  --continue \
+  --prompt-file ./repair.md \
+  --check 'npm test'
 ```
+
+`bin/agentqueue` drives all of this from a GitHub backlog, and it is the only
+component that holds a GitHub credential. See [agentqueue.md](agentqueue.md).
 
 `agentbox help` lists every option.
 

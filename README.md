@@ -33,6 +33,18 @@ disposable clone of the repository. The real repository is never mounted, and
 only validated commits are imported onto an `agent/` branch. It never pushes.
 Read [docs/sandcastle.md](docs/sandcastle.md).
 
+`agentqueue` carries that result the rest of the way. One command drains a
+GitHub backlog: it picks a runnable issue, drives `agentbox`, pushes the
+validated branch, opens the pull request, waits for the checks, merges when
+every gate passes, and looks again, because a merge can unblock the next issue.
+It is a separate program because it holds the GitHub authority that a sandbox
+must never get. Read [docs/agentqueue.md](docs/agentqueue.md).
+
+```bash
+agentqueue plan  --repo ~/projects/dkkb    # what it would do, changes nothing
+agentqueue drain --repo ~/projects/dkkb    # do it
+```
+
 Read [docs/architecture.md](docs/architecture.md) for the full picture.
 
 ## Rebuild a machine
@@ -84,9 +96,11 @@ to see what a run would change.
 | `config/devbox-router/` | The router configuration and inference rules |
 | `config/claude/`, `config/codex/` | Non-secret client preferences |
 | `config/web-dev/` | Files that belong to the container: shell fragment, Orca bridge |
-| `bin/` | The router, `agentbox`, the verification suites and the other tools |
+| `bin/` | The router, `agentbox`, `agentqueue`, the verification suites and the other tools |
+| `lib/agentqueue/` | The backlog coordinator, Python with the standard library only |
 | `containers/` | The Containerfiles for the agent control plane and its sandboxes |
 | `config/sandcastle/` | The orchestration programs that run inside the control plane |
+| `config/agentqueue/` | The built-in queue policy that a repository overlays |
 | `verify/` | The verification modules that `./verify.sh` runs |
 | `docs/` | Architecture, bootstrap, recovery, and the secret policy |
 | `.devbox` | The router declaration: this repository is edited in `web-dev` |

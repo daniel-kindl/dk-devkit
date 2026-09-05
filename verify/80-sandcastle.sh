@@ -432,6 +432,58 @@ out=$("$AB" selftest --timeout 5 2>&1 || true)
 check_contains 'H13 the selftest also takes a wall-clock limit' \
     'at least 60 seconds' "$out"
 
+# --- the implementation feedback loop ---------------------------------------
+#
+# A single-shot agent that is graded afterwards wastes a whole run on a typo.
+# The orchestrator therefore runs the configured checks, feeds a failure back
+# to the SAME agent in the SAME sandbox, and repeats up to --max-fix-rounds
+# times. The loop must be bounded, it must not create a second sandbox, and
+# the final verdict must read the LAST state of the checks.
+
+check_contains 'M1 the sandbox re-runs the agent against a failing check' \
+    'repair round' "$ORCH"
+check_contains 'M2 the loop is bounded by maxFixRounds' \
+    'summary.fixRounds < maxFixRounds' "$ORCH"
+check_contains 'M3 the repair evidence is the failing command and its output' \
+    'const fixPrompt' "$ORCH"
+check_contains 'M4 the evidence is bounded' 'TAIL_BYTES' "$ORCH"
+# One sandbox for the whole run. A second createSandbox would mean a second
+# container, a second worktree and a lost session.
+check_eq 'M5 the run creates exactly one sandbox' '1' \
+    "$(printf '%s' "$ORCH" | grep -c 'await createSandbox(')"
+check_contains 'M6 the verdict reads the final state of the checks' \
+    'const finalChecks' "$ORCH"
+check_contains 'M7 the final state is published for the coordinator' \
+    'summary.failedChecks' "$ORCH"
+check_contains 'M8 the manifest bounds the loop' 'AGENTBOX_MAX_FIX_ROUNDS' \
+    "$(cat "$MANIFEST")"
+check_contains 'M9 agentbox accepts --max-fix-rounds' '--max-fix-rounds)' "$AB_CODE"
+
+# --- continuation mode ------------------------------------------------------
+#
+# A repair has to reach a branch that agentbox already imported. Making that
+# branch its own base preserves every import invariant instead of working
+# around one: the result still has to descend from the base, the range is
+# still bounded, and the ref update is still a compare and swap.
+
+check_contains 'N1 agentbox accepts --continue' '--continue) continuation=1' "$AB_CODE"
+check_contains 'N2 continuation makes the branch its own base' \
+    'base_ref=refs/heads/$branch' "$AB_CODE"
+check_contains 'N3 continuation refuses a branch that does not exist' \
+    'needs the branch $branch to exist already' "$AB_CODE"
+check_contains 'N4 --continue and --base are mutually exclusive' \
+    'cannot be used together' "$AB_CODE"
+
+out=$("$AB" pipeline --repo "$REPO_ROOT" --branch agent/verify-continue \
+          --prompt-file "$SC_DIR/review-prompt.md" --continue --dry-run 2>&1 || true)
+check_contains 'N5 --continue refuses an absent branch at run time' \
+    'to exist already' "$out"
+
+out=$("$AB" pipeline --repo "$REPO_ROOT" --branch agent/verify-continue \
+          --prompt-file "$SC_DIR/review-prompt.md" --continue --base main \
+          --dry-run 2>&1 || true)
+check_contains 'N6 --continue with --base is refused' 'cannot be used together' "$out"
+
 # --- a dry run works on a machine that is not set up yet --------------------
 #
 # "print the plan and change nothing" is most useful on the machine that has

@@ -12,6 +12,7 @@
 #   * wires the shared agent configuration into ~/.agents, ~/.claude and ~/.codex
 #   * installs the Orca bridge wrappers and sync-agent-skills
 #   * installs the third-party skills in manifests/skills.tsv
+#   * installs the agentqueue backlog coordinator, which needs gh
 #   * applies the shared status line specification
 #
 # What it never does:
@@ -22,13 +23,15 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/agentqueue.sh
+. "$REPO_ROOT/bootstrap/lib/agentqueue.sh"
 
 SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
     case $1 in
         --dry-run) DRY_RUN=1; shift ;;
         --skip-skills) SKIP_SKILLS=1; shift ;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -166,6 +169,12 @@ ensure_dir "$HOME/.local/bin"
 link_into "$LINK_ROOT/bin/sync-agent-skills"       "$HOME/.local/bin/sync-agent-skills"
 link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca-ide"
 link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca"
+
+# --------------------------------------------- the GitHub backlog coordinator --
+section 'GitHub backlog coordinator (agentqueue)'
+# It lives here and not on the host, because it needs gh and the forwarded
+# ssh-agent, and both are reachable from inside this container.
+install_agentqueue "$REPO_ROOT" "$LINK_ROOT"
 
 # ------------------------------------------------------- third-party skills --
 section 'Third-party skills'

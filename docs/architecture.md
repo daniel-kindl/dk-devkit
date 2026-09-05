@@ -193,6 +193,38 @@ read-only file, never as an argument.
 
 `docs/sandcastle.md` holds the full design and the limits.
 
+## The GitHub backlog coordinator
+
+`agentbox` stops at a validated `agent/*` branch. `bin/agentqueue` is the half
+that carries the result the rest of the way:
+
+    agentqueue drain --repo ~/projects/dkkb
+
+It selects a runnable issue, drives `agentbox`, pushes the validated branch,
+opens the pull request, waits for the GitHub checks, merges when every gate
+passes, and scans the backlog again, because a merge can unblock the next
+issue.
+
+The split is the point. **`agentqueue` is trusted and `agentbox` is not.**
+
+| Component | Holds |
+| --- | --- |
+| `agentqueue` | the `gh` sign-in, the host ssh-agent, the right to push, open a pull request and merge |
+| `agentbox` | the disposable clone and the import validation. No GitHub credential |
+| the sandbox | a model credential, a network. Nothing that authenticates to GitHub |
+
+`agentqueue` hands `agentbox` a repository path, a branch name, a prompt file
+and a set of limits. It hands a sandbox nothing at all. `verify.sh` module 8b
+fails if the coordinator ever names a GitHub token, reads the agentbox
+credential file, or passes an environment to the agentbox process.
+
+It runs inside `web-dev`, because that is where `gh` is installed and where the
+host ssh-agent socket is reachable. It is written in Python with the standard
+library only, so the host rule against a Node toolchain is unaffected.
+
+`docs/agentqueue.md` holds the dependency model, the claim model, the merge
+gates and the failure taxonomy.
+
 ## Secrets
 
 The private SSH key stays on the host, and only on the host. The host ssh-agent
