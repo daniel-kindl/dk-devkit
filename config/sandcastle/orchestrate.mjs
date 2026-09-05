@@ -87,38 +87,66 @@ log(`checked out      ${currentBranch} @ ${headBefore.slice(0, 12)}`);
 
 // --------------------------------------------------------------- providers --
 
-/** Build the agent provider for a name, with its credential passed as env. */
+// Credentials reach the sandbox through the SANDBOX provider, not the agent
+// provider.
+//
+// The provider builds the container with "podman run -e ...", and drives it
+// afterwards with "podman exec", which passes no environment of its own. The
+// container environment is therefore fixed when the sandbox is created. With
+// createSandbox() the agent is not known yet at that moment, so an agent
+// provider's env would arrive too late and the CLI would report "Not logged
+// in". The sandbox provider's env is applied at create time, which is what the
+// implementer and the reviewer both need.
+//
+// Sandcastle throws when the agent env and the sandbox env share a key, so the
+// credentials live in exactly one of the two: the sandbox.
+
+const claudeCredential = () => {
+  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (token) return { CLAUDE_CODE_OAUTH_TOKEN: token };
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (key) return { ANTHROPIC_API_KEY: key };
+  return null;
+};
+
+const codexCredential = () => {
+  const key = process.env.OPENAI_API_KEY;
+  return key ? { OPENAI_API_KEY: key } : null;
+};
+
+const credentialFor = (name) =>
+  name === "claude" ? claudeCredential() : name === "codex" ? codexCredential() : null;
+
+/** Build the agent provider. The credential is already in the container env. */
 const agentProvider = (name, model, effort) => {
-  if (name === "claude") {
-    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    const key = process.env.ANTHROPIC_API_KEY;
-    if (!token && !key) {
-      fail(
-        "no Claude credential. Set CLAUDE_CODE_OAUTH_TOKEN (run 'claude setup-token') " +
-          "in ~/.config/agentbox/secrets.env. See docs/secrets.md.",
-      );
-    }
-    const env = token
-      ? { CLAUDE_CODE_OAUTH_TOKEN: token }
-      : { ANTHROPIC_API_KEY: key };
-    return claudeCode(model, effort ? { effort, env } : { env });
-  }
-  if (name === "codex") {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) {
-      fail(
-        "no Codex credential. Set OPENAI_API_KEY in ~/.config/agentbox/secrets.env. " +
-          "The interactive ~/.codex/auth.json is deliberately NOT mounted into a sandbox.",
-      );
-    }
-    const env = { OPENAI_API_KEY: key };
-    return codex(model, effort ? { effort, env } : { env });
-  }
+  const options = effort ? { effort } : {};
+  if (name === "claude") return claudeCode(model, options);
+  if (name === "codex") return codex(model, options);
   return fail(`unknown agent: ${name}`);
 };
 
+// Fail before anything is created when the implementer has no credential.
+const implementCredential = credentialFor(cfg.agent);
+if (!implementCredential) {
+  fail(
+    `no credential for the implementer "${cfg.agent}". Put CLAUDE_CODE_OAUTH_TOKEN ` +
+      "(from 'claude setup-token') in ~/.config/agentbox/secrets.env. See docs/secrets.md.",
+  );
+}
+
+// The reviewer shares the container, so its credential has to be present at
+// create time too. When it is absent the review step is skipped, not failed.
+const wantsReview = cfg.mode === "pipeline" && cfg.reviewAgent !== "none";
+const reviewCredential = wantsReview ? credentialFor(cfg.reviewAgent) : null;
+if (wantsReview && !reviewCredential) {
+  log(`no credential for "${cfg.reviewAgent}"; the review step will be skipped`);
+}
+
+const sandboxEnv = { ...implementCredential, ...(reviewCredential ?? {}) };
+
 const sandboxProvider = podman({
   imageName: cfg.sandboxImage,
+  env: sandboxEnv,
   mounts: cfg.mounts ?? [],
   // Bazzite runs SELinux. The shared label lets the rootless container read the
   // bind mounts; it is a no-op on a system without SELinux.
@@ -258,13 +286,8 @@ try {
   summary.checksAfterImplement = await runChecks(sandbox, "check after implement");
 
   // ---------------------------------------------------------------- review --
-  if (cfg.mode === "pipeline" && cfg.reviewAgent !== "none") {
-    const hasKey =
-      cfg.reviewAgent === "codex"
-        ? Boolean(process.env.OPENAI_API_KEY)
-        : Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
-
-    if (!hasKey) {
+  if (wantsReview) {
+    if (!reviewCredential) {
       log(
         `skipping the independent review: no credential for "${cfg.reviewAgent}". ` +
           "The implementation branch is still left for human review.",
@@ -331,7 +354,11 @@ const failedChecks = allChecks.filter((c) => c.exitCode !== 0);
 log(`branch left for human review: ${cfg.branch} (${summary.commits.length} commit(s))`);
 log(`checked-out branch unchanged: ${summary.mainUnchanged}`);
 if (allChecks.length === 0) {
-  log("deterministic checks: none were configured (pass --check)");
+  log(
+    (cfg.checks ?? []).length === 0
+      ? "deterministic checks: none were configured (pass --check)"
+      : "deterministic checks: configured, but the run stopped before they could run",
+  );
 } else if (summary.checksPassed) {
   log(`deterministic checks: all ${allChecks.length} passed`);
 } else {

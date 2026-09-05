@@ -168,6 +168,19 @@ never writes a value.
 `agentbox` passes only the variables an agent needs, as environment variables on
 the container. Nothing is written to disk in the repository or in a worktree.
 
+They reach the sandbox through the **sandbox** provider, not the agent provider.
+Sandcastle builds the container with `podman run -e ...` and drives it afterwards
+with `podman exec`, which passes no environment of its own, so the container
+environment is fixed at creation time. `createSandbox()` does not know the agent
+yet at that moment, so an agent provider's `env` arrives too late and the CLI
+reports `Not logged in`. Sandcastle also throws when the two `env` maps share a
+key, so the credentials live in exactly one of them.
+
+One consequence: the implementer and the reviewer share a container, so a
+configured `OPENAI_API_KEY` is present for the whole run, not only during the
+review step. That is the cost of keeping both agents on one branch in one
+sandbox.
+
 When `OPENAI_API_KEY` is absent, the pipeline **skips** the review step and says
 so. The implementation branch is still left for a human. This is deliberate:
 delegating the interactive ChatGPT sign-in to a disposable sandbox is a larger
