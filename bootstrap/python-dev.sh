@@ -3,7 +3,7 @@
 # Bootstrap the reusable python-dev Distrobox.
 # Run this INSIDE python-dev:
 #
-#   devbox exec python-dev --cwd ~/projects/workstation -- ./bootstrap/python-dev.sh
+#   devbox exec python-dev --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh
 #
 # The environment owns generic Python tooling only. A repository owns its
 # Python version and dependencies through uv.

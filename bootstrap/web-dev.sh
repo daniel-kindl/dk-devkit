@@ -3,7 +3,7 @@
 # Bootstrap the web-dev Distrobox half of the workstation.
 # Run this INSIDE the container:
 #
-#   devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh
+#   devbox exec web-dev --cwd ~/projects/dk-devkit -- ./bootstrap/web-dev.sh
 #
 # What it does, all idempotently:
 #   * installs the distribution packages in manifests/web-dev-packages.txt

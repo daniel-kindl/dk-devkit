@@ -108,7 +108,7 @@ skills and must survive. `bin/sync-agent-skills` maintains those links, and it
 never deletes a real directory.
 
 The link targets use the host spelling of the checkout
-(`~/projects/workstation/...`), not `/workspace/...`. Both spellings reach the
+(`~/projects/dk-devkit/...`), not `/workspace/...`. Both spellings reach the
 same files from inside the container, but only the host spelling also resolves
 from the host. That is what lets `verify.sh` run from either side.
 
@@ -116,7 +116,7 @@ from the host. That is what lets `verify.sh` run from either side.
 
 The wiring above uses symlinks, not copies. A `git pull` therefore updates the
 live configuration, and an edit to the live configuration is an edit to the
-repository. The cost is that `~/projects/workstation` must stay in place. Delete
+repository. The cost is that `~/projects/dk-devkit` must stay in place. Delete
 it and the shared policy, the status line and the router all break. `verify.sh`
 reports a dangling link as a failure.
 
