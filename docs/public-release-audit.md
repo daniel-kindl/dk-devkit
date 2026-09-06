@@ -255,16 +255,52 @@ Every gate #15 defines is met on `ce6e834`:
 
 #17 must, in this order:
 
-1. re-run `bin/scan-secrets`, `bin/scan-secrets --history` and `./verify.sh` on
-   the exact commit it publishes;
-2. confirm `repo-meta check` is clean, which is what F9 now asks for;
-3. change visibility to public;
-4. enable GitHub private vulnerability reporting;
-5. replace the gap paragraph in `SECURITY.md` with the real channel;
-6. record the publication commit, the date, the tested platform and the support
+1. run `bin/publication-gate` on the exact commit it publishes, and read the
+   list of tracked files the audit did not cover;
+2. change visibility to public;
+3. enable GitHub private vulnerability reporting;
+4. replace the gap paragraph in `SECURITY.md` with the real channel;
+5. record the publication commit, the date, the tested platform and the support
    limitations.
 
 F7 needs no step: its two tags are local only, as the correction there records.
 
-If any step 1 check fails on the publication commit, this GO does not carry.
+If the gate reports NO-GO on the publication commit, this GO does not carry.
 Stop and audit again.
+
+## The publication gate
+
+`bin/publication-gate` runs the mechanical half of step 1 and prints one
+verdict. It changes nothing, it does not change repository visibility, and it
+does not replace the decision above.
+
+```bash
+bin/publication-gate          # run every gate against HEAD
+bin/publication-gate --list   # list the gates without running them
+bin/publication-gate --quick  # rehearse; skips the two slow gates
+```
+
+| Gate | What it proves |
+| --- | --- |
+| G1 | The working tree is clean, so every gate below reads the commit that publication exposes. |
+| G2 | `origin/main` holds that commit. Publication exposes what GitHub holds, not what this checkout holds. |
+| G3 | `bin/scan-secrets` is clean on the tracked tree. |
+| G4 | `bin/scan-secrets --history` is clean on every blob. |
+| G5 | `./verify.sh` passes with no failed check. |
+| G6 | `repo-meta check` finds no drift, which is what F9 asks for. |
+| G7 | This file records a GO, and the audited commit is an ancestor of the commit to publish. |
+
+G7 is the reason the command exists. The decision above names the commit it was
+recorded against. Publication exposes a later commit, and a decision that names
+an older one carries nothing by itself. The gate confirms the ancestry, then
+prints every tracked file that changed since the audited commit. That is the
+part a tool cannot judge, and printing it makes the human re-check bounded
+instead of open-ended.
+
+A gate that did not run did not pass. `--quick` therefore reports NO-GO even
+when every gate it ran passed, which keeps a rehearsal from reading like a
+publication run. Exit status is 0 for GO, 1 for NO-GO, 2 for a usage error and
+3 when the checkout cannot be read.
+
+The gate reads the audited commit and the decision out of this file. Recording
+a new audit here moves the gate with it; no second copy of either value exists.

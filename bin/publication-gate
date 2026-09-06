@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+#
+# publication-gate - run every mechanical gate that must pass on the exact
+# commit this repository publishes, and print one verdict.
+#
+#   publication-gate            run every gate against HEAD
+#   publication-gate --list     list the gates without running them
+#   publication-gate --quick    skip the whole-history scan and verification
+#
+# Exit codes: 0 GO, 1 NO-GO, 2 usage, 3 the checkout cannot be read.
+#
+# This command changes nothing. It does not change repository visibility, and
+# it does not decide for a human. docs/public-release-audit.md holds the audit,
+# the GO decision and the publication order; issue #17 owns publication.
+#
+# The last gate is the reason this command exists. The GO decision names the
+# commit it was recorded against. Publication exposes a different commit, and
+# a decision that names an older one carries nothing by itself. The gate
+# confirms that the audited commit is an ancestor, then prints what changed
+# since, so the human re-check the checklist asks for is bounded and honest.
+#
+# --quick exists for a rehearsal, not for a publication run. It prints a
+# NO-GO verdict, because a gate that did not run did not pass.
+
+set -u
+
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+AUDIT=docs/public-release-audit.md
+
+EXIT_GO=0
+EXIT_NOGO=1
+EXIT_USAGE=2
+EXIT_ENV=3
+
+QUICK=0
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    BOLD=$(printf '\033[1m'); RED=$(printf '\033[31m')
+    GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m')
+    DIM=$(printf '\033[2m'); RESET=$(printf '\033[0m')
+else
+    BOLD=''; RED=''; GREEN=''; YELLOW=''; DIM=''; RESET=''
+fi
+
+GATES=(
+    'G1  the working tree is clean'
+    'G2  the commit to publish is the commit on origin/main'
+    'G3  the tracked-tree secret scan is clean'
+    'G4  the whole-history secret scan is clean'
+    'G5  full verification passes with no failed check'
+    'G6  the repository metadata matches the manifest'
+    'G7  the audit records a GO for an ancestor of this commit'
+)
+
+usage() { sed -n '2,25p' "$0"; }
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --quick)   QUICK=1; shift ;;
+        --list)    printf '%s\n' "${GATES[@]}"; exit "$EXIT_GO" ;;
+        -h|--help) usage; exit "$EXIT_GO" ;;
+        *) printf 'publication-gate: unknown option: %s\n' "$1" >&2
+           usage >&2; exit "$EXIT_USAGE" ;;
+    esac
+done
+
+cd -- "$REPO_ROOT" || exit "$EXIT_ENV"
+git rev-parse --git-dir >/dev/null 2>&1 || {
+    printf 'publication-gate: %s is not a Git checkout\n' "$REPO_ROOT" >&2
+    exit "$EXIT_ENV"
+}
+
+FAILED=0
+SKIPPED=0
+
+# gate <id> <detail-on-failure> - report one gate from the exit status of the
+# command that already ran. A gate that did not run is not a gate that passed,
+# so a skip counts against the verdict.
+gate_pass() { printf '  %sPASS%s  %s\n' "$GREEN" "$RESET" "$1"; }
+gate_fail() {
+    printf '  %sFAIL%s  %s\n' "$RED" "$RESET" "$1"
+    [ -n "${2:-}" ] && printf '        %s%s%s\n' "$DIM" "$2" "$RESET"
+    FAILED=$(( FAILED + 1 ))
+}
+gate_skip() {
+    printf '  %sSKIP%s  %s  %s(%s)%s\n' "$YELLOW" "$RESET" "$1" "$DIM" "${2:-}" "$RESET"
+    SKIPPED=$(( SKIPPED + 1 ))
+}
+
+head_commit=$(git rev-parse HEAD)
+head_short=$(git rev-parse --short HEAD)
+
+printf '%s== publication gate ==%s\n' "$BOLD" "$RESET"
+printf 'checkout    %s\n' "$REPO_ROOT"
+printf 'commit      %s\n' "$head_commit"
+printf 'date        %s\n' "$(git show -s --format=%cs HEAD)"
+[ "$QUICK" = 1 ] && printf 'mode        %squick rehearsal, not a publication run%s\n' "$YELLOW" "$RESET"
+
+printf '\n%sgates%s\n' "$BOLD" "$RESET"
+
+# --- G1 the working tree is clean -----------------------------------------
+#
+# The gates below read the checkout. An uncommitted change makes every one of
+# them describe something that publication never exposes.
+
+dirty=$(git status --porcelain)
+if [ -z "$dirty" ]; then
+    gate_pass "${GATES[0]}"
+else
+    gate_fail "${GATES[0]}" \
+        "$(printf '%s\n' "$dirty" | grep -c .) uncommitted change(s); commit or stash them"
+fi
+
+# --- G2 the commit is the one the remote holds ----------------------------
+#
+# Publication exposes what GitHub holds, not what this checkout holds.
+
+if ! git rev-parse --verify -q origin/main >/dev/null; then
+    gate_fail "${GATES[1]}" 'no origin/main; run "git fetch origin"'
+elif [ "$(git rev-parse origin/main)" = "$head_commit" ]; then
+    gate_pass "${GATES[1]}"
+else
+    gate_fail "${GATES[1]}" \
+        "origin/main is $(git rev-parse --short origin/main), HEAD is $head_short"
+fi
+
+# --- G3, G4 the secret scans ----------------------------------------------
+
+if scan_out=$(bin/scan-secrets 2>&1); then
+    gate_pass "${GATES[2]}"
+else
+    gate_fail "${GATES[2]}" "$(printf '%s\n' "$scan_out" | tail -n 1)"
+fi
+
+if [ "$QUICK" = 1 ]; then
+    gate_skip "${GATES[3]}" '--quick'
+elif hist_out=$(bin/scan-secrets --history 2>&1); then
+    gate_pass "${GATES[3]}"
+else
+    gate_fail "${GATES[3]}" "$(printf '%s\n' "$hist_out" | tail -n 1)"
+fi
+
+# --- G5 full verification -------------------------------------------------
+#
+# The audit gate is "0 failed", not "0 skipped". A check that needs the host
+# or the container skips on the other side, and that is the documented shape
+# of this suite.
+
+if [ "$QUICK" = 1 ]; then
+    gate_skip "${GATES[4]}" '--quick'
+else
+    verify_out=$(./verify.sh 2>&1)
+    verify_rc=$?
+    verify_tail=$(printf '%s\n' "$verify_out" \
+        | sed -n 's/^\(passed\|failed\|skipped\) *\([0-9]*\)$/\1 \2/p' | tr '\n' ' ')
+    if [ "$verify_rc" = 0 ]; then
+        gate_pass "${GATES[4]}  ${DIM}${verify_tail}${RESET}"
+    else
+        gate_fail "${GATES[4]}" "${verify_tail}"
+    fi
+fi
+
+# --- G6 the repository metadata -------------------------------------------
+#
+# F9 of the audit. The manifest is the tracked description, homepage and
+# topics; drift means GitHub shows something no review approved.
+
+if ! command -v gh >/dev/null 2>&1; then
+    gate_fail "${GATES[5]}" 'gh is not on PATH; the metadata cannot be read'
+elif meta_out=$(bin/repo-meta check 2>&1); then
+    gate_pass "${GATES[5]}"
+else
+    gate_fail "${GATES[5]}" "$(printf '%s\n' "$meta_out" | tail -n 1)"
+fi
+
+# --- G7 the GO decision covers this commit --------------------------------
+
+audited=$(sed -n 's/^| Audited commit *| `\([0-9a-f]\{7,40\}\)` *|.*/\1/p' "$AUDIT" | head -n 1)
+decision=$(sed -n '/^## Decision/,$p' "$AUDIT" | grep -m1 -oE '\*\*(GO|NO-GO)\*\*' | tr -d '*')
+
+if [ -z "$audited" ]; then
+    gate_fail "${GATES[6]}" "$AUDIT records no audited commit"
+elif [ "$decision" != GO ]; then
+    gate_fail "${GATES[6]}" "$AUDIT records ${decision:-no decision}, not GO"
+elif ! git cat-file -e "$audited^{commit}" 2>/dev/null; then
+    gate_fail "${GATES[6]}" "the audited commit $audited is not in this checkout"
+elif ! git merge-base --is-ancestor "$audited" HEAD; then
+    gate_fail "${GATES[6]}" \
+        "the audited commit $audited is not an ancestor of $head_short"
+else
+    gate_pass "${GATES[6]}"
+fi
+
+# --- what the GO does not cover -------------------------------------------
+#
+# A tool cannot re-check a human judgement. It can bound it: this is every
+# tracked file the audit did not read, and it is the whole of the difference.
+
+if [ -n "$audited" ] && git merge-base --is-ancestor "$audited" HEAD 2>/dev/null; then
+    since_commits=$(git rev-list --count "$audited..HEAD")
+    since_files=$(git diff --name-only "$audited" HEAD)
+    printf '\n%swhat the GO decision does not cover%s\n' "$BOLD" "$RESET"
+    if [ "$since_commits" = 0 ]; then
+        printf '  nothing; the audit read this commit\n'
+    else
+        printf '  %s commit(s) and %s tracked file(s) since %s:\n' \
+            "$since_commits" "$(printf '%s' "$since_files" | grep -c .)" \
+            "$(git rev-parse --short "$audited")"
+        printf '%s\n' "$since_files" | sed 's/^/    /'
+        printf '  %sre-read these before publication; the gate cannot judge them%s\n' \
+            "$DIM" "$RESET"
+    fi
+fi
+
+# --- verdict ---------------------------------------------------------------
+
+printf '\n%s== verdict ==%s\n' "$BOLD" "$RESET"
+if [ "$FAILED" = 0 ] && [ "$SKIPPED" = 0 ]; then
+    printf '%sGO%s for %s\n' "$GREEN" "$RESET" "$head_commit"
+    printf 'Publication remains a human decision. %s holds the order.\n' "$AUDIT"
+    exit "$EXIT_GO"
+fi
+printf '%sNO-GO%s for %s  %s(%d failed, %d not run)%s\n' \
+    "$RED" "$RESET" "$head_commit" "$DIM" "$FAILED" "$SKIPPED" "$RESET"
+exit "$EXIT_NOGO"
