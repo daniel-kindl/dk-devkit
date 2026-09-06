@@ -4,7 +4,7 @@ Reusable development tools, agent workflows, environment definitions, and automa
 
 This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-> The toolkit architecture is in transition. Current commands below exist now. Modular component installation, interactive selection, and named profiles exist as `./install.sh`; broader platform adapters are roadmap work tracked in #8 and #24, and this README does not present them as already implemented.
+> The toolkit architecture is in transition. Current commands below exist now. Modular component installation, interactive selection, named profiles, and the platform capability layer exist as `./install.sh`. Bazzite is the only platform with verification evidence; the other adapters carry the support tier the evidence allows, and this README does not present them as verified. Remaining roadmap work is tracked in #8 and #24.
 
 ## Current tools
 
@@ -15,6 +15,7 @@ Installs reusable components. It resolves the dependency and capability closure 
 ```bash
 ./install.sh                      # pick the components on a terminal
 ./install.sh --list
+./install.sh --doctor             # what this machine is, and what it can install
 ./install.sh --dry-run --components web-dev
 ./install.sh --components agentbox
 ./install.sh --profile developer
@@ -23,6 +24,8 @@ Installs reusable components. It resolves the dependency and capability closure 
 A component declares its dependencies, the platform capabilities its installation needs, and where its public configuration ends and machine-local state begins. Read [docs/components.md](docs/components.md).
 
 With no selection, and only on a terminal, it opens a component picker. `--profile` selects a tracked component set: `minimal`, `developer`, `agent-dev` or `daniel`. An automated run that names nothing gets a usage error instead of a prompt.
+
+A component asks for capabilities, never for a distribution. A platform adapter says how this machine supplies a capability, and what a human runs to obtain a missing one. `./install.sh --doctor` reports all of it and changes nothing. Read [docs/platforms.md](docs/platforms.md).
 
 ### `devbox`
 
@@ -121,15 +124,18 @@ Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/w
 
 ## Platform support
 
-| Platform | Status |
-| --- | --- |
-| Bazzite/Fedora | Primary current implementation and verification target |
-| Debian/Ubuntu | Planned capability adapter |
-| Arch Linux | Planned after the capability abstraction is proven |
-| macOS | Future, component by component where requirements can be met |
-| Windows | WSL2 preferred before native support |
+Every platform below has an adapter in `manifests/platforms.json`. The tier states the verification evidence, not the intent.
 
-A future adapter does not imply that every component will work everywhere. In particular, `agentbox` requires security/runtime properties that a platform must prove before it can be considered supported.
+| Platform | Tier | Status |
+| --- | --- | --- |
+| Bazzite | `verified` | Primary implementation and verification target |
+| Fedora | `supported` | Same family, not verified on this machine |
+| Debian/Ubuntu | `experimental` | Adapter exists; the next family that must prove the abstraction |
+| Arch Linux | `experimental` | Adapter exists; follows Debian |
+| macOS | `unsupported` | Adapter exists; no component is verified there |
+| Windows | none | WSL2 preferred before native support; the report says when it runs under WSL |
+
+An adapter does not imply that every component works everywhere. `./install.sh --doctor` reports which components this machine can install, and a component the machine cannot supply is blocked before anything is installed. In particular, `agentbox` requires security/runtime properties that a platform must prove before it can be considered supported.
 
 ## Current setup
 
@@ -190,7 +196,7 @@ See [docs/secrets.md](docs/secrets.md). Public defaults and local/private state 
 | `distrobox/` | Current development-environment definitions |
 | `containers/` | Agent control-plane and sandbox images |
 | `config/` | Public non-secret configuration and agent/runtime policy |
-| `manifests/` | Package, toolchain, skill, and runtime version declarations |
+| `manifests/` | Package, toolchain, skill, capability, platform, and runtime version declarations |
 | `verify/` | Deterministic verification modules and probes |
 | `docs/` | Architecture, recovery, security, and tool documentation |
 

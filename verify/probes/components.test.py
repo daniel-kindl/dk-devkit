@@ -53,12 +53,16 @@ def catalogue(*documents):
     return toolkit.load_components(directory)
 
 
-def host(commands=(), executables=(), system="Linux", in_container=False):
-    return toolkit.Platform(
+def host(commands=(), executables=(), system="Linux", in_container=False,
+         os_release=None, wsl=False):
+    return toolkit.Host(
         which=lambda name: f"/usr/bin/{name}" if name in commands else None,
         is_executable=lambda path: path in executables,
         system=system,
+        machine="x86_64",
         in_container=in_container,
+        os_release=os_release or {},
+        wsl=wsl,
     )
 
 

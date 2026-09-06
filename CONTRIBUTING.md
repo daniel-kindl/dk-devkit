@@ -31,7 +31,7 @@ Read `SECURITY.md` and the relevant architecture documentation before modifying 
 
 Do not claim support from code inspection alone. A platform/component combination should have reproducible verification evidence before documentation calls it supported.
 
-Bazzite/Fedora is currently the primary verified implementation. Other platforms are being added through capability adapters rather than by duplicating the complete setup.
+Bazzite is currently the primary verified implementation. Other platforms are added through capability adapters in `manifests/platforms.json` rather than by duplicating the complete setup. Each adapter carries a support tier that states its evidence, and raising a tier to `verified` needs a passing `./verify.sh` on that platform. `docs/platforms.md` explains the layer, and `./install.sh --doctor` reports what a machine can install.
 
 ## Testing
 

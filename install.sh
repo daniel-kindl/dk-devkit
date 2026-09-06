@@ -4,6 +4,7 @@
 #
 #   ./install.sh                              pick the components on a terminal
 #   ./install.sh --list                       show every component
+#   ./install.sh --doctor                     report the platform and its capabilities
 #   ./install.sh --dry-run --components X     show the resolved plan only
 #   ./install.sh --components devbox,web-dev  install those, and what they need
 #   ./install.sh --profile developer          a tracked component set
@@ -15,6 +16,10 @@
 #
 # With no selection it opens the picker, but only on a terminal. A run that
 # cannot answer a question gets a usage error instead of a prompt.
+#
+# A component asks for a capability, never for a distribution. The platform
+# adapters in manifests/platforms.json say how this machine supplies one, and
+# what a human runs to obtain a missing one.
 #
 # It collects no credential. A component that needs authentication reports it
 # as a manual step instead.

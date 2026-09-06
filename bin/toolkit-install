@@ -28,10 +28,12 @@ PROGRAM = "install.sh"
 ROOT = Path(__file__).resolve().parent.parent
 COMPONENT_DIR = ROOT / "components"
 CAPABILITY_MANIFEST = ROOT / "manifests" / "capabilities.json"
+PLATFORM_MANIFEST = ROOT / "manifests" / "platforms.json"
 
 KINDS = ("tool", "runtime", "environment", "extras", "profile")
 PROFILE = "profile"
-PROBE_KINDS = ("command", "executable", "uname", "not-container", "any")
+PROBE_KINDS = ("command", "executable", "uname", "not-container", "any", "platform")
+SUPPORT = ("verified", "supported", "experimental", "unsupported")
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -65,6 +67,26 @@ class Capability:
 
 
 @dataclasses.dataclass(frozen=True)
+class Adapter:
+    """One platform. It says what the platform is, and how to get a capability.
+
+    An adapter never installs anything. It translates a capability the toolkit
+    asks for into the probe that finds it on this platform, and into the one
+    step a human runs to obtain it. Platform-specific knowledge lives here and
+    nowhere else.
+    """
+
+    id: str
+    name: str
+    family: str
+    support: str
+    note: str
+    detect: Mapping[str, object]
+    provides: Mapping[str, Mapping[str, object]]
+    hints: Mapping[str, str]
+
+
+@dataclasses.dataclass(frozen=True)
 class Component:
     id: str
     name: str
@@ -93,6 +115,7 @@ class Step:
 @dataclasses.dataclass(frozen=True)
 class Plan:
     steps: tuple[Step, ...]
+    hints: tuple[str, ...] = ()
 
     def of(self, status: str) -> tuple[Step, ...]:
         return tuple(step for step in self.steps if step.status == status)
@@ -245,12 +268,19 @@ def load_capabilities(path: Path) -> dict[str, Capability]:
     return capabilities
 
 
-def _check_probe(probe: object, where: str) -> None:
+def _check_probe(probe: object, where: str, allow_platform: bool = True) -> None:
     if not isinstance(probe, dict):
         raise ConfigError(f"{where} must be an object")
     kind = probe.get("kind")
     if kind not in PROBE_KINDS:
         raise ConfigError(f"{where}.kind must be one of {', '.join(PROBE_KINDS)}")
+    if kind == "platform":
+        # "platform" says that only an adapter can supply this capability. An
+        # adapter must therefore answer with a real probe, and a "platform"
+        # probe inside "any" would ask a question no probe can answer.
+        if not allow_platform:
+            raise ConfigError(f"{where}.kind must not be platform here")
+        return
     if kind == "not-container":
         return
     value = probe.get("value")
@@ -258,10 +288,115 @@ def _check_probe(probe: object, where: str) -> None:
         if not isinstance(value, list) or not value:
             raise ConfigError(f"{where}.value must be a non-empty array of probes")
         for index, nested in enumerate(value):
-            _check_probe(nested, f"{where}.value[{index}]")
+            _check_probe(nested, f"{where}.value[{index}]", allow_platform=False)
         return
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{where}.value must be a non-empty string")
+
+
+DETECT_KINDS = ("os-release", "uname")
+
+
+def load_adapters(path: Path) -> tuple[Adapter, ...]:
+    """Load the platform adapters in manifest order. The first match wins."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"invalid JSON in {path}: {exc}") from exc
+    if not isinstance(document, dict) or document.get("version") != 1:
+        raise ConfigError("platform manifest version must be 1")
+    raw = document.get("platforms")
+    if not isinstance(raw, list) or not raw:
+        raise ConfigError("platform manifest platforms must be a non-empty array")
+
+    adapters: list[Adapter] = []
+    seen: set[str] = set()
+    for index, value in enumerate(raw):
+        where = f"platforms[{index}]"
+        if not isinstance(value, dict):
+            raise ConfigError(f"{where} must be an object")
+        for field in ("id", "name", "family", "note"):
+            if not isinstance(value.get(field), str) or not value[field].strip():
+                raise ConfigError(f"{where}.{field} must be a non-empty string")
+        support = value.get("support")
+        if support not in SUPPORT:
+            raise ConfigError(f"{where}.support must be one of {', '.join(SUPPORT)}")
+        if value["id"] in seen:
+            raise ConfigError(f"duplicate platform id: {value['id']}")
+        seen.add(value["id"])
+
+        _check_detect(value.get("detect"), f"{where}.detect")
+
+        provides = value.get("provides", {})
+        if not isinstance(provides, dict):
+            raise ConfigError(f"{where}.provides must be an object")
+        for capability, probe in provides.items():
+            _check_probe(probe, f"{where}.provides.{capability}", allow_platform=False)
+
+        hints = value.get("hints", {})
+        if not isinstance(hints, dict) or not all(
+            isinstance(text, str) and text.strip() for text in hints.values()
+        ):
+            raise ConfigError(f"{where}.hints must map a capability to one sentence")
+
+        adapters.append(
+            Adapter(
+                id=value["id"],
+                name=value["name"],
+                family=value["family"],
+                support=support,
+                note=value["note"],
+                detect=value["detect"],
+                provides=provides,
+                hints=hints,
+            )
+        )
+    return tuple(adapters)
+
+
+def _check_detect(detect: object, where: str) -> None:
+    if not isinstance(detect, dict):
+        raise ConfigError(f"{where} must be an object")
+    kind = detect.get("kind")
+    if kind not in DETECT_KINDS:
+        raise ConfigError(f"{where}.kind must be one of {', '.join(DETECT_KINDS)}")
+    if kind == "uname":
+        if not isinstance(detect.get("value"), str) or not detect["value"]:
+            raise ConfigError(f"{where}.value must be a non-empty string")
+        return
+    ids = _string_list(detect.get("ids"), f"{where}.ids")
+    like = _string_list(detect.get("id_like"), f"{where}.id_like")
+    if not ids and not like:
+        raise ConfigError(f"{where} must name at least one os-release id")
+
+
+def check_adapter_references(
+    adapters: Sequence[Adapter], capabilities: Mapping[str, Capability]
+) -> None:
+    """An adapter may only answer for a capability the toolkit declares."""
+    for adapter in adapters:
+        for capability in tuple(adapter.provides) + tuple(adapter.hints):
+            if capability not in capabilities:
+                raise ConfigError(
+                    f"platform {adapter.id} names capability {capability!r}, "
+                    "which manifests/capabilities.json does not define"
+                )
+
+
+def check_platform_capabilities(
+    capabilities: Mapping[str, Capability], adapters: Sequence[Adapter]
+) -> None:
+    """A platform-only capability is useless when no adapter can supply it."""
+    for identifier, capability in capabilities.items():
+        if capability.probe.get("kind") != "platform":
+            continue
+        if not any(identifier in adapter.provides for adapter in adapters):
+            raise ConfigError(
+                f"capability {identifier!r} is platform-only, "
+                "but no platform in manifests/platforms.json provides it"
+            )
 
 
 def check_capability_references(
@@ -280,25 +415,54 @@ def check_capability_references(
 
 
 @dataclasses.dataclass(frozen=True)
-class Platform:
+class Host:
     """Everything the probes are allowed to look at, so tests can supply it."""
 
     which: Callable[[str], str | None]
     is_executable: Callable[[str], bool]
     system: str
-    in_container: bool
+    machine: str = ""
+    in_container: bool = False
+    os_release: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    wsl: bool = False
 
     @classmethod
-    def detect(cls) -> "Platform":
+    def detect(cls) -> "Host":
         return cls(
             which=lambda name: shutil.which(name),
             is_executable=lambda path: os.access(path, os.X_OK),
             system=platform.system(),
+            machine=platform.machine(),
             in_container=Path("/run/.containerenv").exists() or Path("/.dockerenv").exists(),
+            os_release=read_os_release(),
+            wsl="microsoft" in _read_text(Path("/proc/version")).lower(),
         )
 
 
-def probe_matches(probe: Mapping[str, object], host: Platform) -> bool:
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
+    """Parse the os-release fields the adapters match on.
+
+    A machine without the file is not an error. It is a platform no adapter
+    recognises, and the report says so.
+    """
+    fields: dict[str, str] = {}
+    for line in _read_text(path).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        fields[key.strip()] = value.strip().strip('"').strip("'")
+    return fields
+
+
+def probe_matches(probe: Mapping[str, object], host: Host) -> bool:
     kind = probe["kind"]
     if kind == "command":
         return host.which(str(probe["value"])) is not None
@@ -310,17 +474,61 @@ def probe_matches(probe: Mapping[str, object], host: Platform) -> bool:
         return not host.in_container
     if kind == "any":
         return any(probe_matches(nested, host) for nested in probe["value"])  # type: ignore[union-attr]
+    if kind == "platform":
+        # Only an adapter answers this one, and detect_capabilities has already
+        # replaced it with the adapter probe when the adapter provides it.
+        return False
     raise ConfigError(f"unknown probe kind: {kind!r}")
 
 
+def adapter_matches(detect: Mapping[str, object], host: Host) -> bool:
+    kind = detect["kind"]
+    if kind == "uname":
+        return host.system == detect["value"]
+    if kind == "os-release":
+        identifier = host.os_release.get("ID", "")
+        if identifier and identifier in tuple(detect.get("ids", ())):  # type: ignore[arg-type]
+            return True
+        like = set(host.os_release.get("ID_LIKE", "").split())
+        return bool(like & set(detect.get("id_like", ())))  # type: ignore[arg-type]
+    raise ConfigError(f"unknown platform detect kind: {kind!r}")
+
+
+def detect_platform(adapters: Sequence[Adapter], host: Host) -> Adapter | None:
+    """The first adapter that matches. Manifest order decides a tie.
+
+    A derivative is listed before the family it derives from, so Bazzite wins
+    over Fedora even though Bazzite also reports ID_LIKE=fedora.
+    """
+    for adapter in adapters:
+        if adapter_matches(adapter.detect, host):
+            return adapter
+    return None
+
+
 def detect_capabilities(
-    capabilities: Mapping[str, Capability], host: Platform
+    capabilities: Mapping[str, Capability], host: Host, adapter: Adapter | None = None
 ) -> frozenset[str]:
+    """Detect what this machine has. The adapter answers first.
+
+    A capability the adapter provides is probed the platform's way. Everything
+    else is probed the generic way. A platform-only capability that the adapter
+    does not provide is absent, and the plan reports it as a missing capability
+    rather than failing during installation.
+    """
+    provided = adapter.provides if adapter else {}
     return frozenset(
         identifier
         for identifier, capability in capabilities.items()
-        if probe_matches(capability.probe, host)
+        if probe_matches(provided.get(identifier, capability.probe), host)
     )
+
+
+def capability_hint(adapter: Adapter | None, capability: str) -> str:
+    """The one step that obtains a capability on this platform, or nothing."""
+    if adapter is None:
+        return ""
+    return adapter.hints.get(capability, "")
 
 
 # -------------------------------------------------------------- resolution --
@@ -396,10 +604,12 @@ def build_plan(
     root: Path,
     force: bool = False,
     doctor: Callable[[Component, Path], bool] | None = None,
+    adapter: Adapter | None = None,
 ) -> Plan:
     ask = doctor or _doctor_says_ready
     steps: list[Step] = []
     blocked: set[str] = set()
+    hints: list[str] = []
 
     for name in order:
         component = components[name]
@@ -411,6 +621,10 @@ def build_plan(
             blocked.add(name)
             steps.append(Step(component, BLOCKED, reasons[name],
                               "missing capability: " + ", ".join(missing)))
+            for capability in missing:
+                hint = capability_hint(adapter, capability)
+                if hint and hint not in hints:
+                    hints.append(hint)
             continue
         if upstream:
             blocked.add(name)
@@ -430,7 +644,7 @@ def build_plan(
                               "no installer; the platform must provide it"))
             continue
         steps.append(Step(component, INSTALL, reasons[name]))
-    return Plan(tuple(steps))
+    return Plan(tuple(steps), tuple(hints))
 
 
 def render_plan(plan: Plan) -> str:
@@ -453,6 +667,12 @@ def render_plan(plan: Plan) -> str:
     block(READY, plan.of(READY))
     block(COMPOSITION, plan.of(COMPOSITION))
     block(BLOCKED, plan.blocked)
+    if plan.hints:
+        # A blocked component says what is missing. The platform adapter says
+        # how to get it here, so the message is one step, not a search.
+        lines.append("ON THIS PLATFORM")
+        for hint in plan.hints:
+            lines.append(f"  {hint}")
     if plan.manual:
         lines.append("MANUAL ACTION")
         for item in plan.manual:
@@ -480,6 +700,75 @@ def render_catalogue(
                 lines.append(f"    {' ' * width}  missing capability: {', '.join(missing)}")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+def render_report(
+    components: Mapping[str, Component],
+    capabilities: Mapping[str, Capability],
+    host: Host,
+    adapter: Adapter | None,
+    present: frozenset[str],
+) -> str:
+    """The platform and capability report, for a machine that must be diagnosed.
+
+    It changes nothing. It says what this machine is, what the toolkit found,
+    and which component the machine cannot install yet.
+    """
+    lines = ["Platform"]
+    lines.append(f"  {host.system} {host.machine}".rstrip())
+    if adapter is None:
+        lines.append("  unknown platform; no adapter matches this machine")
+        lines.append("  the generic capability probes still apply")
+    else:
+        lines.append(f"  {adapter.name} ({adapter.family} family), {adapter.support}")
+        lines.append(f"  {adapter.note}")
+    if host.wsl:
+        lines.append("  running under WSL; WSL2 is not a verified platform")
+    if host.in_container:
+        lines.append("  running inside a container, not on the host")
+
+    width = max((len(name) for name in capabilities), default=0)
+    lines.append("")
+    lines.append("Capabilities")
+    for identifier, capability in sorted(capabilities.items()):
+        mark = "ok" if identifier in present else "--"
+        lines.append(f"  {mark}  {identifier.ljust(width)}  {capability.summary}")
+        if identifier in present:
+            continue
+        hint = capability_hint(adapter, identifier)
+        if hint:
+            lines.append(f"      {' ' * width}  {hint}")
+
+    width = max((len(name) for name in components), default=0)
+    lines.append("")
+    lines.append("Components")
+    for identifier, reason in sorted(unsupported(components, present).items()):
+        mark = "--" if reason else "ok"
+        lines.append(f"  {mark}  {identifier.ljust(width)}  {reason}".rstrip())
+    return "\n".join(lines)
+
+
+def unsupported(
+    components: Mapping[str, Component], present: frozenset[str]
+) -> dict[str, str]:
+    """Say, for every component, why this machine cannot install it yet.
+
+    A component is unsupported when the machine lacks a capability it declares,
+    or when something it requires is unsupported. An empty reason means the
+    machine can install it. One unsupported component never hides another.
+    """
+    reasons: dict[str, str] = {}
+    for identifier in _topological_order(components, components.keys()):
+        component = components[identifier]
+        missing = [c for c in component.capabilities if c not in present]
+        if missing:
+            reasons[identifier] = "missing capability: " + ", ".join(missing)
+            continue
+        upstream = [dep for dep in component.requires if reasons.get(dep)]
+        reasons[identifier] = (
+            "blocked by: " + ", ".join(upstream) if upstream else ""
+        )
+    return reasons
 
 
 # --------------------------------------------------------------- profiles --
@@ -703,6 +992,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="comma-separated profiles; each expands to a component set")
     parser.add_argument("--list", action="store_true",
                         help="list the components and change nothing")
+    parser.add_argument("--doctor", action="store_true",
+                        help="report the platform and its capabilities, and change nothing")
+    parser.add_argument("--hint", default="",
+                        help="print how to obtain one capability on this platform")
     parser.add_argument("--dry-run", action="store_true",
                         help="show the resolved plan and change nothing")
     parser.add_argument("--force", action="store_true",
@@ -726,12 +1019,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         components = load_components(COMPONENT_DIR)
         capabilities = load_capabilities(CAPABILITY_MANIFEST)
+        adapters = load_adapters(PLATFORM_MANIFEST)
         check_capability_references(components, capabilities)
+        check_adapter_references(adapters, capabilities)
+        check_platform_capabilities(capabilities, adapters)
     except ConfigError as exc:
         print(f"{PROGRAM}: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    present = detect_capabilities(capabilities, Platform.detect())
+    host = Host.detect()
+    adapter = detect_platform(adapters, host)
+    present = detect_capabilities(capabilities, host, adapter)
+
+    if args.hint:
+        # The shell half of the toolkit asks the same question here, so that
+        # one platform fact never has two copies.
+        if args.hint not in capabilities:
+            print(f"{PROGRAM}: unknown capability: {args.hint}", file=sys.stderr)
+            return EXIT_USAGE
+        hint = capability_hint(adapter, args.hint)
+        if not hint:
+            return EXIT_CAPABILITY
+        print(hint)
+        return EXIT_OK
+
+    if args.doctor:
+        print(render_report(components, capabilities, host, adapter, present))
+        return EXIT_OK
 
     if args.list:
         print(render_catalogue(components, present))
@@ -770,7 +1084,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{PROGRAM}: {exc}", file=sys.stderr)
         return EXIT_RESOLVE
 
-    plan = build_plan(components, reasons, order, present, ROOT, force=args.force)
+    plan = build_plan(components, reasons, order, present, ROOT,
+                      force=args.force, adapter=adapter)
     print(f"{PROGRAM}: {ROOT}")
     print(render_plan(plan))
 

@@ -11,6 +11,8 @@ REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../.." 
 . "$REPO_ROOT/bootstrap/lib/common.sh"
 # shellcheck source=../../bootstrap/lib/component.sh
 . "$REPO_ROOT/bootstrap/lib/component.sh"
+# shellcheck source=../../bootstrap/lib/platform.sh
+. "$REPO_ROOT/bootstrap/lib/platform.sh"
 # shellcheck source=../../bootstrap/lib/host-packages.sh
 . "$REPO_ROOT/bootstrap/lib/host-packages.sh"
 

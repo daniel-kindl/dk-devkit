@@ -1,5 +1,6 @@
 # Host package installation from the tracked manifests.
-# Source this file; do not execute it. It needs bootstrap/lib/common.sh.
+# Source this file; do not execute it. It needs bootstrap/lib/common.sh and
+# bootstrap/lib/platform.sh.
 #
 # Homebrew supplies the host CLI tools and Flatpak supplies the desktop
 # applications. Both are personal-workstation package sets, so each one is a
@@ -19,8 +20,12 @@ install_homebrew_packages() {
         [ -n "$candidate" ] && [ -x "$candidate" ] && { brew=$candidate; break; }
     done
     if [ -z "$brew" ]; then
+        # The platform adapter owns the step, so this function stays the same
+        # on every platform that can run Homebrew.
+        local hint
+        hint=$(platform_hint "$repo_root" homebrew || true)
         warn 'Homebrew is not installed'
-        manual 'Install Homebrew on Bazzite: run "ujust install-brew", then re-run the installer'
+        manual "${hint:-Install Homebrew, then run the installer again}"
         return 0
     fi
 

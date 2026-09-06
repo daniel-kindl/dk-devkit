@@ -72,7 +72,8 @@ components/devbox/install.sh --dry-run
 
 Component-specific behaviour belongs in the component directory.
 Platform-specific behaviour belongs behind the capability layer, not in the
-component. Distribution adapters are issue #13.
+component. A distribution adapter says how one platform supplies a capability;
+read [platforms.md](platforms.md).
 
 ### `install`, `doctor` and `verify`
 
@@ -114,10 +115,16 @@ distribution.
 | `uname` | The kernel name matches. |
 | `not-container` | The installer runs on the host, not in a container. |
 | `any` | Any nested probe is true. |
+| `platform` | Only the platform adapter can answer. |
 
 A capability a component needs but the machine does not have blocks that
 component, and everything that depends on it. The run then stops and names
 them, rather than installing half a graph.
+
+The platform adapter answers first. It can replace the generic probe with the
+one that finds the capability on this platform, and it supplies the step a
+human runs to obtain it. `manifests/platforms.json` holds every adapter, and
+[platforms.md](platforms.md) explains the layer.
 
 ## Resolution
 
@@ -144,6 +151,8 @@ ALREADY READY
   devbox
 BLOCKED
   desktop-apps    missing capability: flatpak
+ON THIS PLATFORM
+  Bazzite ships Flatpak. Add the Flathub remote: flatpak remote-add ...
 MANUAL ACTION
   Authenticate GitHub on the host: gh auth login --git-protocol ssh
 ```
@@ -153,6 +162,8 @@ MANUAL ACTION
 | Option | Effect |
 | --- | --- |
 | `--list` | Print the catalogue and change nothing. |
+| `--doctor` | Report the platform, its capabilities and the supported components. |
+| `--hint cap` | Print how to obtain one capability on this platform. |
 | `--components a,b` | Install these components and what they declare. |
 | `--profile name` | Install what a tracked profile composes. |
 | `--dry-run` | Print the resolved plan and change nothing. |
@@ -247,7 +258,10 @@ installable on its own.
 1. `mkdir components/<id>` and write `component.json`.
 2. Put the operations in the same directory, or point at a shared library
    function in `bootstrap/lib/` when the host bootstrap runs the same step.
-3. Declare the capabilities the installation needs, not the distribution.
+3. Declare the capabilities the installation needs, not the distribution. When
+   the contract cannot express what the component needs, add the capability to
+   `manifests/capabilities.json` first, and let an adapter answer for it.
 4. Add the component to a profile only where that profile genuinely composes
    it. A reusable component must not depend on a profile.
 5. `./verify.sh --only 15` checks the contract, the resolver and the tests.
+   `./verify.sh --only 16` checks the platform adapters.

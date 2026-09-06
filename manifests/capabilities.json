@@ -27,6 +27,11 @@
       "probe": { "kind": "command", "value": "python3" }
     },
     {
+      "id": "package-manager",
+      "summary": "a system package manager the platform adapter can name",
+      "probe": { "kind": "platform" }
+    },
+    {
       "id": "container-runtime",
       "summary": "an OCI container runtime",
       "probe": {

@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "platforms": [
+    {
+      "id": "bazzite",
+      "name": "Bazzite",
+      "family": "fedora",
+      "support": "verified",
+      "note": "The primary platform. Every component is verified here.",
+      "detect": { "kind": "os-release", "ids": ["bazzite"] },
+      "provides": {
+        "package-manager": { "kind": "command", "value": "rpm-ostree" }
+      },
+      "hints": {
+        "homebrew": "Install Homebrew on Bazzite: run \"ujust install-brew\", then run the installer again.",
+        "distrobox": "Bazzite ships Distrobox. If it is absent, layer it: rpm-ostree install distrobox.",
+        "container-runtime": "Bazzite ships Podman. If it is absent, layer it: rpm-ostree install podman.",
+        "flatpak": "Bazzite ships Flatpak. Add the Flathub remote: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo.",
+        "gh": "Install the GitHub CLI with Homebrew: brew install gh.",
+        "git": "Bazzite ships git.",
+        "python3": "Bazzite ships Python 3."
+      }
+    },
+    {
+      "id": "fedora",
+      "name": "Fedora",
+      "family": "fedora",
+      "support": "supported",
+      "note": "The same family as the primary platform, but not verified on this machine.",
+      "detect": {
+        "kind": "os-release",
+        "ids": ["fedora", "silverblue", "kinoite"],
+        "id_like": ["fedora"]
+      },
+      "provides": {
+        "package-manager": { "kind": "command", "value": "dnf" }
+      },
+      "hints": {
+        "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
+        "distrobox": "sudo dnf install distrobox",
+        "container-runtime": "sudo dnf install podman",
+        "flatpak": "sudo dnf install flatpak",
+        "gh": "sudo dnf install gh",
+        "git": "sudo dnf install git",
+        "python3": "sudo dnf install python3"
+      }
+    },
+    {
+      "id": "debian",
+      "name": "Debian or Ubuntu",
+      "family": "debian",
+      "support": "experimental",
+      "note": "The next family that must prove the capability abstraction. No component is verified here yet.",
+      "detect": {
+        "kind": "os-release",
+        "ids": ["debian", "ubuntu"],
+        "id_like": ["debian", "ubuntu"]
+      },
+      "provides": {
+        "package-manager": { "kind": "command", "value": "apt-get" }
+      },
+      "hints": {
+        "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
+        "distrobox": "sudo apt-get install distrobox",
+        "container-runtime": "sudo apt-get install podman",
+        "flatpak": "sudo apt-get install flatpak",
+        "gh": "Follow https://github.com/cli/cli/blob/trunk/docs/install_linux.md, then: sudo apt-get install gh",
+        "git": "sudo apt-get install git",
+        "python3": "sudo apt-get install python3"
+      }
+    },
+    {
+      "id": "arch",
+      "name": "Arch Linux",
+      "family": "arch",
+      "support": "experimental",
+      "note": "Follows Debian once the abstraction is proven. No component is verified here yet.",
+      "detect": {
+        "kind": "os-release",
+        "ids": ["arch", "endeavouros", "manjaro"],
+        "id_like": ["arch"]
+      },
+      "provides": {
+        "package-manager": { "kind": "command", "value": "pacman" }
+      },
+      "hints": {
+        "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
+        "distrobox": "sudo pacman -S distrobox",
+        "container-runtime": "sudo pacman -S podman",
+        "flatpak": "sudo pacman -S flatpak",
+        "gh": "sudo pacman -S github-cli",
+        "git": "sudo pacman -S git",
+        "python3": "sudo pacman -S python"
+      }
+    },
+    {
+      "id": "macos",
+      "name": "macOS",
+      "family": "darwin",
+      "support": "unsupported",
+      "note": "No component is verified here. A component that needs Linux reports the missing capability instead of failing late.",
+      "detect": { "kind": "uname", "value": "Darwin" },
+      "provides": {
+        "package-manager": { "kind": "command", "value": "brew" },
+        "homebrew": {
+          "kind": "any",
+          "value": [
+            { "kind": "command", "value": "brew" },
+            { "kind": "executable", "value": "/opt/homebrew/bin/brew" },
+            { "kind": "executable", "value": "/usr/local/bin/brew" }
+          ]
+        }
+      },
+      "hints": {
+        "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
+        "gh": "brew install gh",
+        "git": "brew install git",
+        "python3": "brew install python",
+        "linux": "This component needs a Linux kernel. Run it in a Linux virtual machine.",
+        "distrobox": "Distrobox needs a Linux kernel. Run it in a Linux virtual machine."
+      }
+    }
+  ]
+}
