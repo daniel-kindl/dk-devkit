@@ -188,7 +188,9 @@ The repository does not intentionally track:
 - generated run logs;
 - private overrides.
 
-See [docs/secrets.md](docs/secrets.md). Public defaults and local/private state are being formalized further under #14.
+See [docs/secrets.md](docs/secrets.md) for the policy, and `./install.sh --state` for the public and local boundary of each component.
+
+[docs/public-release-audit.md](docs/public-release-audit.md) is the public-readiness audit: what a reader of the public repository learns, what was classified as intentionally public, and the steps publication still owes.
 
 ## Repository layout
 
