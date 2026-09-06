@@ -10,11 +10,16 @@ to do, what each candidate costs, and what would reopen the question.
 
 | | |
 | --- | --- |
-| Decided repository name | `daniel-kindl/workstation` |
-| Decision | **Keep the current name.** Do not rename before publication. |
+| Decided repository name | `daniel-kindl/dk-devkit` |
+| Decision | **Renamed from `workstation` to `dk-devkit`.** |
 | Decided on | 2026-09-06 |
 | Owns this decision | #24, with the checklist item in #17 |
 | Reopens when | one of the triggers below occurs |
+
+The first evaluation, recorded the same day, chose to keep `workstation`. The
+owner decided otherwise. The evaluation below is unchanged, because the costs
+and the candidates it describes are still the facts; only the weighing changed,
+and [the decision](#decision) records both.
 
 ## What the name has to do
 
@@ -32,12 +37,15 @@ the product, not the roadmap:
 
 The cost is small in the repository and larger on the machine.
 
-**In the tree**, three tracked lines name the repository:
+**In the tree**, six tracked references name the repository:
 
 | Reference | Where |
 | --- | --- |
 | Clone URL | `README.md`, `docs/recovery.md` |
 | Issue link | `README.md` |
+| Agent instructions heading | `AGENTS.md` |
+| Vulnerability-reporting API path | `docs/public-release-audit.md` |
+| Prose that names the repository | `bin/install-skills`, `lib/agentqueue/prompts.py` |
 
 No script resolves the checkout by its directory name. Every entry point
 derives `REPO_ROOT` from its own path, so the code does not care what the
@@ -57,7 +65,7 @@ verification run reports it.
 
 ## The candidates
 
-### Keep `workstation`
+### Keep `workstation` (the first decision)
 
 Accurate today, and honest about the evidence. Bazzite is the only platform with
 verification results, and `daniel` is the only profile that describes a complete
@@ -68,17 +76,19 @@ Against it: the name reads as a machine backup. A reader looking for
 `agentbox` or `devbox` does not search for "workstation", and the name
 undersells the part of the repository that is reusable.
 
-### Rename to `devkit` or `dk-devkit`
+### Rename to `devkit` or `dk-devkit` (the second decision, adopted)
 
 `devkit` names the product model directly. It is also generic: the term is used
 widely, it collides in search, and it says nothing about the security and
 isolation boundaries that make `agentbox` and `agentq` worth reusing.
 
-`dk-devkit` is unique but reads as a namespace prefix, not a name.
+`dk-devkit` is unique. It reads as an owner prefix, which is accurate for a
+personal toolkit and is what separates it from every other `devkit`.
 
-Against both: neither is clearly better than the description and topics field
-that #17 has to write anyway. An empty description is the reason the name is
-carrying this weight, and #17's F9 remediation removes that reason.
+Against both: neither is better than the description and topics field that #17
+has to write anyway, if discovery is the only question. The argument that
+carried is timing rather than discovery: the repository is private, so the
+rename is nearly free today and never gets cheaper.
 
 ### Split the repository
 
@@ -93,48 +103,72 @@ architecture prevents it later.
 
 ## Decision
 
-**Keep `daniel-kindl/workstation`.**
+**Rename to `daniel-kindl/dk-devkit`.** Decided by the owner on 2026-09-06.
 
-The reasoning, in order:
+The reasoning:
 
-1. **A rename does not buy discovery yet.** The repository is private. It has no
-   description and no topics, and #17 already owns writing both. Those fields
-   are where a reader learns what the repository is, and they can say
-   "portable personal development toolkit" without touching the name.
-2. **#24 says not to combine the rename with the refactor.** It sets the bar at
-   a concrete benefit. Better shelf appeal, with the description still empty,
-   is not one.
-3. **The name is not inaccurate.** The repository does converge a workstation.
-   The README states the toolkit identity in its first line, and the
-   documentation index separates the toolkit from the `daniel` profile.
-4. **The cost lands on the machine, not on GitHub.** The checkout is
-   load-bearing, and the value of renaming does not cover a converge step whose
-   failure mode is quiet.
-5. **Publication is reversible on this point.** GitHub keeps redirecting the old
-   URL after a rename, so deciding later costs no more than deciding now. The
-   reverse is not true: a rename now must be undone if it turns out wrong.
+1. **The name should name the product.** The toolkit identity is real in the
+   codebase now. `workstation` names the composition, which is one profile of
+   the components, and it is the part of the repository a reader is least
+   likely to reuse.
+2. **Before publication is the cheap moment.** The repository is still private.
+   No external clone, link or reference exists to break, so the rename costs
+   less now than at any later point.
+3. **`dk-devkit` over `devkit`.** `devkit` is generic and collides in search.
+   The `dk-` prefix makes it unambiguous, and this is one person's toolkit, so
+   an owner prefix describes it rather than overreaching.
+4. **The cost is bounded and known.** Six tracked references, listed above, plus
+   the machine step below. GitHub redirects the old URL, so nothing breaks at
+   the moment of the rename.
+
+### What was decided first, and why it changed
+
+The first evaluation chose to keep `workstation`. It weighed the rename against
+an empty description field: #17 has to write a description and topics anyway,
+and those carry the identity more directly than a name does. On that reading the
+rename bought little and cost a converge step.
+
+The owner weighed it differently, and reason 2 is the strongest argument for
+deciding now rather than later: the window in which a rename is nearly free
+closes at publication. That argument does not depend on the description field,
+so it survives the objection the first decision was built on.
+
+Both decisions are recorded because the reversal is the useful part. The cost
+analysis above did not change; the weighing did.
+
+### The machine step is not done
+
+The GitHub rename and the tracked references are complete. The checkout
+directory is still `~/projects/workstation`, and it stays load-bearing there.
+That is step 4 below, it is optional, and it is a machine operation rather than
+a repository one. Do it deliberately, with the relink in step 5.
 
 This closes the evaluation that #24 requires. It does not close the question.
 
 ## What reopens the question
 
-Reopen this decision when any of these becomes true:
+The name now matches the product, so the pressure that produced this evaluation
+is gone. Reopen the decision only when one of these becomes true:
 
-- a reusable component is published or installed **from outside** this
-  repository, so the name reaches a reader who wants no workstation;
-- more than one platform reaches the `verified` support tier, so the name's
-  "one machine" reading becomes wrong;
-- the components are split into their own repository, which makes the remaining
-  personal composition the only thing `workstation` has to name;
-- the description and topics from #17 are in place and discovery is still the
-  measured problem.
+- the components are split into their own repository, which leaves `dk-devkit`
+  naming a composition rather than a kit;
+- the repository stops being one person's toolkit, so the `dk-` prefix becomes
+  wrong;
+- the repository is public and `dk-devkit` is measured to be the discovery
+  problem, with the description and topics from #17 already in place.
+
+A rename after publication is not free. External links, clones and references
+exist by then, and only the GitHub redirect protects them.
 
 ## How to rename safely, when that happens
 
 Do these in order. Do not stop in the middle.
 
+This is the order the `workstation` to `dk-devkit` rename followed.
+
 1. Rename the repository on GitHub. The old URL redirects, so no clone breaks
-   at this point.
+   at this point. `verify.sh` module 10 starts failing here, on purpose: the
+   remote and the recorded name no longer agree.
 2. Update the tracked clone URL and the issue link. `verify.sh` module 10
    fails until the recorded name and the tracked URLs agree.
 3. Update the recorded name in this file, and record why the question reopened.

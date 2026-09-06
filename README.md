@@ -126,9 +126,9 @@ personal development toolkit
 
 Each profile contains the smaller one. The `daniel` profile composes the complete personal workstation. No profile is a dependency of a reusable tool, and `./install.sh --dry-run --profile daniel` shows what it resolves to.
 
-Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/workstation/issues/8) and [#24](https://github.com/daniel-kindl/workstation/issues/24).
+Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/dk-devkit/issues/8) and [#24](https://github.com/daniel-kindl/dk-devkit/issues/24).
 
-The repository is still called `workstation` on purpose. [docs/naming.md](docs/naming.md) records that evaluation, and what would reopen it.
+The repository was renamed from `workstation` to `dk-devkit` to name the product rather than one machine. [docs/naming.md](docs/naming.md) records that evaluation. GitHub redirects the old URL, and the checkout directory is still `~/projects/workstation` until the machine is converged again.
 
 ## Platform support
 
@@ -154,7 +154,7 @@ On Bazzite/Fedora:
 ```bash
 # Clone the repository.
 mkdir -p ~/projects
-git clone git@github.com:daniel-kindl/workstation.git ~/projects/workstation
+git clone git@github.com:daniel-kindl/dk-devkit.git ~/projects/workstation
 
 # Configure the host and create web-dev when absent.
 ~/projects/workstation/bootstrap/host.sh

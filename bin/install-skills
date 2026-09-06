@@ -9,7 +9,7 @@
 #   install-skills --dry-run       print what would change
 #   install-skills --prune         also remove store entries not in the manifest
 #
-# Skill content is never vendored into the workstation repository. Each source
+# Skill content is never vendored into this repository. Each source
 # repository is cached under ~/.cache/workstation/skills, checked out at the ref
 # from the manifest, and only the skill directory is copied into the store.
 #
