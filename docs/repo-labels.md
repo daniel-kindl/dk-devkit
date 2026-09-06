@@ -72,6 +72,17 @@ It also includes a bounded general issue taxonomy for bugs, features, refactors,
 
 `agentq setup` detects label drift and names the command that repairs it. It never runs the sync itself. Installing `repo-labels`, enrolling a repository for `agentq`, and applying a destructive label sync are three separate actions, and the third one is a human decision.
 
+## Verification
+
+```bash
+./verify.sh --only 86
+```
+
+Module 8d compiles the command and checks that the shipped manifest is valid
+JSON. It runs the deterministic tests. It also reads this document for the
+sentence that states what a destructive sync costs. None of it reaches the
+network, and none of it needs a GitHub credential.
+
 ## Exit codes
 
 | Code | Meaning |

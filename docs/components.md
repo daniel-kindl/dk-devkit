@@ -188,6 +188,7 @@ MANUAL ACTION
 | `--environments` | Print the development environment modules as TSV. |
 | `--doctor` | Report the platform, its capabilities and the supported components. |
 | `--hint cap` | Print how to obtain one capability on this platform. |
+| `--state` | Report the public/local state boundary and change nothing. |
 | `--components a,b` | Install these components and what they declare. |
 | `--profile name` | Install what a tracked profile composes. |
 | `--dry-run` | Print the resolved plan and change nothing. |

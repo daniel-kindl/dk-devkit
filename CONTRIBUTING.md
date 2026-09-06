@@ -54,6 +54,14 @@ Technical prose follows the repository's ASD-STE100 policy in `config/agents/AGE
 
 Document current behavior as current behavior. Mark planned component installers, profiles, platform adapters, or other roadmap features as planned until they exist and are verified.
 
+A new document under `docs/` needs one more step: list it in `docs/README.md`. That file is the documentation index, and a document no index names is a document nobody finds. Every relative link must also resolve inside the tree.
+
+```bash
+./verify.sh --only 95
+```
+
+Module 10 checks both, plus the recorded repository name in `docs/naming.md` against the tree and the remote. It reads files and the local Git remote only, so a contributor on any platform can run it.
+
 ## Pull requests
 
 A useful pull request explains:

@@ -34,7 +34,14 @@ The host bootstrap creates the container when it is absent and registers the rou
 ./bootstrap/host.sh
 ```
 
-Then bootstrap the isolated container HOME:
+Or install only this environment and what it needs:
+
+```bash
+./install.sh --components python-dev
+```
+
+Either path ends in the same in-container bootstrap, which converges the
+isolated container HOME:
 
 ```bash
 devbox exec python-dev --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh

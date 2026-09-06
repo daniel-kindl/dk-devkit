@@ -368,6 +368,15 @@ The documentation half of the same item needs no gate here. Module 7 fails when
 a tracked file names the running machine's home directory, and module 10 checks
 that every documentation link resolves inside the tree.
 
+The gate itself is verified like every other command here:
+
+```bash
+./verify.sh --only 88
+```
+
+Module 8f reads the command and the local Git history, and it never runs the
+gate. A suite that runs the command that runs the suite proves nothing.
+
 A gate that did not run did not pass. `--quick` therefore reports NO-GO even
 when every gate it ran passed, which keeps a rehearsal from reading like a
 publication run. Exit status is 0 for GO, 1 for NO-GO, 2 for a usage error and

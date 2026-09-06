@@ -125,7 +125,7 @@ reports a dangling link as a failure.
 `config/agents/statusline/spec.json` is the canonical specification. Both
 clients render the same fields in the same order:
 
-    <model + effort> | <project> | <branch> | PR #<n>
+    <model + reasoning effort> | <git branch> | PR #<n>
       | ctx <n>% left (<tokens> used) | 5h <n>% left | week <n>% left
 
 Claude Code runs an arbitrary command, so `claude-render.sh` does the render. It
