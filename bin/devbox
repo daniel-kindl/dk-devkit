@@ -276,6 +276,8 @@ python-dev	pyproject.toml
 python-dev	uv.lock
 python-dev	.python-version
 rust-dev	Cargo.toml
+rust-dev	Cargo.lock
+rust-dev	rust-toolchain.toml
 web-dev	package.json
 web-dev	pnpm-workspace.yaml
 web-dev	.nvmrc

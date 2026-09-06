@@ -1,2 +1,4 @@
 # rust-dev router markers: <environment><TAB><file or glob at the repository root>
 rust-dev	Cargo.toml
+rust-dev	Cargo.lock
+rust-dev	rust-toolchain.toml

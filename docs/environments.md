@@ -19,8 +19,8 @@ module.
 | --- | --- | --- |
 | `web-dev` | supported | Node and pnpm, through nvm, plus the agent CLIs |
 | `python-dev` | supported | Python and uv |
+| `rust-dev` | supported | Rust and cargo, through rustup |
 | `dotnet-dev` | planned | .NET |
-| `rust-dev` | planned | Rust |
 | `android-dev` | planned | Android and Gradle |
 
 A **planned** module is a boundary without an installation. It declares the
@@ -28,12 +28,12 @@ container name and the router markers, and nothing else. The installer refuses
 to install one, and no profile composes one:
 
 ```console
-$ ./install.sh --components rust-dev
-install.sh: planned, so it cannot be installed yet: rust-dev
+$ ./install.sh --components dotnet-dev
+install.sh: planned, so it cannot be installed yet: dotnet-dev
 ```
 
-The router still resolves a planned environment from its markers. A Rust
-repository therefore gets `rust-dev is not configured` rather than
+The router still resolves a planned environment from its markers. A .NET
+repository therefore gets `dotnet-dev is not configured` rather than
 `no environment could be resolved`, which is the more useful answer.
 
 ## The environment block

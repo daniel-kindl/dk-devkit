@@ -1,0 +1,25 @@
+# Distribution packages required inside the rust-dev container.
+#
+# This file is the source of truth. distrobox/rust-dev.ini repeats the list
+# because the INI format cannot read a file. bootstrap/rust-dev.sh converges an
+# existing container from this manifest, and verify/26-rust-dev.sh checks that
+# the two declarations stay equal.
+
+# Repository and GitHub tooling.
+git
+jq
+gh
+curl
+
+# The linker and the native-build baseline. rustc does not link on its own: it
+# calls the system linker, so a container without a C toolchain cannot build a
+# Rust binary at all. Crates that wrap a C or C++ library need the same three,
+# and pkg-config to find that library.
+#
+# A crate-specific native library, such as the OpenSSL headers that openssl-sys
+# wants, stays a project concern. Do not add one here because one repository
+# needs it.
+gcc
+gcc-c++
+make
+pkgconf-pkg-config

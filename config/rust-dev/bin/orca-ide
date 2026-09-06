@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Hand Orca calls from rust-dev back to the host application.
+set -euo pipefail
+
+host_home=${DISTROBOX_HOST_HOME:-/home/$USER}
+exec distrobox-host-exec "$host_home/.local/bin/orca-ide" "$@"

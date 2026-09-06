@@ -26,6 +26,7 @@ policy and the trust boundaries.
 | [repo-labels.md](repo-labels.md) | `repo-labels`, the exact-sync GitHub label tool |
 | [repo-meta.md](repo-meta.md) | `repo-meta`, the exact-sync GitHub About metadata and repository settings tool |
 | [python-dev.md](python-dev.md) | The `python-dev` environment and its toolchain |
+| [rust-dev.md](rust-dev.md) | The `rust-dev` environment and its toolchain |
 
 `devbox` has no separate reference yet. The router is described in
 [architecture.md](architecture.md), and its environments in
