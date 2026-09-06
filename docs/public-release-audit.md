@@ -41,7 +41,7 @@ are about that machine, and they were read from it rather than guessed.
 | Machine paths in history | `git log --all -S` | two commits, see below |
 | Other repositories named | `git grep` against the account's repository list | only public repositories |
 | Actions history | `gh run list` | GitHub dependency-graph runs only; the repository tracks no workflow |
-| Repository metadata | `gh repo view` | description, topics and homepage are empty |
+| Repository metadata | `gh repo view` | description, topics and homepage are empty; see F9 |
 
 The two extra checks are this report and the guard in F2. Everything else
 is identical on both commits.
@@ -189,9 +189,31 @@ reports drift afterwards. The finding is closed by a tracked, reviewable and
 checkable manifest rather than by one entry in a web form. Read
 [repo-meta.md](repo-meta.md).
 
-Issues are enabled. The wiki, projects and discussions are off. The default
-branch is `main`. There are no forks. Branch protection cannot be read while the
-repository is private, and it becomes available on publication.
+**Correction, 2026-09-06.** This finding read that the wiki, the projects and
+the discussions were all off. That is wrong about the wiki. `gh repo view`
+answers `hasWikiEnabled: true`, so publication would have exposed an empty wiki
+that this report says does not exist. The wiki repository has never been
+created, so nothing was written in it and nothing is lost when it goes off.
+
+A sentence in a report cannot hold a setting. The settings are therefore tracked
+next to the About fields, where a change is reviewed and a later drift is
+caught. `manifests/github-metadata.json` declares the value below for each one,
+`repo-meta` converges the repository to it, and gate G6 fails on any drift.
+
+| Setting | Manifest | Why |
+| --- | --- | --- |
+| `default_branch` | main | Every link, clone and pull request in this repository targets it. |
+| `has_issues` | on | The issues are the roadmap, and #8 and #24 are written to be read. |
+| `has_wiki` | off | `docs/` is the documentation. A second surface would carry no review and no check. |
+| `has_projects` | off | The issue list is the only backlog, and `agentq` reads it. |
+| `has_discussions` | off | A discussion nobody watches answers a reader worse than no discussion does. |
+| `allow_merge_commit` | off | One pull request becomes one commit on `main`, so the history stays bisectable. |
+| `allow_squash_merge` | on | This is that one commit. |
+| `allow_rebase_merge` | off | It puts each intermediate agent commit on `main`. |
+| `delete_branch_on_merge` | on | A merged `agent/*` or feature branch has no reader left. |
+
+There are no forks. Branch protection cannot be read while the repository is
+private, and it becomes available on publication.
 
 ### F10 — Issues, pull requests and Actions hold nothing to redact
 
@@ -287,7 +309,7 @@ bin/publication-gate --quick  # rehearse; skips the two slow gates
 | G3 | `bin/scan-secrets` is clean on the tracked tree. |
 | G4 | `bin/scan-secrets --history` is clean on every blob. |
 | G5 | `./verify.sh` passes with no failed check. |
-| G6 | `repo-meta check` finds no drift, which is what F9 asks for. |
+| G6 | `repo-meta check` finds no drift in the About fields or the settings, which is what F9 asks for. |
 | G7 | This file records a GO, and the audited commit is an ancestor of the commit to publish. |
 
 G7 is the reason the command exists. The decision above names the commit it was

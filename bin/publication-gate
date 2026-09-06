@@ -48,7 +48,7 @@ GATES=(
     'G3  the tracked-tree secret scan is clean'
     'G4  the whole-history secret scan is clean'
     'G5  full verification passes with no failed check'
-    'G6  the repository metadata matches the manifest'
+    'G6  the repository metadata and settings match the manifest'
     'G7  the audit records a GO for an ancestor of this commit'
 )
 
@@ -160,13 +160,14 @@ else
     fi
 fi
 
-# --- G6 the repository metadata -------------------------------------------
+# --- G6 the repository metadata and settings ------------------------------
 #
-# F9 of the audit. The manifest is the tracked description, homepage and
-# topics; drift means GitHub shows something no review approved.
+# F9 of the audit. The manifest is the tracked description, homepage, topics,
+# default branch and repository settings; drift means GitHub offers a reader
+# something no review approved.
 
 if ! command -v gh >/dev/null 2>&1; then
-    gate_fail "${GATES[5]}" 'gh is not on PATH; the metadata cannot be read'
+    gate_fail "${GATES[5]}" 'gh is not on PATH; the repository cannot be read'
 elif meta_out=$(bin/repo-meta check 2>&1); then
     gate_pass "${GATES[5]}"
 else
