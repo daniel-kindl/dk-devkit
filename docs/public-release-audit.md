@@ -19,7 +19,7 @@ until the decision at the end of this file says GO.
 | Commits, all refs | 33 |
 | Blobs in history | 431 |
 | Branches | `main` only |
-| Tags | `archive/agentqueue-run-cli`, `archive/pr19head` |
+| Tags | `archive/agentqueue-run-cli`, `archive/pr19head`, both local only (see F7) |
 | Issues | 18 (13 closed, 5 open) |
 | Pull requests | 20, all merged |
 
@@ -151,6 +151,13 @@ They are development evidence with no value to a reader. #17 may delete them
 before publication or keep them. Either choice is safe. Publication does not
 depend on it.
 
+**Correction, 2026-09-06.** Both tags are local only. `git ls-remote --refs
+origin` answers with `refs/heads/main` and the pull-request refs, and no
+`refs/tags/*`. The audit read the tag list from the local checkout, where a tag
+stays until it is pushed. Neither tag becomes visible on publication, so this
+finding needs no decision from #17. Deleting them locally remains optional and
+changes nothing a reader sees.
+
 ### F8 — The security policy has no private reporting channel yet
 
 Classification: **remove the gap before publication**, and it can only be closed
@@ -175,6 +182,12 @@ Classification: **safe technical metadata**, with work for #17.
 The description, the topics and the homepage are all empty, so none of them can
 leak anything. #17 already owns writing them, and it should, because an empty
 description is the first thing a reader sees.
+
+**Answered.** `manifests/github-metadata.json` now holds the description, the
+homepage and the topics, and `repo-meta` converges the repository to it and
+reports drift afterwards. The finding is closed by a tracked, reviewable and
+checkable manifest rather than by one entry in a web form. Read
+[repo-meta.md](repo-meta.md).
 
 Issues are enabled. The wiki, projects and discussions are off. The default
 branch is `main`. There are no forks. Branch protection cannot be read while the
@@ -244,13 +257,14 @@ Every gate #15 defines is met on `ce6e834`:
 
 1. re-run `bin/scan-secrets`, `bin/scan-secrets --history` and `./verify.sh` on
    the exact commit it publishes;
-2. decide on the two archive tags in F7;
-3. write the repository description and topics from F9;
-4. change visibility to public;
-5. enable GitHub private vulnerability reporting;
-6. replace the gap paragraph in `SECURITY.md` with the real channel;
-7. record the publication commit, the date, the tested platform and the support
+2. confirm `repo-meta check` is clean, which is what F9 now asks for;
+3. change visibility to public;
+4. enable GitHub private vulnerability reporting;
+5. replace the gap paragraph in `SECURITY.md` with the real channel;
+6. record the publication commit, the date, the tested platform and the support
    limitations.
+
+F7 needs no step: its two tags are local only, as the correction there records.
 
 If any step 1 check fails on the publication commit, this GO does not carry.
 Stop and audit again.

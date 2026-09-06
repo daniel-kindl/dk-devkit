@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "description": "Portable personal development toolkit: reusable commands, agent workflows, environment definitions and policies, each installable on its own. Daniel's Bazzite workstation is one profile of the same components.",
+  "homepage": "",
+  "topics": [
+    "ai-agents",
+    "automation",
+    "bazzite",
+    "claude-code",
+    "codex",
+    "developer-tools",
+    "distrobox",
+    "dotfiles",
+    "fedora",
+    "linux",
+    "personal-toolkit",
+    "podman"
+  ]
+}

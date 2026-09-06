@@ -118,6 +118,13 @@ INNER
              "recorded: $docs_name" "in the documentation:$docs_wrong"
     fi
 
+    # The README title is the third half-forgotten place. A URL check cannot
+    # see a heading, so the title kept the old repository name after the
+    # rename until this check existed.
+    docs_title=$(sed -n '1s/^# *//p' "$REPO_ROOT/README.md")
+    check_eq 'the project README title is the decided repository name' \
+             "${docs_name#*/}" "$docs_title"
+
     # The remote is the other half. A fork carries a different owner, so it
     # cannot answer this question and is skipped instead of failed.
     docs_remote=$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null \
@@ -137,4 +144,5 @@ fi
 unset -f doc_links
 unset docs_missing docs_want docs_index docs_listed docs_unlisted \
       docs_file docs_base docs_dir docs_target docs_broken \
-      docs_naming docs_name docs_owner docs_wrong docs_ref docs_remote
+      docs_naming docs_name docs_owner docs_wrong docs_ref docs_remote \
+      docs_title
