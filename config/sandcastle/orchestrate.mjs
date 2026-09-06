@@ -8,12 +8,27 @@
 //   -> create the isolated branch and worktree inside it
 //   -> create the Podman sandbox
 //   -> prove the real repository is not reachable from the sandbox
-//   -> run the implementer agent
+//   -> run the implementer agent ONCE
 //   -> deterministic verification
 //   -> feed a failing check back to the SAME agent, up to maxFixRounds times
 //   -> optional independent reviewer
 //   -> deterministic verification
 //   -> destroy the sandbox
+//
+// The implementer runs once. One bounded invocation owns exploration,
+// planning, implementation, verification and the commit for one leaf issue.
+// Another model invocation happens only because new concrete evidence exists:
+// a check failed, or a reviewer found something. Nothing here replays the
+// original instruction as a second general attempt.
+//
+// Four limits bound a run, and each answers a different question:
+//
+//   idle timeout        the agent stopped producing output      (Sandcastle)
+//   completion timeout  the agent signalled done but ran on     (Sandcastle)
+//   wall-clock timeout  the whole run took too long             (bin/agentbox)
+//   efficiency budget   ONE invocation did too much work        (budget.mjs)
+//
+// Only the last one sees an agent that stays busy. See budget.mjs.
 //
 // The fix loop is the feedback half of the implementation phase. Sandcastle
 // keeps one sandbox across several run() calls, and commits accumulate on the
@@ -54,6 +69,7 @@ import {
   snapshotIntegrity,
   worktreeStatus,
 } from "./clone-integrity.mjs";
+import { createBudgetMeter, describeBreach } from "./budget.mjs";
 
 // --------------------------------------------------------------- utilities --
 
@@ -120,6 +136,8 @@ if (!configFile) fail("AGENTBOX_CONFIG_FILE is not set");
  *   prompt: string, reviewPrompt?: string, agent: string, model: string,
  *   reviewAgent: "codex" | "claude" | "none", reviewModel: string,
  *   maxIterations: number, maxFixRounds?: number,
+ *   budget?: {softSeconds: number, hardSeconds: number,
+ *             softToolCalls: number, hardToolCalls: number},
  *   checks: string[], sandboxImage: string,
  *   mounts: {hostPath: string, sandboxPath: string, readonly?: boolean}[],
  *   assertIsolation: boolean, timeoutSeconds: number,
@@ -139,6 +157,19 @@ try {
 cfg.agentOutput = cfg.agentOutput ?? "terminal";
 if (!AGENT_OUTPUT_MODES.includes(cfg.agentOutput)) {
   fail(`unknown agentOutput: ${cfg.agentOutput}`);
+}
+
+/** How many turns the implementer gets. One, unless the caller asks for more.
+ *
+ * One invocation is the normal path. A larger number is a deliberate manual
+ * choice, and it is said out loud, because it re-introduces a general retry
+ * dimension next to the evidence-driven repair rounds below. */
+const implementIterations = Math.max(1, cfg.maxIterations ?? 1);
+if (implementIterations > 1) {
+  log(
+    `the implementer may run ${implementIterations} iterations. The normal ` +
+      "path is one bounded invocation, and a repair round is what earns another.",
+  );
 }
 
 log(`run id           ${cfg.runId}`);
@@ -441,6 +472,7 @@ const agentLogging = (name, phase, maxIterations) => {
         }
       } else if (e.type === "toolCall") {
         tools += 1;
+        budget.countToolCall();
         process.stdout.write(`[agent:${name}] $ ${e.name} ${e.formattedArgs ?? ""}\n`);
       } else {
         return; // "raw" is the debug stream; --agent-output terminal shows it
@@ -495,6 +527,53 @@ const deadline = setTimeout(() => {
   abort.abort(new Error("agentbox wall-clock timeout"));
 }, deadlineMs);
 deadline.unref?.();
+
+// ------------------------------------------------------- the efficiency budget --
+//
+// The limit that measures work rather than silence. A soft breach is a line in
+// the run evidence and nothing else: the invocation is expensive, and it is
+// allowed to finish. A hard breach stops the agent through the SAME abort
+// controller the wall-clock limit uses, so the sandbox is still destroyed, the
+// summary is still printed, and the commits are still recorded as evidence.
+// They are not imported: bin/agentbox exits 12 and the host imports nothing.
+
+let budgetMeter;
+try {
+  budgetMeter = createBudgetMeter({
+    budget: cfg.budget,
+    onWarn: (warning) => {
+      const detail = warning.breaches.map(describeBreach).join(", ");
+      log(`efficiency warning in ${warning.phase}: ${detail}`);
+      event("budget.warning", {
+        phase: warning.phase,
+        seconds: warning.seconds,
+        tools: warning.toolCalls,
+        breaches: warning.breaches,
+      });
+    },
+    onExceed: (breach) => {
+      const detail = breach.breaches.map(describeBreach).join(", ");
+      log(`EFFICIENCY BUDGET EXCEEDED in ${breach.phase}: ${detail}`);
+      log("stopping the agent. Nothing will be imported.");
+      event("budget.exceeded", {
+        phase: breach.phase,
+        seconds: breach.seconds,
+        tools: breach.toolCalls,
+        breaches: breach.breaches,
+      });
+      abort.abort(new Error(`agentbox efficiency budget: ${detail}`));
+    },
+  });
+} catch (e) {
+  fail(`the efficiency budget is unusable: ${e.message}`);
+}
+const budget = budgetMeter;
+
+// The wall-clock half of the budget must not depend on the agent doing
+// anything. A model that stops calling tools and keeps writing prose would
+// never reach countToolCall, and the idle timeout would never fire either.
+const budgetPoll = setInterval(() => budget.tick(), 5_000);
+budgetPoll.unref?.();
 
 // -------------------------------------------------- the preserved worktree --
 //
@@ -553,6 +632,8 @@ const summary = {
   cloneIntegrityViolations: null,
   cloneIntact: null,
   preservedWorktree: null,
+  efficiency: null,
+  budgetExceeded: null,
 };
 
 let sandbox;
@@ -586,20 +667,28 @@ try {
   }
 
   // ------------------------------------------------------------- implement --
+  //
+  // ONE invocation. It owns exploration, planning, implementation,
+  // verification and the commit. maxIterations is 1 unless the caller asks for
+  // more, and the caller that drives a backlog does not: the loop that earns
+  // another model invocation is the evidence-driven one below.
   log(`running the implementer (${cfg.agent} ${cfg.model})`);
   event("implement.start", {
     agent: cfg.agent,
     model: cfg.model,
-    maxIterations: cfg.maxIterations ?? 1,
+    maxIterations: implementIterations,
   });
+  budget.begin("implement");
   const impl = await sandbox.run({
     name: "implementer",
     agent: agentProvider(cfg.agent, cfg.model, cfg.effort),
     prompt: cfg.prompt,
-    maxIterations: cfg.maxIterations ?? 1,
-    logging: agentLogging("implementer", "implement", cfg.maxIterations ?? 1),
+    maxIterations: implementIterations,
+    logging: agentLogging("implementer", "implement", implementIterations),
     signal: abort.signal,
   });
+  budget.end();
+  budget.addUsage(impl.iterations);
   summary.implement = {
     iterations: impl.iterations.length,
     commits: impl.commits.map((c) => c.sha),
@@ -634,14 +723,19 @@ try {
       maxRounds: maxFixRounds,
       failed: failures.length,
     });
+    budget.begin(`fix-${round}`);
     const fix = await sandbox.run({
       name: `fix-${round}`,
       agent: agentProvider(cfg.agent, cfg.model, cfg.effort),
       prompt: fixPrompt(failures, round, maxFixRounds),
-      maxIterations: cfg.maxIterations ?? 1,
-      logging: agentLogging(`fix-${round}`, "fix", cfg.maxIterations ?? 1),
+      // A repair is one bounded invocation too. Its budget is the round
+      // count, and the evidence it gets is the failure that earned it.
+      maxIterations: 1,
+      logging: agentLogging(`fix-${round}`, "fix", 1),
       signal: abort.signal,
     });
+    budget.end();
+    budget.addUsage(fix.iterations);
     summary.fixRounds = round;
     summary.fixes.push({
       round,
@@ -684,6 +778,7 @@ try {
     } else {
       log(`running the independent reviewer (${cfg.reviewAgent} ${cfg.reviewModel})`);
       event("review.start", { agent: cfg.reviewAgent, model: cfg.reviewModel });
+      budget.begin("review");
       const rev = await sandbox.run({
         name: "reviewer",
         agent: agentProvider(cfg.reviewAgent, cfg.reviewModel, cfg.effort),
@@ -692,6 +787,8 @@ try {
         logging: agentLogging("reviewer", "review", 1),
         signal: abort.signal,
       });
+      budget.end();
+      budget.addUsage(rev.iterations);
       summary.review = {
         skipped: false,
         iterations: rev.iterations.length,
@@ -706,6 +803,10 @@ try {
   exitCode = 1;
 } finally {
   clearTimeout(deadline);
+  clearInterval(budgetPoll);
+  budget.end();
+  summary.efficiency = budget.snapshot();
+  summary.budgetExceeded = budget.exceeded;
   if (sandbox) {
     log("destroying the sandbox");
     try {
@@ -719,6 +820,19 @@ try {
       exitCode = 1;
     }
   }
+}
+
+// --------------------------------------------------------- the budget verdict --
+//
+// A hard breach is a RESULT, and it is not a successful implementation. The
+// exit code is its own, so bin/agentbox refuses the import and the coordinator
+// can tell "this went over budget" from "the agent crashed".
+//
+// An integrity failure below still overrides this: a run whose clone changed
+// outside its branch is a machine-level problem, and it must not be reported
+// as a merely expensive one.
+if (summary.budgetExceeded) {
+  exitCode = 12;
 }
 
 // ------------------------------------------------------------- final report --
@@ -804,6 +918,25 @@ if (allChecks.length === 0) {
 } else {
   log(`deterministic checks: ${failedChecks.length} of ${allChecks.length} FAILED`);
   for (const c of failedChecks) log(`  failed: ${c.command} (exit ${c.exitCode})`);
+}
+
+const eff = summary.efficiency;
+if (eff) {
+  const tokens = eff.tokens
+    ? `, ${eff.tokens.inputTokens} in / ${eff.tokens.outputTokens} out tokens`
+    : "";
+  log(
+    `efficiency: ${eff.seconds}s, ${eff.invocations} model invocation(s), ` +
+      `${eff.toolCalls} tool call(s), ${summary.fixRounds} repair round(s), ` +
+      `${eff.warnings.length} warning(s)${tokens}`,
+  );
+  if (summary.budgetExceeded) {
+    log(
+      "the efficiency budget was exceeded. This work is NOT validated and is " +
+        "NOT imported. An issue that goes over budget repeatedly is probably " +
+        "too broad for one bounded invocation; split it into smaller issues.",
+    );
+  }
 }
 
 process.stdout.write(

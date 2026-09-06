@@ -61,12 +61,12 @@ GREEN_EVENTS = [
     {"event": "sandbox.ready", "branch": "agent/issue-86"},
     {"event": "isolation.ok", "probes": 7, "failed": 0},
     {"event": "implement.start", "agent": "claude", "model": "opus",
-     "maxIterations": 4},
+     "maxIterations": 1},
     {"event": "agent.progress", "phase": "implement", "agent": "claude",
-     "iteration": 1, "maxIterations": 4, "tools": 3},
+     "iteration": 1, "maxIterations": 1, "tools": 3},
     {"event": "agent.progress", "phase": "implement", "agent": "claude",
-     "iteration": 2, "maxIterations": 4, "tools": 9},
-    {"event": "implement.done", "commits": 1, "iterations": 2},
+     "iteration": 1, "maxIterations": 1, "tools": 9},
+    {"event": "implement.done", "commits": 1, "iterations": 1},
     {"event": "check.start", "command": "pnpm check", "index": 1, "total": 1},
     {"event": "check.done", "command": "pnpm check", "exitCode": 0},
     {"event": "checks.done", "total": 1, "failed": 0},
@@ -275,8 +275,8 @@ class TestCompactOutput(unittest.TestCase):
     def test_agent_progress_is_the_real_iteration_not_a_percentage(self):
         harness = Harness(script=[green()])
         harness.run()
-        self.assertIn("iteration 1/4", harness.text)
-        self.assertIn("iteration 2/4", harness.text)
+        self.assertIn("iteration 1/1", harness.text)
+        self.assertIn("tool calls", harness.text)
         self.assertNotIn("%", harness.text)
 
     def test_ci_moves_from_pending_to_passed(self):
@@ -1256,6 +1256,144 @@ class TestInterrupt(unittest.TestCase):
         self.assertTrue(thread.daemon)
         ui.close()
         self.assertFalse(thread.is_alive())
+
+
+# ---------------------------------------------- the efficiency budget line --
+
+
+#: The events an expensive-but-healthy invocation publishes. The soft warning
+#: arrives between two progress lines, and it must stay on the line after it.
+WARNED_EVENTS = [
+    {"event": "implement.start", "agent": "claude", "model": "opus",
+     "maxIterations": 1},
+    {"event": "agent.progress", "phase": "implement", "agent": "claude",
+     "iteration": 1, "maxIterations": 1, "tools": 12},
+    {"event": "budget.warning", "phase": "implement", "seconds": 600,
+     "tools": 30,
+     "breaches": [{"metric": "seconds", "level": "soft",
+                   "limit": 600, "value": 600}]},
+    {"event": "agent.progress", "phase": "implement", "agent": "claude",
+     "iteration": 1, "maxIterations": 1, "tools": 31},
+    {"event": "implement.done", "commits": 1, "iterations": 1},
+    {"event": "check.start", "command": "pnpm check", "index": 1, "total": 1},
+    {"event": "checks.done", "total": 1, "failed": 0},
+    {"event": "review.skipped", "reason": "no Codex credential"},
+    {"event": "integrity.ok"},
+    {"event": "import.done", "commits": 1, "tip": "deadbeefcafe"},
+]
+
+#: The events a stopped invocation publishes before agentbox exits 12.
+EXCEEDED_EVENTS = [
+    {"event": "implement.start", "agent": "claude", "model": "opus",
+     "maxIterations": 1},
+    {"event": "agent.progress", "phase": "implement", "agent": "claude",
+     "iteration": 1, "maxIterations": 1, "tools": 40},
+    {"event": "budget.exceeded", "phase": "implement", "seconds": 640,
+     "tools": 60,
+     "breaches": [{"metric": "toolCalls", "level": "hard",
+                   "limit": 60, "value": 60}]},
+]
+
+
+class TestBudgetOutput(unittest.TestCase):
+    def test_a_soft_breach_shows_a_warning_and_the_run_continues(self):
+        harness = Harness(script=[green(events=WARNED_EVENTS)])
+        report = harness.run()
+        self.assertIn("efficiency warning", harness.text)
+        self.assertIn("600s of model time (limit 600s)", harness.text)
+        # The warning stays on the line the next progress event paints.
+        self.assertRegex(harness.text, r"31 tool calls.*efficiency warning")
+        self.assertIs(report.results[0].outcome, Outcome.SUCCESS)
+
+    def test_a_healthy_run_never_says_efficiency_warning(self):
+        harness = Harness(script=[green()])
+        harness.run()
+        self.assertNotIn("efficiency warning", harness.text)
+        self.assertNotIn("over budget", harness.text)
+
+    def test_a_hard_breach_says_what_was_passed_and_imports_nothing(self):
+        step = {
+            "events": EXCEEDED_EVENTS,
+            "exit": 12,
+            "summary": {
+                "checksPassed": None,
+                "efficiency": {"seconds": 640, "invocations": 1,
+                               "toolCalls": 60, "tokens": None,
+                               "warnings": [], "exceeded": {"phase": "implement"}},
+                "budgetExceeded": {
+                    "phase": "implement", "seconds": 640, "toolCalls": 60,
+                    "breaches": [{"metric": "toolCalls", "level": "hard",
+                                  "limit": 60, "value": 60}],
+                },
+            },
+            "output": "agentbox: one model invocation passed its efficiency budget",
+        }
+        harness = Harness(script=[step])
+        report = harness.run()
+        self.assertIn("over budget", harness.text)
+        self.assertIn("60 tool calls (limit 60)", harness.text)
+        self.assertIn("nothing imported", harness.text)
+        self.assertIs(report.results[0].outcome, Outcome.BUDGET_EXCEEDED)
+        self.assertNotIn("✓ IMPORT", harness.text)
+        self.assertNotIn("✓ MERGE", harness.text)
+
+    def test_the_closing_summary_counts_a_breach_on_its_own_line(self):
+        step = {
+            "events": EXCEEDED_EVENTS,
+            "exit": 12,
+            "summary": {
+                "checksPassed": None,
+                "efficiency": {"seconds": 640, "invocations": 1,
+                               "toolCalls": 60, "tokens": None,
+                               "warnings": [], "exceeded": {"phase": "implement"}},
+                "budgetExceeded": {
+                    "phase": "implement", "seconds": 640, "toolCalls": 60,
+                    "breaches": [{"metric": "toolCalls", "level": "hard",
+                                  "limit": 60, "value": 60}],
+                },
+            },
+            "output": "",
+        }
+        harness = Harness(script=[step])
+        report = harness.run()
+        # The compact counts name it only when it happened.
+        self.assertIn("1 over budget", harness.text)
+        # The verbose summary always carries the count.
+        from agentqueue import report as report_mod
+
+        lines = report_mod.render_summary(report, harness.policy)
+        self.assertIn("  issues over budget        1", lines)
+
+    def test_a_green_run_does_not_mention_a_budget_count(self):
+        harness = Harness(script=[green()])
+        report = harness.run()
+        self.assertNotIn("over budget", harness.text)
+        from agentqueue import report as report_mod
+
+        self.assertIn(
+            "  issues over budget        0",
+            report_mod.render_summary(report, harness.policy),
+        )
+
+    def test_a_breach_is_not_also_reported_as_a_crash(self):
+        step = {
+            "events": EXCEEDED_EVENTS,
+            "exit": 12,
+            "summary": {
+                "checksPassed": None,
+                "efficiency": {},
+                "budgetExceeded": {
+                    "phase": "implement", "seconds": 640, "toolCalls": 60,
+                    "breaches": [{"metric": "toolCalls", "level": "hard",
+                                  "limit": 60, "value": 60}],
+                },
+            },
+            "output": "",
+        }
+        harness = Harness(script=[step])
+        harness.run()
+        self.assertNotIn("agentbox exited 12", harness.text)
+        self.assertIn("over budget", harness.text)
 
 
 if __name__ == "__main__":

@@ -90,6 +90,54 @@ with the local-check loop, so one issue can never spend more than the sum.
 The prompt tells the implementer about the first loop in as many words: run the
 checks yourself, repair what fails, and repeat.
 
+Neither loop is a general retry. The implementer runs **once** per session, and
+a second model invocation happens only because new concrete evidence exists: a
+failing check or a review finding, passed to a repair that receives that
+evidence. `maxIterations` is therefore 1. Setting it higher gives the
+implementer a third retry dimension next to `maxFixRounds` and `maxRetries`,
+and the combined budget of three is difficult to reason about.
+
+## The execution-efficiency budget
+
+The loops above bound how many times a model runs. The budget bounds how much
+**one** run may do.
+
+    seconds     how long one model invocation has been running
+    tool calls  how many tools that invocation has used
+
+It exists because no other limit sees a busy agent. Sandcastle's idle timeout
+fires when the agent stops talking, and `agentTimeoutSeconds` fires when the
+whole run takes too long. An agent that explores for half an hour is never idle
+and never near a one-hour limit, so it looks healthy to both.
+
+A **soft** breach puts `efficiency warning` on the running stage line and keeps
+going:
+
+```text
+● IMPLEMENT  10m 00s · (S) Sonnet · iteration 1/1 · 31 tool calls · efficiency warning
+```
+
+A **hard** breach stops the run. `agentbox` exits 12, nothing is imported, no
+branch is pushed and no pull request is opened. The coordinator classifies the
+issue as `BUDGET_EXCEEDED`, adds the human label, and comments with what the
+run cost and the reason it stopped:
+
+```text
+! IMPLEMENT  20m 04s · over budget · 60 tool calls (limit 60) · nothing imported
+```
+
+A breach in a repair is treated the same way in both loops. A repair that costs
+too much is as wasteful as a first attempt that does, and the branch it was
+repairing still fails its checks, so nothing may be pushed.
+
+The queue does not try again on its own after a hard breach. Replaying the same
+instruction would cost the same. The comment says that the issue is probably
+too broad for one bounded invocation and asks for it to be split into smaller
+leaf issues. **agentq never splits or rewrites an issue itself**: that is a
+human decision, and no policy here enables it.
+
+`docs/sandcastle.md` holds the four limits and how each one is measured.
+
 ## Which model runs the task
 
 Not every issue needs the strongest model. A task gets one **effort tier**, and
@@ -343,6 +391,7 @@ and that combination is an explicit two-key decision on purpose.
 | `SUCCESS` | merge if the policy allows, then rescan |
 | `BLOCKED` | leave the issue alone, evaluate another |
 | `NEEDS_HUMAN` | add the human label, comment, continue with another issue |
+| `BUDGET_EXCEEDED` | add the human label, comment that the issue is probably too broad, continue with another issue |
 | `FAILED_TRANSIENT` | retry inside the budget |
 | `FAILED_FINAL` | add the failed label, comment, continue |
 | `SECURITY_OR_INTEGRITY_FAILURE` | **stop the whole queue at once** |
@@ -412,7 +461,11 @@ what it may do with the backlog. Neither reads the other.
 | `maxParallel` | `1` | issues at a time |
 | `maxRetries` | `2` | repair attempts per issue, shared across both loops |
 | `maxFixRounds` | `2` | repair rounds inside one sandbox |
-| `maxIterations` | `4` | agent turns per run |
+| `maxIterations` | `1` | agent turns per run. One bounded invocation is the normal path |
+| `softBudgetSeconds` | `600` | one invocation past this reports an efficiency warning and keeps going. 0 turns it off |
+| `hardBudgetSeconds` | `1200` | one invocation past this is stopped, and nothing is imported. 0 turns it off |
+| `softToolCalls` | `30` | the same warning, counted in tool calls |
+| `hardToolCalls` | `60` | the same stop, counted in tool calls |
 | `maxCommits` | `20` | the import bound |
 | `agentTimeoutSeconds` | `3600` | the wall-clock limit of one run |
 | `staleClaimSeconds` | `7200` | when a claim with no release is stale |

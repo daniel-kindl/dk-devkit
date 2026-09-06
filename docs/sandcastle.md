@@ -411,6 +411,72 @@ Two details matter for anything that reads the result:
 The evidence is bounded: 40 lines and 4000 bytes per failing check. A full test
 log is far longer than a prompt should be.
 
+## Four limits, and what each one sees
+
+A run is bounded four different ways, and they are not interchangeable:
+
+| Limit | It fires when | Who owns it |
+| --- | --- | --- |
+| idle timeout | the agent stopped producing output | Sandcastle |
+| completion timeout | the agent signalled completion and did not exit | Sandcastle |
+| wall-clock timeout | the whole run took too long | `--timeout` |
+| efficiency budget | ONE model invocation did too much work | `--*-budget-*` |
+
+The first three do not see the case that motivated the fourth. An agent that
+explores for half an hour produces output on every turn, so it is never idle,
+it never signals completion, and a one-hour wall-clock limit lets it use the
+whole hour. It looks healthy to every activity-based safeguard, and it is not.
+
+The efficiency budget measures **work** instead:
+
+    seconds     how long one model invocation has been running
+    tool calls  how many tools that invocation has used
+
+Two levels, and they are separate for a reason:
+
+- A **soft** breach says the invocation is expensive. The run continues, the
+  compact display says `efficiency warning`, and the run evidence records it.
+  An expensive invocation that finishes is still a result.
+- A **hard** breach says the invocation is wasteful. The agent is stopped
+  through the same abort path the wall-clock limit uses, so the sandbox is
+  still destroyed and the summary is still printed. `agentbox` exits **12**,
+  and **nothing is imported**: the work is not validated, so it never reaches
+  the real repository.
+
+A hard breach is never reported as a successful implementation. The starting
+values are 600s and 30 tool calls (soft), 1200s and 60 tool calls (hard), in
+`manifests/sandcastle.env`. They came from a measured run, not from a rule, and
+they are meant to be adjusted against more measurements. Set a limit to 0 to
+turn it off. A soft limit at or above its hard limit is refused rather than
+clamped: it would mean the warning arrives after the stop.
+
+The wall-clock half is polled, not driven by the agent, so an invocation that
+calls no tool at all still reaches its limit.
+
+`summary.efficiency` records what the run cost: elapsed seconds, model
+invocation count, tool calls, per-phase records, the thresholds that were
+crossed, and token usage when the provider reported any. `budget.mjs` holds the
+logic with no clock and no input of its own, and
+`verify/probes/budget.test.mjs` proves every threshold with an injected clock.
+
+## One implementation invocation
+
+The normal path is **one** bounded implementer invocation. It owns exploration,
+planning, implementation, verification and the commit for one leaf issue.
+
+    issue -> one implementer invocation -> checks -> review -> merge gates
+
+Another model invocation happens only because new concrete evidence exists:
+
+    a failed check   -> one targeted repair invocation, with the failure
+    a review finding -> one targeted repair invocation, with the finding
+
+Nothing replays the original instruction as a second general attempt.
+`--max-iterations` defaults to 1, and `--max-fix-rounds` is the budget that
+owns evidence-driven repair. A larger `--max-iterations` is available for a
+manual run, and `agentbox` says so in its log when it is used: two overlapping
+retry dimensions have a combined budget that is difficult to reason about.
+
 ## Continuation mode
 
 A GitHub check can only fail after the sandbox is gone. A repair therefore has
@@ -609,12 +675,17 @@ is a larger exposure than an independent review is worth.
 | `--check CMD` | a deterministic check. A newline in the argument is refused, not split into two checks |
 | `--max-fix-rounds N` | how many times the sandbox may re-run the implementer against its own failing checks, inside one sandbox. `AGENTBOX_MAX_FIX_ROUNDS` sets the default. A run with no `--check` sets it to 0, because there is no evidence to feed back |
 | `--continue` | work on an existing `agent/` branch, based on its own tip |
+| `--soft-budget-seconds N` | one model invocation that passes this many seconds reports an efficiency warning and keeps going. `AGENTBOX_SOFT_BUDGET_SECONDS` sets the default; 0 turns it off |
+| `--hard-budget-seconds N` | one model invocation that passes this many seconds is stopped, and NOTHING is imported. `AGENTBOX_HARD_BUDGET_SECONDS` sets the default; 0 turns it off |
+| `--soft-tool-calls N` | the same warning, counted in tool calls. `AGENTBOX_SOFT_TOOL_CALLS` sets the default |
+| `--hard-tool-calls N` | the same stop, counted in tool calls. `AGENTBOX_HARD_TOOL_CALLS` sets the default |
 | `--agent-output MODE` | `terminal` (the default) renders Sandcastle's interactive terminal UI on stdout. `progress` writes the agent log to a file inside the disposable clone, forwards what the agent said as plain lines, and publishes the progress channel below. A caller that CAPTURES stdout wants `progress`: an interactive UI in a pipe is control codes, not evidence, and it carries no iteration number |
 | `INT` and `TERM` | remove the control plane, remove this run's sandboxes, remove the credential file, release the lock |
 | `agentbox clean` | sweeps stray containers, stale locks, and every run directory no live lock names |
 
-`--max-iterations` bounds the number of agent turns; `--timeout` bounds how
-long they may take in total.
+`--max-iterations` bounds the number of agent turns, and its default is 1;
+`--timeout` bounds how long they may take in total. The efficiency budget below
+bounds how much work ONE of those turns may do.
 
 ### The progress channel
 
@@ -774,3 +845,4 @@ component that holds a GitHub credential. See [agentq.md](agentq.md).
 | 9 | the result was refused at import; the real repository did not change |
 | 10 | the run passed its wall-clock limit; nothing was imported |
 | 11 | another run holds the branch |
+| 12 | one model invocation passed its efficiency budget; nothing was imported |

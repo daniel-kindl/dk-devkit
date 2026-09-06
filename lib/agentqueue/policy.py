@@ -76,8 +76,26 @@ class Policy:
     maxRetries: int = 2
     maxFixRounds: int = 2
     maxCommits: int = 20
-    maxIterations: int = 4
+    # One bounded implementation invocation is the normal path. The loop that
+    # earns another model invocation is the evidence-driven one: a failing
+    # check or a reviewer finding. A larger number here re-introduces a
+    # general retry dimension next to maxFixRounds and maxRetries, and the
+    # combined budget of three of them is difficult to reason about.
+    maxIterations: int = 1
     agentTimeoutSeconds: int = 3600
+
+    # The execution-efficiency budget for ONE model invocation. Sandcastle's
+    # idle timeout sees an agent that stops talking, and agentTimeoutSeconds
+    # sees a run that takes too long. Neither sees an agent that stays busy
+    # and gets nowhere, which is what these bound.
+    #
+    # A soft limit reports a warning in the compact output and in the run
+    # evidence. A hard limit stops the agent and imports nothing. 0 turns one
+    # limit off, and each soft limit must stay below its hard limit.
+    softBudgetSeconds: int = 600
+    hardBudgetSeconds: int = 1200
+    softToolCalls: int = 30
+    hardToolCalls: int = 60
     staleClaimSeconds: int = 7200
 
     adoptExistingBranch: bool = True
@@ -133,9 +151,26 @@ class Policy:
         for name, value in (
             ("maxRetries", self.maxRetries),
             ("maxFixRounds", self.maxFixRounds),
+            ("softBudgetSeconds", self.softBudgetSeconds),
+            ("hardBudgetSeconds", self.hardBudgetSeconds),
+            ("softToolCalls", self.softToolCalls),
+            ("hardToolCalls", self.hardToolCalls),
         ):
             if value < 0:
                 raise PolicyError(f"{name} must not be negative")
+        # A soft limit at or above its hard limit is refused, not clamped. It
+        # would mean the warning arrives after the stop, and whoever wrote it
+        # believes there is a warning stage when there is none.
+        for soft, hard in (
+            ("softBudgetSeconds", "hardBudgetSeconds"),
+            ("softToolCalls", "hardToolCalls"),
+        ):
+            soft_value = getattr(self, soft)
+            hard_value = getattr(self, hard)
+            if hard_value and soft_value and soft_value >= hard_value:
+                raise PolicyError(
+                    f"{soft} ({soft_value}) must be below {hard} ({hard_value})"
+                )
         if self.agentTimeoutSeconds < 60:
             raise PolicyError("agentTimeoutSeconds must be at least 60")
         if self.ciPollSeconds < 1:

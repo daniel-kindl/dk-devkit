@@ -92,6 +92,20 @@ class AgentRun:
         return int((self.summary or {}).get("fixRounds", 0) or 0)
 
     @property
+    def efficiency(self) -> dict:
+        """What one run cost, as the orchestrator measured it.
+
+        Empty when the run died before it could report. A missing measurement
+        is missing, never a zero that reads like one.
+        """
+        return (self.summary or {}).get("efficiency") or {}
+
+    @property
+    def budget_exceeded(self) -> Optional[dict]:
+        """The breach that stopped this run, or ``None``."""
+        return (self.summary or {}).get("budgetExceeded") or None
+
+    @property
     def review(self) -> dict:
         review = (self.summary or {}).get("review")
         if not review:
@@ -148,6 +162,13 @@ class AgentboxRunner:
             "--max-commits", str(self.policy.maxCommits),
             "--max-iterations", str(self.policy.maxIterations),
             "--max-fix-rounds", str(self.policy.maxFixRounds),
+            # The execution-efficiency budget for one model invocation. It is
+            # passed on every run, including a repair: a repair that goes over
+            # budget is as wasteful as a first attempt that does.
+            "--soft-budget-seconds", str(self.policy.softBudgetSeconds),
+            "--hard-budget-seconds", str(self.policy.hardBudgetSeconds),
+            "--soft-tool-calls", str(self.policy.softToolCalls),
+            "--hard-tool-calls", str(self.policy.hardToolCalls),
             "--agent-output", self.agent_output,
         ]
         # The resolved tier reaches agentbox as pinned model IDs, never as a

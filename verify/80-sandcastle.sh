@@ -556,6 +556,54 @@ else
     skip 'L1 the clone integrity comparison behaves' 'no node on this side'
 fi
 
+# --- the execution-efficiency budget ----------------------------------------
+#
+# The limit that measures WORK rather than silence. Sandcastle's idle timeout
+# sees an agent that stops talking; this one sees an agent that stays busy and
+# gets nowhere. A hard breach must stop the run and import NOTHING.
+
+check 'P1 the budget module exists'          -- \
+    test -f "$REPO_ROOT/config/sandcastle/budget.mjs"
+check 'P2 the budget test exists'            -- \
+    test -f "$REPO_ROOT/verify/probes/budget.test.mjs"
+check 'P3 the module is staged into the run' -- \
+    grep -q 'clone-integrity.mjs budget.mjs' "$AB"
+check 'P4 the module is mounted read-only'   -- \
+    grep -q 'staging/budget.mjs:/opt/workstation/sandcastle/budget.mjs:ro' "$AB"
+check 'P5 the orchestrator meters the run'   -- \
+    grep -q 'createBudgetMeter' "$SC_DIR/orchestrate.mjs"
+check 'P6 a breach has its own exit code'    -- \
+    grep -q "fail 12 'one model invocation passed its efficiency budget'" "$AB"
+check 'P7 the manifest states every limit'   -- \
+    grep -qE '^AGENTBOX_HARD_TOOL_CALLS=' "$REPO_ROOT/manifests/sandcastle.env"
+
+out=$("$AB" run --repo "$REPO_ROOT" --branch agent/verify-dry-run \
+          --prompt-file "$DRY_PROMPT" --dry-run 2>&1 || true)
+check_contains 'P8 the plan states the budget' '"hardToolCalls"' "$out"
+
+out=$("$AB" run --repo "$REPO_ROOT" --branch agent/verify-dry-run \
+          --prompt-file "$DRY_PROMPT" --dry-run \
+          --soft-tool-calls 60 --hard-tool-calls 30 2>&1 || true)
+check_contains 'P9 a soft limit above its hard limit is refused' \
+    'must be below' "$out"
+
+if command -v node >/dev/null 2>&1; then
+    probe_out=$(node --test "$REPO_ROOT/verify/probes/budget.test.mjs" 2>&1) &&
+        probe_rc=0 || probe_rc=$?
+    probe_pass=$(printf '%s\n' "$probe_out" | sed -n 's/^# pass //p')
+    probe_fail=$(printf '%s\n' "$probe_out" | sed -n 's/^# fail //p')
+    if [ "$probe_rc" = 0 ] && [ "${probe_fail:-1}" = 0 ]; then
+        pass "P10 the efficiency budget behaves ($probe_pass assertions)"
+    else
+        fail 'P10 the efficiency budget behaves' \
+            "${probe_fail:-?} failed" \
+            "$(printf '%s\n' "$probe_out" | grep -E '^not ok|Expected' | head -6 |
+               tr '\n' ' ')"
+    fi
+else
+    skip 'P10 the efficiency budget behaves' 'no node on this side'
+fi
+
 probe_out=$("$REPO_ROOT/verify/probes/clone-identity.sh" 2>&1) && probe_rc=0 || probe_rc=$?
 probe_pass=$(printf '%s\n' "$probe_out" | sed -n 's/^passed \([0-9]*\) .*/\1/p')
 if [ "$probe_rc" = 0 ]; then

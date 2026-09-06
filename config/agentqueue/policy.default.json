@@ -52,8 +52,14 @@
   "maxRetries": 2,
   "maxFixRounds": 2,
   "maxCommits": 20,
-  "maxIterations": 4,
+  "maxIterations": 1,
   "agentTimeoutSeconds": 3600,
+
+  "softBudgetSeconds": 600,
+  "hardBudgetSeconds": 1200,
+  "softToolCalls": 30,
+  "hardToolCalls": 60,
+
   "staleClaimSeconds": 7200,
 
   "adoptExistingBranch": true,

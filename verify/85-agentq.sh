@@ -51,11 +51,50 @@ from agentqueue import policy
 policy.load('/nonexistent', sys.argv[1] + '/config/agentqueue/policy.default.json')
 " "$REPO_ROOT"
     check 'A11 the CLI reports the agentq version' -- "$AQ" --version
+    # One bounded implementation invocation is the normal path. A general
+    # iteration budget next to maxFixRounds and maxRetries gives the
+    # implementer three retry dimensions, and the combined budget of three is
+    # difficult to reason about.
+    check 'A12 the default policy gives one implementation invocation' -- \
+        python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue import policy
+p = policy.load('/nonexistent', sys.argv[1] + '/config/agentqueue/policy.default.json')
+assert p.maxIterations == 1, p.maxIterations
+" "$REPO_ROOT"
+    # The efficiency budget must reach agentbox on every run, including a
+    # repair: a repair that costs too much is as wasteful as a first attempt.
+    check 'A13 every run carries the efficiency budget' -- \
+        python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue import policy
+from agentqueue.runner import AgentboxRunner
+p = policy.load('/nonexistent', sys.argv[1] + '/config/agentqueue/policy.default.json')
+cmd = AgentboxRunner('agentbox', p, '/logs').command('/r', 'agent/x', '/p', 'origin/main')
+for flag in ('--soft-budget-seconds', '--hard-budget-seconds',
+             '--soft-tool-calls', '--hard-tool-calls'):
+    assert flag in cmd, flag
+" "$REPO_ROOT"
+    # A hard breach is its own outcome. It is never a success, and it never
+    # reaches a push, a pull request or a merge.
+    check 'A14 a budget breach is its own outcome' -- \
+        python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue.model import Outcome, classify_agentbox_exit
+assert classify_agentbox_exit(12, '') is Outcome.BUDGET_EXCEEDED
+assert not Outcome.BUDGET_EXCEEDED.is_success
+assert classify_agentbox_exit(12, 'DISPOSABLE CLONE INTEGRITY FAILED') is \
+    Outcome.SECURITY_OR_INTEGRITY_FAILURE
+" "$REPO_ROOT"
 else
     skip 'A8 every module compiles' 'no python3 on this side'
     skip 'A9 the default policy is valid JSON' 'no python3 on this side'
     skip 'A10 the default policy passes its own validation' 'no python3 on this side'
     skip 'A11 the CLI reports its version' 'no python3 on this side'
+    skip 'A12 the default policy gives one implementation invocation' \
+        'no python3 on this side'
+    skip 'A13 every run carries the efficiency budget' 'no python3 on this side'
+    skip 'A14 a budget breach is its own outcome' 'no python3 on this side'
 fi
 
 # --- the manifest is pinned -------------------------------------------------
