@@ -70,7 +70,8 @@ This step:
 - removes the obsolete installed `agentqueue` entry point
 - links the router configuration into `~/.config/devbox-router`
 - seeds an empty `repos.tsv`, and never overwrites an existing one
-- creates the `web-dev` container from `distrobox/web-dev.ini`
+- creates the container of every supported environment module, such as
+  `web-dev` from `distrobox/web-dev.ini`
 - installs the shared policy file and the status line into the host Codex home
 
 Log out and back in if `~/.local/bin` is not yet on your `PATH`.

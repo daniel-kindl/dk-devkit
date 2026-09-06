@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "rust-dev",
+  "name": "rust-dev environment",
+  "kind": "environment",
+  "group": "Development environments",
+  "status": "planned",
+  "summary": "Planned Rust environment. The module declares its router markers; the container and the toolchain do not exist yet.",
+  "requires": ["distrobox", "devbox"],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "environment": {
+    "container": "rust-dev",
+    "inference": "components/rust-dev/inference.tsv"
+  },
+  "state": { "public": ["components/rust-dev/inference.tsv"], "local": [] }
+}

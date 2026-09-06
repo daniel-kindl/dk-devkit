@@ -4,6 +4,7 @@
   "name": "web-dev environment",
   "kind": "environment",
   "group": "Development environments",
+  "status": "supported",
   "summary": "Fedora Distrobox with an isolated home, the Node/pnpm toolchain and the agent CLIs.",
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
@@ -14,6 +15,16 @@
   "manual": [
     "Sign in to Claude Code and Codex inside web-dev; the installer stores no credential."
   ],
+  "environment": {
+    "container": "web-dev",
+    "ini": "distrobox/web-dev.ini",
+    "packages": "manifests/web-dev-packages.txt",
+    "toolchain": "manifests/toolchain.env",
+    "bootstrap": "bootstrap/web-dev.sh",
+    "router": "config/devbox-router/environments.d/web-dev.env",
+    "inference": "components/web-dev/inference.tsv",
+    "home": "~/.local/share/distrobox-homes/web-dev/"
+  },
   "state": {
     "public": ["distrobox/web-dev.ini", "manifests/web-dev-packages.txt", "manifests/toolchain.env"],
     "local": ["~/.local/share/distrobox-homes/web-dev/"]

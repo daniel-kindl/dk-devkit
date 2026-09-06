@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "dotnet-dev",
+  "name": "dotnet-dev environment",
+  "kind": "environment",
+  "group": "Development environments",
+  "status": "planned",
+  "summary": "Planned .NET environment. The module declares its router markers; the container and the toolchain do not exist yet.",
+  "requires": ["distrobox", "devbox"],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "environment": {
+    "container": "dotnet-dev",
+    "inference": "components/dotnet-dev/inference.tsv"
+  },
+  "state": { "public": ["components/dotnet-dev/inference.tsv"], "local": [] }
+}

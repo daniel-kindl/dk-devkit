@@ -43,6 +43,35 @@ def manifest(identifier, **overrides):
     return document
 
 
+def environment(identifier, status="supported", **overrides):
+    """An environment module: a component of kind environment, plus its block."""
+    block = {
+        "container": identifier,
+        "inference": f"components/{identifier}/inference.tsv",
+    }
+    if status != "planned":
+        block.update({
+            "ini": f"distrobox/{identifier}.ini",
+            "packages": f"manifests/{identifier}-packages.txt",
+            "toolchain": f"manifests/{identifier}.env",
+            "bootstrap": f"bootstrap/{identifier}.sh",
+            "router": f"config/devbox-router/environments.d/{identifier}.env",
+            "home": f"~/.local/share/distrobox-homes/{identifier}/",
+        })
+    block.update(overrides.pop("environment", {}))
+    document = manifest(
+        identifier,
+        kind="environment",
+        group="Development environments",
+        status=status,
+        environment=block,
+    )
+    if status == "planned":
+        document.update({"install": None, "doctor": None})
+    document.update(overrides)
+    return document
+
+
 def catalogue(*documents):
     """Write component manifests into a throwaway directory and load them."""
     directory = Path(tempfile.mkdtemp())
@@ -357,19 +386,131 @@ class ExecutionCase(unittest.TestCase):
 # ------------------------------------------------------------ the real tree --
 
 
+class EnvironmentModuleCase(unittest.TestCase):
+    def test_an_environment_module_round_trips(self):
+        components = catalogue(environment("web-dev"))
+        block = components["web-dev"].environment
+        self.assertEqual(block["container"], "web-dev")
+        self.assertEqual(block["inference"], "components/web-dev/inference.tsv")
+        self.assertFalse(components["web-dev"].planned)
+
+    def test_an_environment_must_declare_its_block(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "environment is required"):
+            catalogue(manifest("web-dev", kind="environment"))
+
+    def test_only_an_environment_declares_the_block(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "only for kind environment"):
+            catalogue(manifest("alpha", environment={"container": "alpha"}))
+
+    def test_an_unknown_environment_key_is_rejected(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "unknown keys: image"):
+            catalogue(environment("web-dev", environment={"image": "fedora"}))
+
+    def test_a_supported_environment_declares_every_file_it_owns(self):
+        document = environment("web-dev")
+        del document["environment"]["ini"]
+        with self.assertRaisesRegex(toolkit.ConfigError, "must declare: ini"):
+            catalogue(document)
+
+    def test_a_planned_environment_declares_the_boundary_only(self):
+        components = catalogue(environment("rust-dev", status="planned"))
+        self.assertTrue(components["rust-dev"].planned)
+        self.assertEqual(
+            set(components["rust-dev"].environment), {"container", "inference"}
+        )
+
+    def test_a_planned_component_must_have_no_installer(self):
+        document = environment("rust-dev", status="planned")
+        document["install"] = ["true"]
+        with self.assertRaisesRegex(toolkit.ConfigError, "no install and no doctor"):
+            catalogue(document)
+
+    def test_an_unknown_status_is_rejected(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "status must be one of"):
+            catalogue(manifest("alpha", status="someday"))
+
+    def test_a_planned_component_cannot_be_selected(self):
+        components = catalogue(environment("rust-dev", status="planned"))
+        with self.assertRaisesRegex(toolkit.ResolveError, "planned"):
+            toolkit.closure(components, ["rust-dev"])
+
+    def test_a_planned_dependency_is_refused_the_same_way(self):
+        components = catalogue(
+            environment("rust-dev", status="planned"),
+            manifest("alpha", requires=["rust-dev"]),
+        )
+        with self.assertRaisesRegex(toolkit.ResolveError, "rust-dev"):
+            toolkit.closure(components, ["alpha"])
+
+    def test_a_planned_component_is_not_offered_by_the_picker(self):
+        components = catalogue(
+            environment("web-dev"), environment("rust-dev", status="planned")
+        )
+        entries = [item.id for item in toolkit.picker_entries(components)]
+        self.assertEqual(entries, ["web-dev"])
+
+    def test_the_catalogue_says_a_module_is_planned(self):
+        components = catalogue(environment("rust-dev", status="planned"))
+        rendered = toolkit.render_catalogue(components, frozenset())
+        self.assertIn("~ rust-dev", rendered)
+        self.assertIn("planned: no installation yet", rendered)
+
+    def test_the_report_says_a_planned_module_cannot_be_installed(self):
+        components = catalogue(environment("rust-dev", status="planned"))
+        self.assertEqual(
+            toolkit.unsupported(components, frozenset()),
+            {"rust-dev": "planned: no installation yet"},
+        )
+
+    def test_the_modules_are_listed_in_identifier_order(self):
+        components = catalogue(
+            environment("web-dev"), environment("python-dev"), manifest("alpha")
+        )
+        self.assertEqual(
+            [item.id for item in toolkit.environment_modules(components)],
+            ["python-dev", "web-dev"],
+        )
+
+    def test_only_the_requested_status_is_listed(self):
+        components = catalogue(
+            environment("web-dev"), environment("rust-dev", status="planned")
+        )
+        self.assertEqual(
+            [item.id for item in toolkit.environment_modules(components, "planned")],
+            ["rust-dev"],
+        )
+
+    def test_the_tsv_names_every_field_and_marks_an_absent_one(self):
+        components = catalogue(environment("rust-dev", status="planned"))
+        header, record = toolkit.render_environments(components).splitlines()
+        self.assertEqual(
+            header.split("\t"), ["id", "status"] + list(toolkit.ENVIRONMENT_KEYS)
+        )
+        fields = record.split("\t")
+        self.assertEqual(len(fields), len(header.split("\t")))
+        self.assertEqual(fields[:3], ["rust-dev", "planned", "rust-dev"])
+        # An absent field is "-", so that a shell "read" keeps the columns.
+        self.assertEqual(fields[3], "-")
+
+
 class ShippedCatalogueCase(unittest.TestCase):
     def setUp(self):
         self.components = toolkit.load_components(ROOT / "components")
         self.capabilities = toolkit.load_capabilities(
             ROOT / "manifests" / "capabilities.json"
         )
+        # A planned module is a boundary without an installation, so it takes
+        # part in no closure.
+        self.installable = {
+            name: item for name, item in self.components.items() if not item.planned
+        }
 
     def test_every_component_loads(self):
         self.assertIn("devbox", self.components)
         toolkit.check_capability_references(self.components, self.capabilities)
 
     def test_no_component_graph_has_a_cycle(self):
-        toolkit.closure(self.components, sorted(self.components))
+        toolkit.closure(self.components, sorted(self.installable))
 
     def test_every_declared_command_exists_and_is_executable(self):
         for component in self.components.values():
@@ -384,11 +525,63 @@ class ShippedCatalogueCase(unittest.TestCase):
                     f"{component.id}: {command[0]} is not executable",
                 )
 
-    def test_the_daniel_profile_composes_every_other_component(self):
+    def test_the_daniel_profile_composes_every_installable_component(self):
         _, order = toolkit.closure(self.components, ["daniel"])
-        self.assertEqual(set(order), set(self.components))
+        self.assertEqual(set(order), set(self.installable))
         self.assertEqual(order[-1], "daniel")
         self.assertIsNone(self.components["daniel"].install)
+
+    def test_no_profile_composes_a_planned_module(self):
+        for name in toolkit.profile_ids(self.components):
+            _, order = toolkit.closure(self.components, [name])
+            for identifier in order:
+                self.assertFalse(self.components[identifier].planned, identifier)
+
+    def test_every_environment_module_owns_its_router_markers(self):
+        for component in toolkit.environment_modules(self.components):
+            block = component.environment or {}
+            self.assertTrue(
+                (ROOT / block["inference"]).is_file(),
+                f"{component.id}: {block['inference']} is missing",
+            )
+
+    def test_a_supported_environment_declares_files_that_exist(self):
+        for component in toolkit.environment_modules(self.components, "supported"):
+            for key, value in (component.environment or {}).items():
+                if key in ("container", "home"):
+                    continue
+                self.assertTrue(
+                    (ROOT / value).exists(), f"{component.id}.{key}: {value} is missing"
+                )
+
+    def test_the_router_markers_name_the_module_that_owns_them(self):
+        for component in toolkit.environment_modules(self.components):
+            rules = (ROOT / (component.environment or {})["inference"]).read_text(
+                encoding="utf-8"
+            )
+            for line in rules.splitlines():
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                self.assertEqual(
+                    line.split("\t")[0], component.id, f"{component.id}: {line}"
+                )
+
+    def test_the_router_fallback_table_matches_the_modules(self):
+        declared = []
+        for component in toolkit.environment_modules(self.components):
+            rules = (ROOT / (component.environment or {})["inference"]).read_text(
+                encoding="utf-8"
+            )
+            declared += [
+                line.split("#", 1)[0].strip()
+                for line in rules.splitlines()
+                if line.split("#", 1)[0].strip()
+            ]
+        router = (ROOT / "bin" / "devbox").read_text(encoding="utf-8")
+        table = router.split("builtin_rules() {", 1)[1]
+        table = table.split("<<'RULES'", 1)[1].split("RULES", 1)[0]
+        self.assertEqual([line for line in table.splitlines() if line], declared)
 
     def test_a_reusable_tool_pulls_in_no_workstation_extras(self):
         _, order = toolkit.closure(self.components, ["agentbox"])

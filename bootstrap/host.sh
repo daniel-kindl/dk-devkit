@@ -17,7 +17,7 @@
 #     wrappers into ~/.local/bin as symlinks into this checkout
 #   * generates the claude and codex host shims with 'devbox new-shim'
 #   * installs the devbox router configuration into ~/.config/devbox-router
-#   * creates the web-dev and python-dev Distroboxes when they are absent
+#   * creates the Distrobox of every supported environment module
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
 #   * installs the agentbox CLI and prepares its credential file location
 #   * installs the agentq host shim, which delegates into the container
@@ -89,9 +89,9 @@ install_devbox_router "$REPO_ROOT"
 
 # ---------------------------------------------------------------- Distrobox --
 section 'Distrobox development environments'
-for dev_env in web-dev python-dev; do
-    create_development_environment "$REPO_ROOT" "$dev_env"
-done
+# The environment modules under components/ say which environments exist. This
+# script names none of them, so a new environment is one new module.
+create_development_environments "$REPO_ROOT"
 info 'to recreate a development container deliberately, see docs/recovery.md'
 
 # ------------------------------------------------------- Codex host settings --
@@ -138,7 +138,5 @@ fi
 manual 'Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519'
 manual 'Authenticate GitHub on the host: gh auth login --git-protocol ssh'
 manual 'Mint an unattended Claude token on the host with "claude setup-token", then put it in ~/.config/agentbox/secrets.env'
-manual 'Bootstrap web-dev: devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh'
-manual 'Bootstrap python-dev: devbox exec python-dev --cwd ~/projects/workstation -- ./bootstrap/python-dev.sh'
 
 summary
