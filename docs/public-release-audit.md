@@ -158,6 +158,30 @@ stays until it is pushed. Neither tag becomes visible on publication, so this
 finding needs no decision from #17. Deleting them locally remains optional and
 changes nothing a reader sees.
 
+**Answered, 2026-09-06.** The correction above holds for one reading of the
+remote. The checklist item in #17 asks for more than one reading: it asks that
+no unintended branch, tag or artifact reaches publication.
+
+`manifests/published-refs.txt` therefore declares every branch and every tag
+that the remote may hold, and gate G8 compares the declaration against `git
+ls-remote --heads --tags origin`. A difference in either direction fails the
+gate: an undeclared ref is the thing this finding is about, and a declared ref
+that the remote does not hold is a stale declaration that would hide the next
+one.
+
+G8 also fails on a release and on an Actions artifact. Neither has a
+declaration, because this repository cuts no release and tracks no workflow, so
+either one is something that no review approved.
+
+An open feature branch fails G8 as well, because a reader of a public
+repository sees it. The repository deletes a branch when it merges, so the
+remote returns to the declared list on its own, and the gate runs on the
+commit that publication exposes rather than during a review.
+
+The declaration reads the remote and not the checkout, which is the mistake the
+correction above records. `archive/agentqueue-run-cli` and `archive/pr19head`
+stay local, and G8 says nothing about them.
+
 ### F8 — The security policy has no private reporting channel yet
 
 Classification: **remove the gap before publication**, and it can only be closed
@@ -311,6 +335,7 @@ bin/publication-gate --quick  # rehearse; skips the two slow gates
 | G5 | `./verify.sh` passes with no failed check. |
 | G6 | `repo-meta check` finds no drift in the About fields or the settings, which is what F9 asks for. |
 | G7 | This file records a GO, and the audited commit is an ancestor of the commit to publish. |
+| G8 | `origin` holds only the branches and the tags that `manifests/published-refs.txt` declares, and no release and no Actions artifact. |
 
 G7 is the reason the command exists. The decision above names the commit it was
 recorded against. Publication exposes a later commit, and a decision that names

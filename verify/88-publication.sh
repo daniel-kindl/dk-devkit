@@ -76,4 +76,49 @@ fi
 check_contains 'P8 the audit documents the gate command' \
     'bin/publication-gate' "$(cat "$PUB_AUDIT" 2>/dev/null || true)"
 
-unset PUB_TOOL PUB_AUDIT pub_listed pub_documented pub_audited pub_decision
+# --- the declaration that G8 compares the remote against ------------------
+#
+# G8 reads this file and the remote. The remote needs a network and a GitHub
+# credential, so the checks here read the declaration only. They prove that
+# the file G8 depends on exists, says what a ref name must say, and agrees
+# with the default branch that the metadata manifest already declares.
+
+PUB_REFS=$REPO_ROOT/manifests/published-refs.txt
+PUB_META=$REPO_ROOT/manifests/github-metadata.json
+
+pub_refs=$(sed -e 's/#.*//' -e 's/[[:blank:]]//g' "$PUB_REFS" 2>/dev/null | grep -v '^$')
+
+check 'P9 the published-refs declaration exists' -- test -f "$PUB_REFS"
+
+if [ -z "$pub_refs" ]; then
+    fail 'P10 the declaration names only a full branch or tag ref' \
+         'the declaration names no ref'
+elif pub_bad=$(printf '%s\n' "$pub_refs" | grep -vE '^refs/(heads|tags)/[^ ]+$'); [ -n "$pub_bad" ]; then
+    fail 'P10 the declaration names only a full branch or tag ref' \
+         "$(printf '%s' "$pub_bad" | tr '\n' ' ')"
+else
+    pass "P10 the declaration names only a full branch or tag ref ($(printf '%s\n' "$pub_refs" | grep -c .) refs)"
+fi
+
+# A default branch that no ref declares makes G8 fail at publication time,
+# where the cost of finding it is highest. The two manifests must agree.
+pub_default=$(sed -n 's/.*"default_branch": *"\([^"]*\)".*/\1/p' "$PUB_META" | head -n 1)
+
+if [ -z "$pub_default" ]; then
+    fail 'P11 the declaration names the default branch' \
+         'the metadata manifest declares no default branch'
+elif printf '%s\n' "$pub_refs" | grep -Fxq -- "refs/heads/$pub_default"; then
+    pass "P11 the declaration names the default branch (refs/heads/$pub_default)"
+else
+    fail 'P11 the declaration names the default branch' \
+         "the metadata manifest declares $pub_default, which the declaration does not name"
+fi
+
+check_contains 'P12 the gate reads the declaration' \
+    'manifests/published-refs.txt' "$(cat "$PUB_TOOL" 2>/dev/null || true)"
+
+check_contains 'P13 the audit documents the declaration' \
+    'manifests/published-refs.txt' "$(cat "$PUB_AUDIT" 2>/dev/null || true)"
+
+unset PUB_TOOL PUB_AUDIT PUB_REFS PUB_META
+unset pub_listed pub_documented pub_audited pub_decision pub_refs pub_bad pub_default

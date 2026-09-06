@@ -1,0 +1,25 @@
+# Every branch and every tag that the remote may hold when this repository
+# becomes public.
+#
+# bin/publication-gate gate G8 compares this list against
+# "git ls-remote --heads --tags origin", and fails on a difference in either
+# direction. A ref that the remote holds and this file does not name is
+# unintended. A ref that this file names and the remote does not hold is a
+# stale declaration. Both are drift, and a reader of a public repository sees
+# the first one.
+#
+# refs/pull/<number>/head is not listed here. GitHub creates one for every
+# pull request, a repository cannot delete them, and the audit read every
+# pull request.
+#
+# A local branch and a local tag are outside this file. The gate reads the
+# remote, because publication exposes what GitHub holds.
+
+# An open feature branch on the remote fails the gate. That is the intended
+# reading: a reader of a public repository sees it. This repository deletes a
+# branch when it merges, so the remote returns to this list on its own.
+#
+# Write the full ref name, one for each line. A blank line and a "#" comment
+# are ignored.
+
+refs/heads/main
