@@ -11,7 +11,9 @@
 #
 # This command changes nothing. It does not change repository visibility, and
 # it does not decide for a human. docs/public-release-audit.md holds the audit,
-# the GO decision and the publication order; issue #17 owns publication.
+# the GO decision and the publication order; issue #17 owns publication. G9
+# writes one temporary directory, reads the installer's report from it, and
+# removes it again; that is the only thing this command writes.
 #
 # G7 is the reason this command exists. The GO decision names the
 # commit it was recorded against. Publication exposes a different commit, and
@@ -51,7 +53,17 @@ GATES=(
     'G6  the repository metadata and settings match the manifest'
     'G7  the audit records a GO for an ancestor of this commit'
     'G8  the remote holds no undeclared branch, tag, release or artifact'
+    'G9  the tracked tree alone runs the installer, with no local state'
+    'G10 every repository an installation clones is public'
 )
+
+# The documented read-only installer surface that G9 runs. Every mode here
+# reports and changes nothing. G9 runs on the machine that publishes, so an
+# installing mode would change it; verify.sh check P14 keeps the list read-only.
+PUBLIC_MODES='--list
+--doctor
+--state
+--dry-run --profile daniel'
 
 usage() { sed -n '2,25p' "$0"; }
 
@@ -256,6 +268,119 @@ if [ -z "$refs_detail" ]; then
     gate_pass "${GATES[7]}  ${DIM}$(printf '%s\n' "$refs_declared" | grep -c .) ref(s), 0 releases, 0 artifacts${RESET}"
 else
     gate_fail "${GATES[7]}" "$refs_detail"
+fi
+
+# --- G9 the tracked tree runs the installer with no machine-local state ----
+#
+# The checklist item in #17 is "public installation and docs do not depend on
+# private-only state". A reader of a public repository receives the tracked
+# tree and nothing else: none of this machine's configuration, and no
+# untracked file that only this checkout holds.
+#
+# So the gate builds exactly that. "git archive" writes the tracked tree of the
+# commit to publish, and each mode runs against an empty home directory with
+# this machine's XDG variables removed. An installer that reads machine-local
+# state to work fails here, and only here; on this machine it keeps passing.
+#
+# The gate reads a report and never installs. PUBLIC_MODES above holds the
+# four read-only modes, and verify.sh check P14 keeps the list read-only.
+
+clone_detail=''
+clone_modes=0
+
+# The temporary tree must not sit inside the home directory, because the check
+# below reads that path back out of the output.
+clone_base=${TMPDIR:-/tmp}
+case $clone_base in
+    "$HOME"|"$HOME"/*) clone_base=/tmp ;;
+esac
+
+if ! clone_root=$(mktemp -d "$clone_base/publication-gate.XXXXXX" 2>/dev/null); then
+    clone_detail="no temporary directory under $clone_base"
+elif ! mkdir -p "$clone_root/tree" "$clone_root/home" 2>/dev/null; then
+    clone_detail="$clone_root cannot be written"
+elif ! git archive HEAD 2>/dev/null | tar -x -C "$clone_root/tree" 2>/dev/null; then
+    clone_detail="the tracked tree of $head_short cannot be written"
+else
+    while IFS= read -r mode; do
+        [ -n "$mode" ] || continue
+        clone_modes=$(( clone_modes + 1 ))
+        # A mode is one or two constant words from the list above, so the word
+        # split is the intended reading.
+        # shellcheck disable=SC2086
+        mode_out=$(cd "$clone_root/tree" \
+            && env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME \
+                   -u XDG_CACHE_HOME HOME="$clone_root/home" \
+                   ./install.sh $mode 2>&1)
+        mode_rc=$?
+        mode_bad=''
+        if [ "$mode_rc" != 0 ]; then
+            clone_detail="${clone_detail:+$clone_detail; }install.sh $mode exited $mode_rc"
+            continue
+        fi
+        # A path of this checkout or of this home directory in the output means
+        # the run reached back out of the tree it was given.
+        mode_bad=$(printf '%s\n' "$mode_out" | grep -m1 -F -- "$REPO_ROOT")
+        if [ -z "$mode_bad" ] && [ "${#HOME}" -gt 1 ]; then
+            mode_bad=$(printf '%s\n' "$mode_out" | grep -m1 -F -- "$HOME")
+        fi
+        if [ -n "$mode_bad" ]; then
+            clone_detail="${clone_detail:+$clone_detail; }install.sh $mode named this machine: $mode_bad"
+        fi
+    done <<MODES
+$PUBLIC_MODES
+MODES
+    [ "$clone_modes" = 0 ] && clone_detail='the mode list is empty'
+fi
+
+[ -n "${clone_root:-}" ] && rm -rf -- "$clone_root"
+
+if [ -z "$clone_detail" ]; then
+    gate_pass "${GATES[8]}  ${DIM}$clone_modes read-only mode(s) on the tracked tree of $head_short${RESET}"
+else
+    gate_fail "${GATES[8]}" "$clone_detail"
+fi
+
+# --- G10 every repository an installation clones is public -----------------
+#
+# A source that the owner can read and a reader cannot is machine-local state
+# under another name: the installation works here and fails for everyone else,
+# and the failure appears after publication.
+#
+# manifests/skills.tsv names every repository this toolkit clones, and
+# bin/install-skills is the only command that clones one. verify.sh check P18
+# keeps that scope true.
+
+SKILLS_MANIFEST=manifests/skills.tsv
+
+src_detail=''
+src_count=0
+sources=$(awk -F'\t' '$0 !~ /^#/ && NF > 1 { print $2 }' "$SKILLS_MANIFEST" 2>/dev/null \
+    | sort -u)
+
+if [ ! -f "$SKILLS_MANIFEST" ]; then
+    src_detail="$SKILLS_MANIFEST does not exist"
+elif [ -z "$sources" ]; then
+    src_detail="$SKILLS_MANIFEST names no source repository"
+elif ! command -v gh >/dev/null 2>&1; then
+    src_detail='gh is not on PATH, so no source repository was read'
+else
+    # A repository name holds no space, so the word split is safe.
+    for source in $sources; do
+        src_count=$(( src_count + 1 ))
+        visibility=$(gh repo view "$source" --json visibility --jq '.visibility' 2>/dev/null)
+        case $visibility in
+            PUBLIC) ;;
+            '')     src_detail="${src_detail:+$src_detail; }$source cannot be read" ;;
+            *)      src_detail="${src_detail:+$src_detail; }$source is $visibility" ;;
+        esac
+    done
+fi
+
+if [ -z "$src_detail" ]; then
+    gate_pass "${GATES[9]}  ${DIM}$src_count source repository(s)${RESET}"
+else
+    gate_fail "${GATES[9]}" "$src_detail"
 fi
 
 # --- what the GO does not cover -------------------------------------------

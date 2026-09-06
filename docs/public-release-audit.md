@@ -336,6 +336,8 @@ bin/publication-gate --quick  # rehearse; skips the two slow gates
 | G6 | `repo-meta check` finds no drift in the About fields or the settings, which is what F9 asks for. |
 | G7 | This file records a GO, and the audited commit is an ancestor of the commit to publish. |
 | G8 | `origin` holds only the branches and the tags that `manifests/published-refs.txt` declares, and no release and no Actions artifact. |
+| G9 | A `git archive` of the tracked tree runs `--list`, `--doctor`, `--state` and `--dry-run --profile daniel` against an empty home directory, so no machine-local state and no untracked file is what makes the installer work. |
+| G10 | Every repository an installation clones is public. `manifests/skills.tsv` names them, and `bin/install-skills` is the only command that clones one. |
 
 G7 is the reason the command exists. The decision above names the commit it was
 recorded against. Publication exposes a later commit, and a decision that names
@@ -343,6 +345,28 @@ an older one carries nothing by itself. The gate confirms the ancestry, then
 prints every tracked file that changed since the audited commit. That is the
 part a tool cannot judge, and printing it makes the human re-check bounded
 instead of open-ended.
+
+G9 and G10 answer the checklist item "public installation and docs do not
+depend on private-only state". Each half fails in its own way. A reader of a
+public repository receives the tracked tree and nothing else, so G9 builds
+exactly that and runs the four read-only installer modes against an empty home
+directory with this machine's XDG variables removed. An untracked file, or one
+value under `~/.config` that only this machine holds, then fails there and
+nowhere else. G10 reads the other direction: a source repository the owner can
+clone and a reader cannot is the same defect wearing a network, and it would
+appear only after publication.
+
+Both gates are read-only. G9 runs on the machine that publishes, so
+`PUBLIC_MODES` in the command holds four reporting modes and check P14 fails if
+an installing mode joins them. Checks P15 to P18 hold the rest offline: the
+tree comes from the commit rather than from the checkout, the run drops this
+machine's XDG variables, every source names one owner and repository, and
+`bin/install-skills` is still the only command that clones one, which is what
+makes G10's scope claim true.
+
+The documentation half of the same item needs no gate here. Module 7 fails when
+a tracked file names the running machine's home directory, and module 10 checks
+that every documentation link resolves inside the tree.
 
 A gate that did not run did not pass. `--quick` therefore reports NO-GO even
 when every gate it ran passed, which keeps a rehearsal from reading like a
