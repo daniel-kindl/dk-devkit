@@ -82,6 +82,8 @@ Log out and back in if `~/.local/bin` is not yet on your `PATH`.
 
 ## 5. Bootstrap the web-dev container
 
+Step 4 created the container. This step converges the toolchain inside it.
+
 ```bash
 ~/.local/bin/devbox exec web-dev --cwd ~/projects/dk-devkit -- ./bootstrap/web-dev.sh
 ```
@@ -96,6 +98,27 @@ This step:
 - installs the 43 skills in `manifests/skills.tsv`, then runs `sync-agent-skills`
 - installs the real `agentq` coordinator runtime
 - applies the shared status line to both clients
+
+## 5b. Bootstrap the other development environments
+
+The `daniel` profile composes `python-dev` and `rust-dev` as well. Step 4
+created both containers. Each one converges its own toolchain, in its own
+isolated HOME, with its own script:
+
+```bash
+~/.local/bin/devbox exec python-dev --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh
+~/.local/bin/devbox exec rust-dev   --cwd ~/projects/dk-devkit -- ./bootstrap/rust-dev.sh
+```
+
+Each one installs the distribution packages, the shell integration, the
+language toolchain, the agent CLIs, the shared agent wiring, the skills and the
+status line. Neither one installs the `agentq` runtime, which lives in `web-dev`
+only.
+
+Skip an environment you do not want. Each is an independent module, so the rest
+of the machine converges without it. `docs/environments.md` lists what exists,
+`docs/python-dev.md` and `docs/rust-dev.md` describe each toolchain, and
+`docs/bootstrap.md` holds the step tables.
 
 ## 6. MANUAL: authenticate GitHub
 
@@ -123,6 +146,17 @@ devbox exec web-dev -- codex login
 ```
 
 Both open a browser on the host.
+
+Repeat steps 6 and 7 for every environment you bootstrapped in step 5b. Each
+environment has its own isolated HOME, so each one authenticates on its own:
+
+```bash
+devbox exec python-dev -- gh auth login --git-protocol ssh
+devbox exec rust-dev   -- gh auth login --git-protocol ssh
+```
+
+The SSH key is not copied into any of them. Every container reaches GitHub
+through the forwarded host ssh-agent from step 2.
 
 ## 8. MANUAL: prepare unattended agent runs
 
@@ -245,10 +279,11 @@ run them again.
 | The agent images are stale | `agentbox build --force` |
 | The container is broken beyond repair | see below |
 
-### Recreating the web-dev container
+### Recreating a development environment container
 
-This destroys the isolated HOME, which holds the agent authentication. Only do
-it deliberately.
+The steps are the same for every environment. Replace `web-dev` with
+`python-dev` or `rust-dev`, and the bootstrap script with the one that
+environment owns. Only do it deliberately.
 
 ```bash
 devbox exec web-dev -- true                    # confirm it is really unusable
@@ -259,7 +294,14 @@ devbox exec web-dev --cwd ~/projects/dk-devkit -- ./bootstrap/web-dev.sh
 
 `podman rm -f` removes the container, not `~/.local/share/distrobox-homes/web-dev`.
 The HOME survives, so authentication survives with it. Remove that directory
-only if you intend to re-authenticate everything.
+only if you intend to re-authenticate that environment.
 
 Never use `distrobox assemble create --replace`: it removes the container and
 can take the isolated HOME with it.
+
+Each environment declares its container definition and its bootstrap script in
+`components/<id>/component.json`. Read them with:
+
+```bash
+./install.sh --environments
+```

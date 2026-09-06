@@ -91,11 +91,19 @@ Both read the existing `gh` login and hold no credential of their own. Both refu
 ```text
 Bazzite/Fedora host
 |
-+-- devbox ----------------------> web-dev Distrobox
-|                                  +-- Node / pnpm
-|                                  +-- Claude Code
-|                                  +-- Codex
-|                                  `-- agentq runtime
++-- devbox --+-------------------> web-dev Distrobox
+|            |                     +-- Node / pnpm
+|            |                     +-- Claude Code
+|            |                     +-- Codex
+|            |                     `-- agentq runtime
+|            |
+|            +-------------------> python-dev Distrobox
+|            |                     +-- Python / uv
+|            |                     `-- Claude Code, Codex
+|            |
+|            `-------------------> rust-dev Distrobox
+|                                  +-- Rust / cargo, through rustup
+|                                  `-- Claude Code, Codex
 |
 +-- agentbox
 |    +-- disposable clone
@@ -105,6 +113,10 @@ Bazzite/Fedora host
 `-- agentq host shim
      `-- trusted GitHub coordinator in web-dev
 ```
+
+Each environment has its own isolated home, and the router picks the one that
+owns a repository. `dotnet-dev` and `android-dev` are declared modules with no
+installation yet.
 
 The trust boundary is deliberate:
 

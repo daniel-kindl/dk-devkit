@@ -30,6 +30,22 @@ Orca generates all of it, and the hook commands embed absolute machine paths.
 Orca rewrites them when it starts. `bootstrap/*.sh` never touches the `hooks`
 key, and `verify.sh` checks that the key survived.
 
+## Isolated container homes
+
+`~/.local/share/distrobox-homes/web-dev/`,
+`~/.local/share/distrobox-homes/python-dev/`,
+`~/.local/share/distrobox-homes/rust-dev/`.
+
+Each development environment keeps its own HOME, so its dotfiles never reach
+the host home. Every environment module declares that path as `state.local`,
+and [environments.md](environments.md) describes the module.
+
+The directory holds the agent authentication for that environment, the
+installed toolchain and the per-session state that the sections above already
+exclude. The bootstrap script of the environment reproduces everything else in
+it. Removing one means re-authenticating that environment, which is why
+[recovery.md](recovery.md) recreates a container without removing its HOME.
+
 ## Toolchain payloads
 
 `~/.config/nvm/` (the nvm checkout and every installed Node), `node_modules/`,
