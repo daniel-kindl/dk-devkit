@@ -25,9 +25,12 @@ system, so this repository adds as little to it as possible:
 - `~/projects`, the one root for source checkouts
 - `~/.local/bin/devbox`, the environment router
 - `~/.local/bin/claude` and `~/.local/bin/codex`, shims that call the router
+- `~/.local/bin/pi`, the Pi coding harness, which runs on the host itself
 
 The host holds **no language toolchain**. There is no Node and no npm on the
-host. `verify.sh` checks this, and reports a failure if one appears.
+host. `verify.sh` checks this, and reports a failure if one appears. Pi has a
+private Node runtime of its own, and the section below says why that is not the
+same thing.
 
 **A Distrobox container** holds one purpose-specific development environment.
 `web-dev`, `python-dev` and `rust-dev` exist today. `dotnet-dev` and
@@ -88,6 +91,75 @@ inside `web-dev` reaches the real `claude` binary and not the shim. The router
 also strips the host `~/.local/bin` from the container `PATH` for the same
 reason, because Distrobox forwards the host `PATH` verbatim.
 
+## Pi, the host coding harness
+
+Pi is the one interactive agent that runs **on the host**. There is exactly one
+installation of it.
+
+    ~/.local/bin/pi                    the launcher (generated)
+    ~/.local/share/pi-node/current/    the private Node runtime
+    ~/.local/share/pi/npm/             the npm prefix that holds the Pi package
+    ~/.pi/agent/                       Pi's configuration, authentication and sessions
+    ~/.pi/agent/AGENTS.md -> config/agents/AGENTS.md
+
+### Why Pi does not follow the claude and codex model
+
+The `claude` and `codex` shims route into the environment that owns a
+repository, because those CLIs are installed inside that environment. Copying
+that model for Pi would mean one Pi per environment, which is the opposite of
+what Pi is for: it is a control plane, and it should see every repository from
+one place.
+
+`~/.local/bin/pi` is therefore a launcher, not a router shim. It resolves no
+repository and enters no container. Distrobox forwards the host PATH verbatim,
+so the launcher is visible from inside every environment; it refuses to run
+there, the same way the router refuses to route from inside a container.
+
+### Why the private runtime is not a host Node toolchain
+
+Pi needs Node 22.19 or newer. The host rule against a Node toolchain still
+holds, because the runtime is Pi's own:
+
+- it lives under `~/.local/share/pi-node/`, which is where the official Pi
+  installer puts a standalone Node;
+- it is never added to the host PATH, so an interactive host shell resolves no
+  `node`, `npm` or `pnpm`, and `verify.sh` module 1 proves that;
+- only the generated launcher puts it on the PATH of the Pi process, because Pi
+  runs `npm` itself when it installs or updates a pi package.
+
+The Pi package is installed with `npm install --global --ignore-scripts
+--prefix ~/.local/share/pi/npm`, which is the distribution mechanism the Pi
+documentation names first. The `pi.dev/install.sh` script is a convenience
+wrapper around the same command; it was read before this component was written,
+and `manifests/pi.env` records it as the reference. This repository executes no
+remote shell script.
+
+### Project command delegation is planned, not implemented
+
+Pi reads and edits the shared repository filesystem directly today. Running a
+project command inside the environment that owns the repository is future work:
+
+    Pi on the host
+      |
+      +-- read and edit the shared repository filesystem
+      |
+      `-- execute a project command
+                |
+                v
+              devbox
+                |
+                +-- resolve the repository to an environment
+                |
+                v
+           the Distrobox that owns it
+
+That extension will **call** `devbox`. It will not repeat the resolution, and
+it adds no second repository-to-environment mapping. `verify.sh` module 4b
+checks that the Pi component declares none. The extension belongs in the
+`dk-pi` repository, which owns Pi-specific extensions, skills, prompts, themes
+and safe declarative configuration. `dk-devkit` keeps the installation, the
+shared policy and the routing.
+
 ## Shared agent configuration
 
 `~/.agents` is the canonical cross-agent configuration area. It lives inside the
@@ -101,6 +173,10 @@ reason, because Distrobox forwards the host `PATH` verbatim.
     ~/.claude/skills         -> ~/.agents/skills
     ~/.codex/skills/<name>   -> ~/.agents/skills/<name>   (one link per skill)
     ~/.codex/skills/.system  Codex native skills, never touched
+
+The host Pi reads the same policy file, from its own home:
+
+    ~/.pi/agent/AGENTS.md    -> config/agents/AGENTS.md   (this repository)
 
 Claude Code accepts one directory symlink for the whole skill store. Codex needs
 one symlink per skill, because `~/.codex/skills/.system` holds the Codex native

@@ -27,6 +27,16 @@
       "probe": { "kind": "command", "value": "python3" }
     },
     {
+      "id": "curl",
+      "summary": "the curl command",
+      "probe": { "kind": "command", "value": "curl" }
+    },
+    {
+      "id": "xz",
+      "summary": "the xz compressor, which extracts a .tar.xz archive",
+      "probe": { "kind": "command", "value": "xz" }
+    },
+    {
       "id": "package-manager",
       "summary": "a system package manager the platform adapter can name",
       "probe": { "kind": "platform" }

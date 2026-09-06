@@ -158,6 +158,17 @@ devbox exec rust-dev   -- gh auth login --git-protocol ssh
 The SSH key is not copied into any of them. Every container reaches GitHub
 through the forwarded host ssh-agent from step 2.
 
+Pi is the exception, because it runs on the host and there is exactly one
+installation. Authenticate it from a host terminal:
+
+```bash
+pi                                     # then /login, once per provider
+```
+
+`/login` offers the subscription providers. Claude Pro/Max and ChatGPT
+Plus/Pro (Codex) are the two this workstation uses. Pi stores the tokens in
+`~/.pi/agent/auth.json`, which stays out of Git.
+
 ## 8. MANUAL: prepare unattended agent runs
 
 `bootstrap/host.sh` already installed `agentbox` and created

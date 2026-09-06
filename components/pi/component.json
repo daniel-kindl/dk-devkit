@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "pi",
+  "name": "Pi coding harness",
+  "kind": "tool",
+  "group": "Core tools",
+  "summary": "Installs the Pi terminal coding harness once, on the host, with its own private Node runtime.",
+  "requires": ["agent-home"],
+  "capabilities": ["linux", "host", "curl", "xz"],
+  "unattended": true,
+  "install": ["components/pi/install.sh"],
+  "doctor": ["components/pi/doctor.sh"],
+  "verify": ["./verify.sh", "--only", "45"],
+  "manual": [
+    "Sign in to Pi on the host: run \"pi\", then \"/login\" once for Claude Pro/Max and once for ChatGPT (Codex)."
+  ],
+  "state": {
+    "public": ["manifests/pi.env"],
+    "local": [
+      "~/.local/share/pi-node/",
+      "~/.local/share/pi/",
+      "~/.local/bin/pi",
+      "~/.pi/agent/"
+    ]
+  }
+}

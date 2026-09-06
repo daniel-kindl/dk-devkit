@@ -15,7 +15,7 @@ else
     forbidden=''
     for pattern in '.credentials.json' 'auth.json' 'hosts.yml' '*.sqlite' \
                    'id_ed25519' 'id_rsa' '.claude.json' 'repos.tsv' \
-                   'third-party-skills.tsv' '.skill-lock.json'; do
+                   'third-party-skills.tsv' '.skill-lock.json' 'trust.json'; do
         hits=$(cd "$REPO_ROOT" && git ls-files -- "*$pattern" 2>/dev/null | head -3)
         [ -n "$hits" ] && forbidden="$forbidden $pattern"
     done
@@ -29,7 +29,8 @@ else
     unignored=''
     for probe in .ssh/id_ed25519 .claude/.credentials.json .codex/auth.json \
                  .config/gh/hosts.yml .codex/state_5.sqlite skills/humanizer/SKILL.md \
-                 config/devbox-router/repos.tsv .claude.json; do
+                 config/devbox-router/repos.tsv .claude.json \
+                 .pi/agent/auth.json .pi/agent/trust.json .pi/agent/sessions/x.jsonl; do
         (cd "$REPO_ROOT" && git check-ignore -q "$probe") || unignored="$unignored $probe"
     done
     if [ -z "$unignored" ]; then

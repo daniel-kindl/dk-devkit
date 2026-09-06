@@ -21,9 +21,11 @@
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
 #   * installs the agentbox CLI and prepares its credential file location
 #   * installs the agentq host shim, which delegates into the container
+#   * installs Pi once on the host, with its own private Node runtime
 #
 # What it never does:
-#   * install a Node, npm, Python, or uv toolchain on the host
+#   * install a Node, npm, Python, or uv toolchain on the host: the private
+#     runtime that Pi needs is reachable from Pi only, never from a host shell
 #   * install the agentq runtime on the host: the host gets the shim only
 #   * touch an existing development container
 #   * write any credential
@@ -42,6 +44,8 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 . "$REPO_ROOT/bootstrap/lib/environments.sh"
 # shellcheck source=lib/agent-home.sh
 . "$REPO_ROOT/bootstrap/lib/agent-home.sh"
+# shellcheck source=lib/pi.sh
+. "$REPO_ROOT/bootstrap/lib/pi.sh"
 # shellcheck source=lib/sandcastle.sh
 . "$REPO_ROOT/bootstrap/lib/sandcastle.sh"
 # shellcheck source=lib/agentq.sh
@@ -96,6 +100,13 @@ info 'to recreate a development container deliberately, see docs/recovery.md'
 
 # ------------------------------------------------------- Codex host settings --
 install_host_agent_home "$REPO_ROOT"
+
+# ------------------------------------------------------------------------ Pi --
+# Pi is the one interactive agent that runs ON the host. It is installed once,
+# with its own private Node runtime, so the host rule against a Node toolchain
+# still holds. It is not installed into any development environment, and
+# ~/.local/bin/pi is not a router shim. See docs/architecture.md.
+install_host_pi "$REPO_ROOT"
 
 # --------------------------------------------------- Sandcastle (agentbox) --
 section 'Agent orchestration (agentbox)'

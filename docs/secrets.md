@@ -16,7 +16,9 @@ closed.
 | GitHub authentication | `~/.config/gh/hosts.yml`, the token in the system keyring |
 | Claude Code authentication | `~/.claude/.credentials.json`, `~/.claude.json` |
 | Codex authentication | `~/.codex/auth.json` |
-| Agent session state | `~/.claude/sessions/`, `~/.codex/*.sqlite`, `history.jsonl` |
+| Pi authentication | `~/.pi/agent/auth.json` |
+| Pi project trust decisions | `~/.pi/agent/trust.json` |
+| Agent session state | `~/.claude/sessions/`, `~/.codex/*.sqlite`, `history.jsonl`, `~/.pi/agent/sessions/` |
 | Keyrings and password stores | `~/.gnupg/`, `~/.pki/`, KWallet |
 | Caches, logs, histories | `~/.cache/`, `~/.bash_history` |
 | Machine identifiers | `installation_id`, `device-id` |
@@ -170,5 +172,7 @@ bootstrap, these steps are yours:
 2. `gh auth login --git-protocol ssh`, on the host and inside `web-dev`.
 3. `claude`, then `/login`.
 4. `codex login`.
+5. `pi`, then `/login`, on the host. Pi runs there, and there is one
+   installation of it.
 
 `docs/recovery.md` lists these in order, with the rest of the sequence.

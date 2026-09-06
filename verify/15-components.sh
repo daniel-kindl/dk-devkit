@@ -68,7 +68,7 @@ fi
 # The host bootstrap and the component installer must converge the same state.
 # They do that by calling the same library function, never by holding two
 # copies of the same step.
-for library in host-packages devbox environments agent-home; do
+for library in host-packages devbox environments agent-home pi; do
     check "C16 bootstrap/lib/$library.sh is shared" -- \
         test -f "$REPO_ROOT/bootstrap/lib/$library.sh"
 done
@@ -76,6 +76,10 @@ check 'C17 the host bootstrap composes the libraries' -- \
     grep -q 'install_devbox_router "\$REPO_ROOT"' "$REPO_ROOT/bootstrap/host.sh"
 check 'C18 the devbox component composes the same library' -- \
     grep -q 'install_devbox_router "\$REPO_ROOT"' "$REPO_ROOT/components/devbox/install.sh"
+check 'C18b the host bootstrap composes the Pi library' -- \
+    grep -q 'install_host_pi "\$REPO_ROOT"' "$REPO_ROOT/bootstrap/host.sh"
+check 'C18c the pi component composes the same library' -- \
+    grep -q 'install_host_pi "\$REPO_ROOT"' "$REPO_ROOT/components/pi/install.sh"
 
 # The public/local state boundary. A component declares the tracked
 # configuration it owns and the machine-local state it writes. Both sides are
