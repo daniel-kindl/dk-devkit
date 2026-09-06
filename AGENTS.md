@@ -73,6 +73,16 @@ Edit it only through this repository.
     so that one step never has two copies. `verify.sh` module 1b checks that,
     and `docs/components.md` says why.
 
+11. **Keep a distribution fact in the adapter.** `manifests/platforms.json` is
+    the only place that names a distribution, a package manager or a
+    distribution-specific command. Component logic and the shared bootstrap
+    libraries ask for a capability, and read a platform step through
+    `platform_hint`. Never add a distribution check to a component; add the
+    capability first, and let an adapter answer for it. A support tier states
+    the verification evidence, so do not raise one without a passing
+    `./verify.sh` on that platform. `verify.sh` module 1c checks each of these,
+    and `docs/platforms.md` says why.
+
 ## Prose
 
 Use ASD-STE100 as the baseline, in STE-flavored mode, for the documentation,

@@ -32,6 +32,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/platform.sh
+. "$REPO_ROOT/bootstrap/lib/platform.sh"
 # shellcheck source=lib/host-packages.sh
 . "$REPO_ROOT/bootstrap/lib/host-packages.sh"
 # shellcheck source=lib/devbox.sh
