@@ -120,5 +120,64 @@ check_contains 'P12 the gate reads the declaration' \
 check_contains 'P13 the audit documents the declaration' \
     'manifests/published-refs.txt' "$(cat "$PUB_AUDIT" 2>/dev/null || true)"
 
+# --- what G9 and G10 promise, without a network ---------------------------
+#
+# G9 builds the tracked tree and runs the installer against an empty home
+# directory. G10 reads GitHub. The checks here read this file and the tree, so
+# they state the properties that make both gates mean what they say.
+
+pub_modes=$(sed -n "/^PUBLIC_MODES='/,/'$/p" "$PUB_TOOL" \
+            | sed -e "s/^PUBLIC_MODES='//" -e "s/'$//" | grep -v '^$')
+
+# G9 runs on the machine that publishes. A mode that installs would change it.
+if [ -z "$pub_modes" ]; then
+    fail 'P14 the gate runs only read-only installer modes' \
+         'the gate declares no installer mode'
+elif pub_writes=$(printf '%s\n' "$pub_modes" \
+                  | grep -vE '^--(list|doctor|state|dry-run)( |$)'); [ -n "$pub_writes" ]; then
+    fail 'P14 the gate runs only read-only installer modes' \
+         "$(printf '%s' "$pub_writes" | tr '\n' ' ')"
+else
+    pass "P14 the gate runs only read-only installer modes ($(printf '%s\n' "$pub_modes" | grep -c .) modes)"
+fi
+
+# An untracked file on this machine must not be what makes the installer work,
+# so the gate builds the tree from the commit rather than copying the checkout.
+check_contains 'P15 the gate builds the tree from the tracked commit' \
+    'git archive HEAD' "$(cat "$PUB_TOOL" 2>/dev/null || true)"
+
+check_contains 'P16 the gate removes this machine XDG state from the run' \
+    '-u XDG_CONFIG_HOME' "$(cat "$PUB_TOOL" 2>/dev/null || true)"
+
+# --- the source list that G10 reads ---------------------------------------
+
+PUB_SKILLS=$REPO_ROOT/manifests/skills.tsv
+
+pub_sources=$(awk -F'\t' '$0 !~ /^#/ && NF > 1 { print $2 }' "$PUB_SKILLS" 2>/dev/null \
+              | sort -u)
+
+if [ -z "$pub_sources" ]; then
+    fail 'P17 every source names one GitHub owner and repository' \
+         "$PUB_SKILLS names no source repository"
+elif pub_bad_src=$(printf '%s\n' "$pub_sources" \
+                   | grep -vE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'); [ -n "$pub_bad_src" ]; then
+    fail 'P17 every source names one GitHub owner and repository' \
+         "$(printf '%s' "$pub_bad_src" | tr '\n' ' ')"
+else
+    pass "P17 every source names one GitHub owner and repository ($(printf '%s\n' "$pub_sources" | grep -c .) sources)"
+fi
+
+# G10 claims to cover every repository an installation clones. That claim holds
+# only while one command does the cloning, so the scope is a check too.
+pub_cloners=$(grep -rlE 'git clone.*https://github\.com/' \
+              "$REPO_ROOT/bin" "$REPO_ROOT/bootstrap" "$REPO_ROOT/components" \
+              "$REPO_ROOT/lib" 2>/dev/null | sort)
+
+check_eq 'P18 one command clones every source that G10 reads' \
+    "$REPO_ROOT/bin/install-skills" "$pub_cloners"
+
+unset PUB_SKILLS
+unset pub_modes pub_writes pub_sources pub_bad_src pub_cloners
+
 unset PUB_TOOL PUB_AUDIT PUB_REFS PUB_META
 unset pub_listed pub_documented pub_audited pub_decision pub_refs pub_bad pub_default
