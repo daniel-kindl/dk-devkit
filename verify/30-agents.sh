@@ -1,4 +1,7 @@
-# Agent CLIs, shared configuration wiring, skills and the Orca bridge.
+# Agent CLIs, shared configuration wiring and the Orca bridge.
+#
+# The third-party skills live in module 3e, because they are the
+# agent-skills component's own verification.
 
 section '3. Agent CLIs inside web-dev'
 
@@ -38,44 +41,12 @@ else
     fail 'Claude and Codex read exactly the same policy file' 'one of the links is unreadable'
 fi
 
-section '3c. Skills'
+section '3c. Codex native skills'
 
-STORE=$BOX_HOME/.agents/skills
-check 'canonical skill store exists' -- test -d "$STORE"
-check_link '~/.claude/skills -> the canonical store' "$BOX_HOME/.claude/skills" "$STORE"
-
-missing=''
-count=0
-while IFS=$'\t' read -r name _source _ref _path; do
-    case ${name:-} in ''|'#'*) continue ;; esac
-    count=$(( count + 1 ))
-    [ -f "$STORE/$name/SKILL.md" ] || missing="$missing $name"
-done < "$REPO_ROOT/manifests/skills.tsv"
-if [ -z "$missing" ]; then
-    pass "every skill in manifests/skills.tsv is installed ($count skills)"
-else
-    fail 'every skill in manifests/skills.tsv is installed' "missing:$missing" \
-         'run bin/install-skills'
-fi
-
-# Codex needs one symlink per skill, and its native skills must survive.
+# The skill store itself belongs to the agent-skills component, and module 3e
+# verifies it. Codex owns the native skills under .system, so what this module
+# checks is that installing the third-party skills never removes them.
 CODEX_SKILLS=$BOX_HOME/.codex/skills
-broken=''
-for name in $(cd "$STORE" 2>/dev/null && ls -1 2>/dev/null); do
-    [ -d "$STORE/$name" ] || continue
-    if [ ! -L "$CODEX_SKILLS/$name" ]; then
-        broken="$broken $name"
-    elif [ "$(readlink -f -- "$CODEX_SKILLS/$name")" != "$(readlink -f -- "$STORE/$name")" ]; then
-        broken="$broken $name(wrong-target)"
-    fi
-done
-if [ -z "$broken" ]; then
-    pass 'Codex has a per-skill symlink for every skill in the store'
-else
-    fail 'Codex has a per-skill symlink for every skill in the store' \
-         "broken:$broken" 'run sync-agent-skills'
-fi
-
 if [ -d "$CODEX_SKILLS/.system" ] && [ ! -L "$CODEX_SKILLS/.system" ]; then
     n=$(find "$CODEX_SKILLS/.system" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
     pass "Codex native skills in .system are preserved ($n skills, real directory)"

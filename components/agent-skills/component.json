@@ -10,7 +10,7 @@
   "unattended": true,
   "install": ["components/agent-skills/install.sh"],
   "doctor": ["bin/install-skills", "--check"],
-  "verify": null,
+  "verify": ["./verify.sh", "--only", "35"],
   "manual": [],
   "state": {
     "public": ["manifests/skills.tsv"],

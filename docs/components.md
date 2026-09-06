@@ -102,7 +102,10 @@ it. The planned development environments are in
 - `doctor` decides whether the component is already ready. A component with no
   `doctor` is always installed when it is selected.
 - `verify` runs after installation, and only for the components the run
-  selected.
+  selected. It is the focused check that proves this component converged, so
+  it names its own numbered module in `verify/`. Prefer a new module to a
+  wider one: `./verify.sh --only <n>` then stays the focused answer, and one
+  check never has two copies.
 - A component with neither `install` nor `doctor` is a **composition**. It
   installs nothing of its own; a profile is the usual case.
 - A component with a `doctor` but no `install` needs the platform to supply
@@ -334,7 +337,10 @@ installable on its own.
    `manifests/capabilities.json` first, and let an adapter answer for it.
 4. Add the component to a profile only where that profile genuinely composes
    it. A reusable component must not depend on a profile.
-5. `./verify.sh --only 15` checks the contract, the resolver and the tests.
+5. Add the focused verification module and declare it as `verify`. The
+   component then proves what it installed, and a reader who installs one
+   component gets the evidence for it.
+6. `./verify.sh --only 15` checks the contract, the resolver and the tests.
    `./verify.sh --only 16` checks the platform adapters, and
    `./verify.sh --only 17` checks the development environment modules.
 

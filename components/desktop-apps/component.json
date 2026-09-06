@@ -10,7 +10,7 @@
   "unattended": true,
   "install": ["components/desktop-apps/install.sh"],
   "doctor": null,
-  "verify": null,
+  "verify": ["./verify.sh", "--only", "19"],
   "manual": [],
   "state": { "public": ["manifests/flatpaks.txt"], "local": [] }
 }
