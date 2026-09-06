@@ -276,6 +276,23 @@ class TestTheReport(InspectCase):
         report = self.inspect(read_default_branch=boom)
         self.assertEqual(self.find(report, "base-branch").state, setup_mod.GAP)
 
+    def test_a_default_branch_github_did_not_name_is_a_gap(self):
+        # A repository that is not there, or that this account cannot see,
+        # answers with nothing. An absent finding would read as an answer.
+        report = self.inspect(read_default_branch=lambda: "")
+        finding = self.find(report, "base-branch")
+        self.assertEqual(finding.state, setup_mod.GAP)
+        self.assertIn("acme/widget", finding.detail)
+        self.assertFalse(report.ready)
+
+    def test_a_github_read_that_fails_reports_one_base_branch_finding(self):
+        def boom():
+            raise RuntimeError("network")
+
+        report = self.inspect(read_default_branch=boom)
+        found = [f for f in report.findings if f.key == "base-branch"]
+        self.assertEqual(len(found), 1)
+
     def test_an_unread_github_default_branch_is_a_note(self):
         report = self.inspect(read_default_branch=None)
         self.assertEqual(self.find(report, "base-branch").state, setup_mod.NOTE)
