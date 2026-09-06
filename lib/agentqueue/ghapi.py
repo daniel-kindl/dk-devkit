@@ -204,6 +204,34 @@ class GitHub:
             result.append(int(item["number"]))
         return result
 
+    def default_branch(self) -> str:
+        """The branch GitHub calls the default one, or "" when it is unknown.
+
+        Only ``agentq setup`` reads it. A run trusts ``baseBranch`` from the
+        policy, because the policy is the deliberate statement and the GitHub
+        default is only evidence that the two disagree.
+        """
+        raw = self._api(f"repos/{self.repo}", allow_status=(404,))
+        return (raw or {}).get("default_branch") or ""
+
+    def list_labels(self) -> List[Dict[str, str]]:
+        """Every label the repository defines. Read only.
+
+        ``agentq`` reads labels; it never writes them. The tool that converges
+        a repository to the canonical catalog is ``repo-labels``, and the
+        separation is deliberate: a backlog run must not rewrite the taxonomy
+        of the repository it works in.
+        """
+        raw = self._api(f"repos/{self.repo}/labels?per_page=100", paginate=True) or []
+        return [
+            {
+                "name": item.get("name") or "",
+                "color": (item.get("color") or "").lower(),
+                "description": item.get("description") or "",
+            }
+            for item in raw
+        ]
+
     def list_pulls(self, state: str = "open") -> List[PullRequest]:
         raw = self._api(
             f"repos/{self.repo}/pulls?state={state}&per_page=100", paginate=True

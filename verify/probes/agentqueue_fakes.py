@@ -50,6 +50,9 @@ class FakeGitHub:
         self.logs: Dict[str, str] = {}
         self._next_comment = 1000
         self._next_pull = 500
+        # Repository facts that only agentq setup reads.
+        self.default_branch_name = "main"
+        self.repository_labels: List[Dict[str, str]] = []
         self.merge_calls: List[tuple] = []
         self.merge_should_conflict = False
         # maxParallel above 1 drives this double from several threads. The
@@ -91,6 +94,12 @@ class FakeGitHub:
         if not self.native_dependencies:
             return None
         return list(self.dependencies.get(number, []) or [])
+
+    def default_branch(self):
+        return self.default_branch_name
+
+    def list_labels(self):
+        return [dict(item) for item in self.repository_labels]
 
     def find_pull_for_branch(self, branch):
         found = [p for p in self.pulls.values() if p.head_ref == branch]
