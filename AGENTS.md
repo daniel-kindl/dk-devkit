@@ -1,6 +1,9 @@
 # Agent instructions for the workstation repository
 
-This repository defines a Bazzite development workstation. It is infrastructure
+This repository is a portable personal development toolkit: reusable commands,
+agent workflows, environment definitions and policies. Daniel's complete
+Bazzite workstation is one profile of the same components, and Bazzite is the
+only platform with verification evidence today. It is infrastructure
 configuration, not an application.
 
 The global policy in `config/agents/AGENTS.md` also applies here. That file is

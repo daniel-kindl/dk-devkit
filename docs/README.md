@@ -47,3 +47,4 @@ who installs one component does not need them.
 | Document | What it covers |
 | --- | --- |
 | [public-release-audit.md](public-release-audit.md) | The public-readiness audit, its findings, and the GO decision |
+| [naming.md](naming.md) | The repository-name evaluation, the decision, and what reopens it |
