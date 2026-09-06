@@ -38,6 +38,29 @@ else
         fail '.gitignore refuses every credential and runtime-state probe path' \
              "not ignored:$unignored"
     fi
+
+    # No tracked file may name the home directory of the machine it runs on.
+    # The tree carried one until #38 parameterized it, and a published
+    # repository cannot un-say an account name. The path is derived at run
+    # time, so this file names no account and the guard works on any machine.
+    account=${HOST_HOME##*/}
+    case $account in
+        agent|agentbox|linuxbrew|root|'')
+            skip 'no tracked file names this machine home directory' \
+                 "the account is \"$account\", which the sandbox images also use" ;;
+        *)
+            named=$(cd "$REPO_ROOT" && git grep -lIF \
+                        -e "/home/$account" -e "/var/home/$account" \
+                        -e "/Users/$account" -- . 2>/dev/null | head -3)
+            if [ -z "$named" ]; then
+                pass 'no tracked file names this machine home directory'
+            else
+                fail 'no tracked file names this machine home directory' \
+                     "${named//$'\n'/ }"
+            fi ;;
+    esac
 fi
 
 check 'docs/secrets.md documents the secret policy' -- test -f "$REPO_ROOT/docs/secrets.md"
+check 'docs/public-release-audit.md records the publication decision' \
+    -- test -f "$REPO_ROOT/docs/public-release-audit.md"
