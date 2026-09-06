@@ -32,6 +32,17 @@ PLATFORM_MANIFEST = ROOT / "manifests" / "platforms.json"
 
 KINDS = ("tool", "runtime", "environment", "extras", "profile")
 PROFILE = "profile"
+ENVIRONMENT = "environment"
+STATUSES = ("supported", "planned")
+PLANNED = "planned"
+# What an environment module must declare. A planned module declares the
+# boundary only: the container name and the router markers it owns. A
+# supported module also declares every file that installs it.
+ENVIRONMENT_KEYS = ("container", "ini", "packages", "toolchain", "bootstrap",
+                    "router", "inference", "home")
+ENVIRONMENT_REQUIRED = ("container", "inference")
+ENVIRONMENT_SUPPORTED_REQUIRED = ("ini", "packages", "toolchain", "bootstrap",
+                                  "router", "home")
 PROBE_KINDS = ("command", "executable", "uname", "not-container", "any", "platform")
 SUPPORT = ("verified", "supported", "experimental", "unsupported")
 
@@ -93,6 +104,7 @@ class Component:
     kind: str
     group: str
     summary: str
+    status: str
     requires: tuple[str, ...]
     capabilities: tuple[str, ...]
     unattended: bool
@@ -102,6 +114,12 @@ class Component:
     manual: tuple[str, ...]
     public_state: tuple[str, ...]
     local_state: tuple[str, ...]
+    environment: Mapping[str, str] | None = None
+
+    @property
+    def planned(self) -> bool:
+        """The module boundary exists; the installation does not exist yet."""
+        return self.status == PLANNED
 
 
 @dataclasses.dataclass(frozen=True)
@@ -156,6 +174,35 @@ def _command(value: object, where: str) -> tuple[str, ...] | None:
     return command
 
 
+def _environment(value: object, kind: str, status: str, where: str) -> Mapping[str, str] | None:
+    """Validate the environment block of a development-environment module."""
+    if value is None:
+        if kind == ENVIRONMENT:
+            raise ConfigError(f"{where}.environment is required for an environment")
+        return None
+    if kind != ENVIRONMENT:
+        raise ConfigError(f"{where}.environment is only for kind {ENVIRONMENT}")
+    if not isinstance(value, dict):
+        raise ConfigError(f"{where}.environment must be an object")
+
+    unknown = sorted(set(value) - set(ENVIRONMENT_KEYS))
+    if unknown:
+        raise ConfigError(f"{where}.environment has unknown keys: {', '.join(unknown)}")
+    for key, item in value.items():
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(f"{where}.environment.{key} must be a non-empty string")
+
+    required = list(ENVIRONMENT_REQUIRED)
+    if status != PLANNED:
+        required += list(ENVIRONMENT_SUPPORTED_REQUIRED)
+    missing = [key for key in required if key not in value]
+    if missing:
+        raise ConfigError(
+            f"{where}.environment must declare: {', '.join(sorted(missing))}"
+        )
+    return dict(value)
+
+
 def component_from(document: object, where: str) -> Component:
     if not isinstance(document, dict):
         raise ConfigError(f"{where} must be an object")
@@ -171,6 +218,12 @@ def component_from(document: object, where: str) -> Component:
     kind = document.get("kind")
     if kind not in KINDS:
         raise ConfigError(f"{where}.kind must be one of {', '.join(KINDS)}")
+
+    status = document.get("status", "supported")
+    if status not in STATUSES:
+        raise ConfigError(f"{where}.status must be one of {', '.join(STATUSES)}")
+    if status == PLANNED and (document.get("install") or document.get("doctor")):
+        raise ConfigError(f"{where} is planned, so it must declare no install and no doctor")
 
     for field in ("name", "group", "summary"):
         if not isinstance(document.get(field), str) or not document[field].strip():
@@ -196,6 +249,7 @@ def component_from(document: object, where: str) -> Component:
         kind=kind,
         group=document["group"],
         summary=document["summary"],
+        status=status,
         requires=requires,
         capabilities=_string_list(document.get("capabilities"), f"{where}.capabilities"),
         unattended=unattended,
@@ -205,6 +259,7 @@ def component_from(document: object, where: str) -> Component:
         manual=_string_list(document.get("manual"), f"{where}.manual"),
         public_state=_string_list(state.get("public"), f"{where}.state.public"),
         local_state=_string_list(state.get("local"), f"{where}.state.local"),
+        environment=_environment(document.get("environment"), kind, status, where),
     )
 
 
@@ -560,6 +615,14 @@ def closure(
                 reasons[dependency] = f"required by {current}"
                 pending.append(dependency)
 
+    planned = sorted(name for name in reasons if components[name].planned)
+    if planned:
+        # A planned module is a boundary, not an installation. Refusing here
+        # covers a dependency exactly the way it covers a selection.
+        raise ResolveError(
+            "planned, so it cannot be installed yet: " + ", ".join(planned)
+        )
+
     order = _topological_order(components, reasons.keys())
     return reasons, order
 
@@ -692,14 +755,57 @@ def render_catalogue(
         lines.append(group)
         for component in sorted(groups[group], key=lambda item: item.id):
             missing = [c for c in component.capabilities if c not in present]
-            mark = "  " if not missing else "! "
+            if component.planned:
+                mark = "~ "
+            elif missing:
+                mark = "! "
+            else:
+                mark = "  "
             lines.append(f"  {mark}{component.id.ljust(width)}  {component.summary}")
             if component.requires:
                 lines.append(f"    {' ' * width}  requires: {', '.join(component.requires)}")
-            if missing:
+            if component.planned:
+                lines.append(f"    {' ' * width}  planned: no installation yet")
+            elif missing:
                 lines.append(f"    {' ' * width}  missing capability: {', '.join(missing)}")
         lines.append("")
+    lines.append("  ! the machine is missing a capability this component needs")
+    lines.append("  ~ the module exists; the installation is future work")
     return "\n".join(lines).rstrip()
+
+
+def environment_modules(
+    components: Mapping[str, Component], status: str | None = None
+) -> tuple[Component, ...]:
+    """Every development-environment module, in one deterministic order."""
+    return tuple(
+        sorted(
+            (
+                item
+                for item in components.values()
+                if item.kind == ENVIRONMENT and (status is None or item.status == status)
+            ),
+            key=lambda item: item.id,
+        )
+    )
+
+
+def render_environments(components: Mapping[str, Component]) -> str:
+    """The environment modules as TSV, for the shell half of the toolkit.
+
+    The bootstrap and the router installation read this instead of holding a
+    list of environment names, so that adding an environment stays one module.
+    An absent field is a single "-", because a shell "read" collapses an empty
+    tab-separated column.
+    """
+    lines = ["\t".join(("id", "status") + ENVIRONMENT_KEYS)]
+    for component in environment_modules(components):
+        block = component.environment or {}
+        lines.append(
+            "\t".join((component.id, component.status)
+                      + tuple(block.get(key, "-") for key in ENVIRONMENT_KEYS))
+        )
+    return "\n".join(lines)
 
 
 def render_report(
@@ -760,6 +866,9 @@ def unsupported(
     reasons: dict[str, str] = {}
     for identifier in _topological_order(components, components.keys()):
         component = components[identifier]
+        if component.planned:
+            reasons[identifier] = "planned: no installation yet"
+            continue
         missing = [c for c in component.capabilities if c not in present]
         if missing:
             reasons[identifier] = "missing capability: " + ", ".join(missing)
@@ -818,9 +927,16 @@ SUMMARY_WIDTH = 64
 
 
 def picker_entries(components: Mapping[str, Component]) -> tuple[Component, ...]:
-    """The picker order: by group, then by identifier. A number never moves."""
+    """The picker order: by group, then by identifier. A number never moves.
+
+    A planned component is left out. The picker offers what this toolkit can
+    install; '--list' is where a planned module is reported.
+    """
     return tuple(
-        sorted(components.values(), key=lambda item: (item.group, item.id))
+        sorted(
+            (item for item in components.values() if not item.planned),
+            key=lambda item: (item.group, item.id),
+        )
     )
 
 
@@ -992,6 +1108,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="comma-separated profiles; each expands to a component set")
     parser.add_argument("--list", action="store_true",
                         help="list the components and change nothing")
+    parser.add_argument("--environments", action="store_true",
+                        help="list the development environment modules as TSV")
     parser.add_argument("--doctor", action="store_true",
                         help="report the platform and its capabilities, and change nothing")
     parser.add_argument("--hint", default="",
@@ -1041,6 +1159,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not hint:
             return EXIT_CAPABILITY
         print(hint)
+        return EXIT_OK
+
+    if args.environments:
+        print(render_environments(components))
         return EXIT_OK
 
     if args.doctor:

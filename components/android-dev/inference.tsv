@@ -1,0 +1,5 @@
+# android-dev router markers: <environment><TAB><file or glob at the repository root>
+android-dev	settings.gradle
+android-dev	settings.gradle.kts
+android-dev	gradlew
+android-dev	local.properties

@@ -68,15 +68,17 @@ section '2f. python-dev routing and agent clients'
 
 check 'python-dev router definition exists' -- \
     test -f "$REPO_ROOT/config/devbox-router/environments.d/python-dev.env"
+# The environment owns its markers; the installer assembles them.
+all_rules=$(cat "$REPO_ROOT"/components/*/inference.tsv)
 for marker in pyproject.toml uv.lock .python-version; do
     check_contains "python-dev inference includes $marker" \
-        $'python-dev\t'"$marker" "$(cat "$REPO_ROOT/config/devbox-router/inference.tsv")"
+        $'python-dev\t'"$marker" "$(cat "$REPO_ROOT/components/python-dev/inference.tsv")"
 done
 
 # Mixed stacks are intentionally represented by more than one inference rule;
 # devbox's existing ambiguity rule then refuses to guess.
 check_contains 'web inference remains present for mixed Python/web repositories' \
-    $'web-dev\tpackage.json' "$(cat "$REPO_ROOT/config/devbox-router/inference.tsv")"
+    $'web-dev\tpackage.json' "$all_rules"
 
 for agent in claude codex; do
     check "python-dev interactive agent is available: $agent" -- \

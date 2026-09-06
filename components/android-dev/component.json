@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "android-dev",
+  "name": "android-dev environment",
+  "kind": "environment",
+  "group": "Development environments",
+  "status": "planned",
+  "summary": "Planned Android environment. The module declares its router markers; the container and the toolchain do not exist yet.",
+  "requires": ["distrobox", "devbox"],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "environment": {
+    "container": "android-dev",
+    "inference": "components/android-dev/inference.tsv"
+  },
+  "state": { "public": ["components/android-dev/inference.tsv"], "local": [] }
+}

@@ -4,6 +4,9 @@
 # The router is the one host component every other host component routes
 # through, so it installs on its own and installs nothing else. It creates no
 # container and it writes no credential.
+#
+# It needs bootstrap/lib/environments.sh: the environment files and the
+# inference rules come from the environment modules, never from a list here.
 
 # install_devbox_router <repo-root> [home]
 #
@@ -38,12 +41,62 @@ install_devbox_router() {
     done
 
     section 'devbox router configuration (~/.config/devbox-router)'
-    link_into "$repo_root/config/devbox-router/README.md"                     "$cfg/README.md"
-    link_into "$repo_root/config/devbox-router/settings.env"                  "$cfg/settings.env"
-    link_into "$repo_root/config/devbox-router/inference.tsv"                 "$cfg/inference.tsv"
-    link_into "$repo_root/config/devbox-router/environments.d/web-dev.env"    "$cfg/environments.d/web-dev.env"
-    link_into "$repo_root/config/devbox-router/environments.d/python-dev.env" "$cfg/environments.d/python-dev.env"
+    link_into "$repo_root/config/devbox-router/README.md"    "$cfg/README.md"
+    link_into "$repo_root/config/devbox-router/settings.env" "$cfg/settings.env"
+    install_router_environments "$repo_root" "$cfg"
+    install_inference_rules "$repo_root" "$cfg/inference.tsv"
     # repos.tsv holds absolute host paths. It is machine state: seed it once,
     # then leave it to 'devbox assign'.
     install_if_absent "$repo_root/config/devbox-router/repos.tsv.template" "$cfg/repos.tsv"
+}
+
+# install_router_environments <repo-root> <config-dir>
+#
+# Links the router file of every supported environment module. The module
+# names the file it owns, so an environment is added by adding a module.
+install_router_environments() {
+    local repo_root=$1 cfg=$2
+    local id status container ini packages toolchain bootstrap router inference home
+
+    if ! have python3; then
+        warn 'python3 is not installed; the environment modules cannot be read'
+        manual 'Install python3 on the host, then re-run the installer'
+        return 0
+    fi
+    while IFS=$'\t' read -r id status container ini packages toolchain \
+        bootstrap router inference home; do
+        [ -n "$router" ] && [ "$router" != - ] || continue
+        link_into "$repo_root/$router" "$cfg/environments.d/$id.env"
+    done < <(environment_modules "$repo_root" supported)
+}
+
+# install_inference_rules <repo-root> <dest>
+#
+# Assembles the inference table from the environment modules. It is generated
+# rather than linked, because it is the one file the router reads that several
+# modules own together.
+install_inference_rules() {
+    local repo_root=$1 dest=$2 tmp
+
+    tmp=$(mktemp) || die 'cannot create a temporary file'
+    {
+        printf '# Automatic environment inference: <environment><TAB><file or glob at repo root>\n'
+        printf '#\n'
+        printf '# GENERATED from components/*/inference.tsv. Edit the module, not this file.\n'
+        printf '#\n'
+        printf '# Only used when a repository has no explicit declaration or assignment.\n'
+        printf '# If patterns for MORE THAN ONE environment match, routing fails on purpose\n'
+        printf '# rather than picking arbitrarily. Patterns must not contain whitespace.\n'
+        environment_rules "$repo_root"
+    } > "$tmp"
+
+    # An earlier release linked this path into the checkout. Remove the link so
+    # that the generated file replaces it. The link holds nothing of its own,
+    # and install_file backs up whatever it overwrites.
+    if [ -L "$dest" ]; then
+        run rm -f -- "$dest"
+    fi
+
+    install_file "$tmp" "$dest"
+    rm -f -- "$tmp"
 }

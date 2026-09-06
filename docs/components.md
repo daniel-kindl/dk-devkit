@@ -30,6 +30,7 @@ component identifier, and `component.json` is the contract.
   "name": "web-dev environment",
   "kind": "environment",
   "group": "Development environments",
+  "status": "supported",
   "summary": "Fedora Distrobox with an isolated home and the Node toolchain.",
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
@@ -38,6 +39,7 @@ component identifier, and `component.json` is the contract.
   "doctor": null,
   "verify": ["./verify.sh", "--only", "2"],
   "manual": ["Sign in to Claude Code and Codex inside web-dev."],
+  "environment": { "container": "web-dev", "ini": "distrobox/web-dev.ini", "...": "..." },
   "state": {
     "public": ["distrobox/web-dev.ini"],
     "local": ["~/.local/share/distrobox-homes/web-dev/"]
@@ -50,6 +52,7 @@ component identifier, and `component.json` is the contract.
 | `id` | Stable identifier. It must equal the directory name. |
 | `name` | Display name. |
 | `kind` | `tool`, `runtime`, `environment`, `extras` or `profile`. |
+| `status` | `supported` (the default) or `planned`. |
 | `group` | The heading `--list` prints it under. |
 | `summary` | One sentence. |
 | `requires` | Component identifiers this component depends on. |
@@ -61,6 +64,7 @@ component identifier, and `component.json` is the contract.
 | `manual` | Actions only a human can complete. |
 | `state.public` | Tracked configuration this component owns. |
 | `state.local` | Machine-local or private state, which stays out of Git. |
+| `environment` | Only for `kind: environment`. Read [environments.md](environments.md). |
 
 Every operation is a plain executable. The installer runs it from the top of
 the checkout, so a component can also be run by hand exactly as the installer
@@ -74,6 +78,22 @@ Component-specific behaviour belongs in the component directory.
 Platform-specific behaviour belongs behind the capability layer, not in the
 component. A distribution adapter says how one platform supplies a capability;
 read [platforms.md](platforms.md).
+
+### Planned components
+
+A component with `"status": "planned"` is a module boundary without an
+installation. It declares what it will be, and it declares no `install` and no
+`doctor`. The installer refuses to install one, whether it was selected or
+required:
+
+```console
+$ ./install.sh --components rust-dev
+install.sh: planned, so it cannot be installed yet: rust-dev
+```
+
+`--list` marks it `~`, the picker does not offer it, and no profile composes
+it. The planned development environments are in
+[environments.md](environments.md).
 
 ### `install`, `doctor` and `verify`
 
@@ -162,6 +182,7 @@ MANUAL ACTION
 | Option | Effect |
 | --- | --- |
 | `--list` | Print the catalogue and change nothing. |
+| `--environments` | Print the development environment modules as TSV. |
 | `--doctor` | Report the platform, its capabilities and the supported components. |
 | `--hint cap` | Print how to obtain one capability on this platform. |
 | `--components a,b` | Install these components and what they declare. |
@@ -264,4 +285,8 @@ installable on its own.
 4. Add the component to a profile only where that profile genuinely composes
    it. A reusable component must not depend on a profile.
 5. `./verify.sh --only 15` checks the contract, the resolver and the tests.
-   `./verify.sh --only 16` checks the platform adapters.
+   `./verify.sh --only 16` checks the platform adapters, and
+   `./verify.sh --only 17` checks the development environment modules.
+
+A development environment declares one block more than this contract, and
+[environments.md](environments.md) describes it.

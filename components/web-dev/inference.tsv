@@ -1,0 +1,9 @@
+# web-dev router markers: <environment><TAB><file or glob at the repository root>
+# The environment owns its markers. bootstrap/lib/devbox.sh assembles every
+# module's file into ~/.config/devbox-router/inference.tsv.
+web-dev	package.json
+web-dev	pnpm-workspace.yaml
+web-dev	.nvmrc
+web-dev	yarn.lock
+web-dev	package-lock.json
+web-dev	bun.lockb

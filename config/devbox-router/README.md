@@ -22,6 +22,7 @@ optional `.devbox` file, and using one is a project's own decision.
     ~/.config/devbox-router/environments.d/*.env  one file per environment
     ~/.config/devbox-router/repos.tsv             repo -> environment assignments
     ~/.config/devbox-router/inference.tsv         automatic inference rules
+                                                  (generated from the environment modules)
     ~/.config/devbox-router/backups/              pre-migration copies of the old scripts
 
 ## Resolution precedence

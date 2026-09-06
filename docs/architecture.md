@@ -20,8 +20,10 @@ The host holds **no language toolchain**. There is no Node and no npm on the
 host. `verify.sh` checks this, and reports a failure if one appears.
 
 **A Distrobox container** holds one purpose-specific development environment.
-`web-dev` exists today. `dotnet-dev`, `rust-dev` and `android-dev` are planned,
-and the router's inference rules already know their markers.
+`web-dev` and `python-dev` exist today. `dotnet-dev`, `rust-dev` and
+`android-dev` are planned modules: each declares its container name and the
+router markers it owns, and nothing else yet. `docs/environments.md` describes
+the module.
 
 Each container has its own isolated HOME, so its dotfiles never reach the host
 home:
@@ -45,6 +47,7 @@ Resolution order, first match wins:
 3. `<git-common-dir>/devbox-env` — a per-clone, uncommitted declaration
 4. `repos.tsv` — a global assignment
 5. `inference.tsv` — automatic, and only when the match is unambiguous
+   (assembled from `components/*/inference.tsv`)
 6. otherwise it fails, and prints what to do next
 
 A repository is identified by

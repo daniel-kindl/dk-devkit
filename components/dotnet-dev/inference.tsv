@@ -1,0 +1,6 @@
+# dotnet-dev router markers: <environment><TAB><file or glob at the repository root>
+dotnet-dev	*.sln
+dotnet-dev	*.slnx
+dotnet-dev	*.csproj
+dotnet-dev	*.fsproj
+dotnet-dev	global.json

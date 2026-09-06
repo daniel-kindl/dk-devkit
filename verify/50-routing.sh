@@ -28,17 +28,35 @@ if [ "$IN_CONTAINER" = 1 ]; then CFG=$HOST_HOME_VIEW/.config/devbox-router
 else CFG=$HOME/.config/devbox-router; fi
 
 check_link 'settings.env -> the repository'  "$CFG/settings.env"  "$REPO_ROOT/config/devbox-router/settings.env"
-check_link 'inference.tsv -> the repository' "$CFG/inference.tsv" "$REPO_ROOT/config/devbox-router/inference.tsv"
+
+# The inference table is assembled from the environment modules, so it is a
+# generated file rather than a link into the checkout.
+module_rules=$(cat "$REPO_ROOT"/components/*/inference.tsv | sed -e 's/#.*//' | awk 'NF')
+if [ -L "$CFG/inference.tsv" ]; then
+    fail 'inference.tsv is generated from the environment modules' \
+         'it is still a link into the checkout; run bootstrap/host.sh'
+elif [ -f "$CFG/inference.tsv" ]; then
+    check_eq 'inference.tsv holds exactly the module rules' \
+        "$module_rules" "$(sed -e 's/#.*//' "$CFG/inference.tsv" | awk 'NF')"
+else
+    fail 'inference.tsv is installed' 'run bootstrap/host.sh'
+fi
 
 # bin/devbox carries the same rules as a heredoc, for a host that has no
 # configuration file yet. The two tables must not drift apart.
 builtin_rules=$(sed -n '/^builtin_rules() {/,/^RULES$/p' "$REPO_ROOT/bin/devbox" |
     sed -e '1,/^    cat <<.RULES.$/d' -e '/^RULES$/d')
-configured_rules=$(sed -e 's/#.*//' "$REPO_ROOT/config/devbox-router/inference.tsv" | awk 'NF')
-check_eq 'the built-in inference rules match inference.tsv' \
-    "$configured_rules" "$builtin_rules"
-check_link 'environments.d/web-dev.env -> the repository' \
-    "$CFG/environments.d/web-dev.env" "$REPO_ROOT/config/devbox-router/environments.d/web-dev.env"
+check_eq 'the built-in inference rules match the environment modules' \
+    "$module_rules" "$builtin_rules"
+
+# Every supported environment module contributes its own router file.
+for module in "$REPO_ROOT"/components/*/inference.tsv; do
+    env_id=$(basename "$(dirname "$module")")
+    router=$REPO_ROOT/config/devbox-router/environments.d/$env_id.env
+    [ -f "$router" ] || continue
+    check_link "environments.d/$env_id.env -> the repository" \
+        "$CFG/environments.d/$env_id.env" "$router"
+done
 
 if [ -f "$CFG/repos.tsv" ]; then
     if [ -L "$CFG/repos.tsv" ]; then
@@ -74,15 +92,17 @@ rc=0
 host_sh "DEVBOX_ACTIVE_ENV=web-dev '$HOST_HOME/.local/bin/claude' --version" >/dev/null 2>&1 || rc=$?
 check_eq 'claude shim refuses to run inside an environment (exit 8)' '8' "$rc"
 
-# Inference must resolve the five planned environments from repository markers.
+# Inference must resolve all five environments from repository markers.
 for marker_env in "web-dev:package.json" "python-dev:pyproject.toml" "rust-dev:Cargo.toml" \
     "dotnet-dev:global.json" "android-dev:gradlew"; do
     envname=${marker_env%%:*}
     marker=${marker_env#*:}
-    grep -q "^$envname"$'\t' "$REPO_ROOT/config/devbox-router/inference.tsv" &&
-        grep -q "^$envname"$'\t'"$marker\$" "$REPO_ROOT/config/devbox-router/inference.tsv" &&
-        pass "inference rule: $marker -> $envname" ||
-        fail "inference rule: $marker -> $envname" 'missing from config/devbox-router/inference.tsv'
+    if printf '%s\n' "$module_rules" | grep -q "^$envname"$'\t'"$marker\$"; then
+        pass "inference rule: $marker -> $envname"
+    else
+        fail "inference rule: $marker -> $envname" \
+             "missing from components/$envname/inference.tsv"
+    fi
 done
 
 check_eq 'default (management) environment is web-dev' 'web-dev' \

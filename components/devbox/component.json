@@ -15,9 +15,11 @@
   "state": {
     "public": [
       "config/devbox-router/settings.env",
-      "config/devbox-router/inference.tsv",
       "config/devbox-router/environments.d/"
     ],
-    "local": ["~/.config/devbox-router/repos.tsv"]
+    "local": [
+      "~/.config/devbox-router/repos.tsv",
+      "~/.config/devbox-router/inference.tsv"
+    ]
   }
 }

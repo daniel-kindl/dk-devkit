@@ -256,27 +256,32 @@ lookup_repo_map() {
     return 1
 }
 
+# The fallback table, for a host whose configuration is not installed yet. The
+# environment modules own these rules: each components/<id>/inference.tsv holds
+# the markers of one environment, the installer assembles them into
+# inference.tsv, and verify.sh module 5b fails when the two disagree. The order
+# is the module order, and it does not affect resolution.
 builtin_rules() {
     cat <<'RULES'
+android-dev	settings.gradle
+android-dev	settings.gradle.kts
+android-dev	gradlew
+android-dev	local.properties
+dotnet-dev	*.sln
+dotnet-dev	*.slnx
+dotnet-dev	*.csproj
+dotnet-dev	*.fsproj
+dotnet-dev	global.json
+python-dev	pyproject.toml
+python-dev	uv.lock
+python-dev	.python-version
+rust-dev	Cargo.toml
 web-dev	package.json
 web-dev	pnpm-workspace.yaml
 web-dev	.nvmrc
 web-dev	yarn.lock
 web-dev	package-lock.json
 web-dev	bun.lockb
-python-dev	pyproject.toml
-python-dev	uv.lock
-python-dev	.python-version
-dotnet-dev	*.sln
-dotnet-dev	*.slnx
-dotnet-dev	*.csproj
-dotnet-dev	*.fsproj
-dotnet-dev	global.json
-rust-dev	Cargo.toml
-android-dev	settings.gradle
-android-dev	settings.gradle.kts
-android-dev	gradlew
-android-dev	local.properties
 RULES
 }
 

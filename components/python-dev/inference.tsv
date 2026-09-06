@@ -1,0 +1,4 @@
+# python-dev router markers: <environment><TAB><file or glob at the repository root>
+python-dev	pyproject.toml
+python-dev	uv.lock
+python-dev	.python-version
