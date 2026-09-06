@@ -34,3 +34,39 @@ fi
 check_contains 'M8 documentation explains destructive sync' \
     'Removing a topic removes it from GitHub topic search' \
     "$(cat "$REPO_ROOT/docs/repo-meta.md" 2>/dev/null || true)"
+
+check_contains 'M9 documentation explains a disabled surface' \
+    'Turning a surface off' \
+    "$(cat "$REPO_ROOT/docs/repo-meta.md" 2>/dev/null || true)"
+
+# --- the manifest and the audit say the same thing about the settings ------
+#
+# F9 recorded the settings in a sentence, and the sentence was wrong about the
+# wiki. Two records of the same settings drift, so compare them: the manifest
+# is what "repo-meta sync" writes, and the F9 table is what a reader is told.
+
+META_AUDIT=$REPO_ROOT/docs/public-release-audit.md
+
+meta_documented=$(sed -n 's/^| `\([a-z_]*\)` | \([A-Za-z0-9._/-]*\) |.*/\1=\2/p' \
+                  "$META_AUDIT" | LC_ALL=C sort)
+
+if ! command -v python3 >/dev/null 2>&1; then
+    skip 'M10 the manifest settings match the audit table' 'no python3 on this side'
+elif [ -z "$meta_documented" ]; then
+    fail 'M10 the manifest settings match the audit table' \
+         'F9 of the audit holds no settings table'
+else
+    meta_declared=$(python3 -c 'import json, sys
+settings = json.load(open(sys.argv[1])).get("settings", {})
+for key, value in settings.items():
+    shown = "on" if value is True else "off" if value is False else str(value)
+    print(key + "=" + shown)' "$META_MANIFEST" | LC_ALL=C sort)
+    if [ "$meta_declared" = "$meta_documented" ]; then
+        pass "M10 the manifest settings match the audit table ($(printf '%s\n' "$meta_declared" | grep -c .) settings)"
+    else
+        fail 'M10 the manifest settings match the audit table' \
+             "manifest: $(printf '%s' "$meta_declared" | tr '\n' ' ')audit: $(printf '%s' "$meta_documented" | tr '\n' ' ')"
+    fi
+fi
+
+unset META_AUDIT meta_documented meta_declared

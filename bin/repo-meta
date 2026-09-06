@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check or converge a GitHub repository to the canonical metadata manifest."""
+"""Check or converge a GitHub repository to the canonical metadata manifest.
+
+The manifest holds the "About" fields a reader sees, and the repository
+settings that decide which surfaces exist and how a branch is merged.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +26,36 @@ DESCRIPTION_LIMIT = 350
 TOPIC_LIMIT = 20
 TOPIC = re.compile(r"^[a-z0-9][a-z0-9-]{0,34}$")
 
+# A branch name that git accepts and that needs no quoting anywhere.
+BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
+
+# Every repository setting this command manages, as
+#   manifest key: (field of "gh repo view --json", flag of "gh repo edit").
+# A setting outside this table is not managed: the manifest refuses to name it,
+# and drift in it is neither reported nor repaired.
+BOOLEAN_SETTINGS = {
+    "has_issues": ("hasIssuesEnabled", "--enable-issues"),
+    "has_wiki": ("hasWikiEnabled", "--enable-wiki"),
+    "has_projects": ("hasProjectsEnabled", "--enable-projects"),
+    "has_discussions": ("hasDiscussionsEnabled", "--enable-discussions"),
+    "allow_merge_commit": ("mergeCommitAllowed", "--enable-merge-commit"),
+    "allow_squash_merge": ("squashMergeAllowed", "--enable-squash-merge"),
+    "allow_rebase_merge": ("rebaseMergeAllowed", "--enable-rebase-merge"),
+    "delete_branch_on_merge": ("deleteBranchOnMerge", "--delete-branch-on-merge"),
+}
+DEFAULT_BRANCH = "default_branch"
+MERGE_METHODS = ("allow_merge_commit", "allow_squash_merge", "allow_rebase_merge")
+SETTING_KEYS = (DEFAULT_BRANCH, *BOOLEAN_SETTINGS)
+
+# The JSON fields "gh repo view" must return for a complete reading.
+VIEW_FIELDS = (
+    "description",
+    "homepageUrl",
+    "repositoryTopics",
+    "defaultBranchRef",
+    *(field for field, _ in BOOLEAN_SETTINGS.values()),
+)
+
 EXIT_OK = 0
 EXIT_DRIFT = 1
 EXIT_USAGE = 2
@@ -43,6 +77,9 @@ class Metadata:
     description: str = ""
     homepage: str = ""
     topics: tuple[str, ...] = ()
+    # Only the settings this side declares or reads. An empty mapping on the
+    # desired side means the manifest manages no setting at all.
+    settings: dict[str, object] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,8 +91,14 @@ class Change:
 
     @property
     def destructive(self) -> bool:
-        """A change that removes public metadata GitHub already shows."""
-        return self.kind in {"CLEAR", "REMOVE"}
+        """A change that removes something GitHub already offers a reader.
+
+        Clearing a field and removing a topic remove public metadata. Disabling
+        a feature removes a surface, and its content with it. Retargeting the
+        default branch moves where every new clone and every new pull request
+        lands. Each one needs a human.
+        """
+        return self.kind in {"CLEAR", "REMOVE", "DISABLE", "RETARGET"}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -119,7 +162,45 @@ def load_manifest(path: Path) -> Metadata:
             raise ConfigError(f"duplicate topics are not allowed: {topic!r}")
         topics.append(topic)
 
-    return Metadata(description, homepage, tuple(sorted(topics)))
+    return Metadata(
+        description,
+        homepage,
+        tuple(sorted(topics)),
+        _settings(document.get("settings", {})),
+    )
+
+
+def _settings(value: object) -> dict[str, object]:
+    """Read the manifest settings block, and refuse anything GitHub would."""
+    if not isinstance(value, dict):
+        raise ConfigError("manifest settings must be an object")
+
+    settings: dict[str, object] = {}
+    for key, raw in value.items():
+        if key not in SETTING_KEYS:
+            raise ConfigError(
+                f"settings.{key} is not a managed setting; "
+                f"managed settings are {', '.join(sorted(SETTING_KEYS))}"
+            )
+        if key == DEFAULT_BRANCH:
+            branch = _text(raw, f"settings.{key}")
+            if not BRANCH.fullmatch(branch):
+                raise ConfigError(
+                    f"settings.{key} must be a branch name of letters, digits, "
+                    f"'.', '_', '-' or '/', starting with a letter or a digit: {branch!r}"
+                )
+            settings[key] = branch
+            continue
+        # bool is a subclass of int, so 1 and 0 must not pass as true and false.
+        if type(raw) is not bool:
+            raise ConfigError(f"settings.{key} must be true or false")
+        settings[key] = raw
+
+    declared = [key for key in MERGE_METHODS if key in settings]
+    if len(declared) == len(MERGE_METHODS) and not any(settings[k] for k in declared):
+        raise ConfigError("GitHub needs at least one merge method enabled")
+
+    return settings
 
 
 def metadata_from_github(value: object) -> Metadata:
@@ -135,7 +216,17 @@ def metadata_from_github(value: object) -> Metadata:
         if not isinstance(item, dict) or not isinstance(item.get("name"), str):
             raise GitHubError(f"gh topic result {index} has no name")
         topics.append(item["name"])
-    return Metadata(str(description), str(homepage), tuple(sorted(topics)))
+
+    settings: dict[str, object] = {}
+    branch = value.get("defaultBranchRef")
+    if isinstance(branch, dict) and isinstance(branch.get("name"), str):
+        settings[DEFAULT_BRANCH] = branch["name"]
+    for key, (field, _) in BOOLEAN_SETTINGS.items():
+        current = value.get(field)
+        if isinstance(current, bool):
+            settings[key] = current
+
+    return Metadata(str(description), str(homepage), tuple(sorted(topics)), settings)
 
 
 def build_plan(desired: Metadata, current: Metadata) -> Plan:
@@ -155,6 +246,26 @@ def build_plan(desired: Metadata, current: Metadata) -> Plan:
     for topic in current.topics:
         if topic not in desired.topics:
             changes.append(Change("REMOVE", "topic", before=topic))
+
+    # A setting the manifest does not declare is not managed, so it is not
+    # compared. A setting it declares that GitHub did not answer for is drift
+    # this side cannot repair, and saying so beats guessing.
+    for key in SETTING_KEYS:
+        if key not in desired.settings:
+            continue
+        want = desired.settings[key]
+        if key not in current.settings:
+            changes.append(Change("UNKNOWN", key, after=_setting_text(want)))
+        elif current.settings[key] != want:
+            if key == DEFAULT_BRANCH:
+                kind = "RETARGET"
+            else:
+                kind = "ENABLE" if want else "DISABLE"
+            changes.append(Change(
+                kind, key,
+                before=_setting_text(current.settings[key]),
+                after=_setting_text(want),
+            ))
 
     return Plan(tuple(changes))
 
@@ -184,10 +295,7 @@ def resolve_repo(explicit: str | None) -> str:
 
 
 def read_current(repo: str) -> Metadata:
-    raw = _run_gh([
-        "repo", "view", repo,
-        "--json", "description,homepageUrl,repositoryTopics",
-    ])
+    raw = _run_gh(["repo", "view", repo, "--json", ",".join(VIEW_FIELDS)])
     try:
         return metadata_from_github(json.loads(raw))
     except json.JSONDecodeError as exc:
@@ -198,16 +306,27 @@ def _shown(value: str) -> str:
     return value if value else "(empty)"
 
 
+def _setting_text(value: object) -> str:
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    return str(value)
+
+
 def render_plan(plan: Plan) -> str:
     lines = []
     for change in plan.changes:
-        if change.kind in {"SET", "CLEAR"}:
+        if change.kind in {"SET", "CLEAR", "ENABLE", "DISABLE", "RETARGET"}:
             lines.append(
-                f"{change.kind:<7} {change.field}  "
+                f"{change.kind:<8} {change.field}  "
                 f"{_shown(change.before)} -> {_shown(change.after)}"
             )
+        elif change.kind == "UNKNOWN":
+            lines.append(
+                f"{change.kind:<8} {change.field}  "
+                f"gh did not report it; wanted {_shown(change.after)}"
+            )
         else:
-            lines.append(f"{change.kind:<7} {change.field}  {change.before}{change.after}")
+            lines.append(f"{change.kind:<8} {change.field}  {change.before}{change.after}")
     return "\n".join(lines)
 
 
@@ -243,11 +362,24 @@ def apply_plan(repo: str, plan: Plan) -> None:
     if topics:
         _run_gh(["repo", "edit", repo, *topics])
 
+    # The settings go in a third edit, so a failure names the half that failed.
+    # A setting gh did not report is not written: this side does not know what
+    # it would overwrite.
+    flags: list[str] = []
+    for change in plan.changes:
+        if change.kind == "RETARGET":
+            flags += ["--default-branch", change.after]
+        elif change.kind in {"ENABLE", "DISABLE"}:
+            flag = BOOLEAN_SETTINGS[change.field][1]
+            flags.append(f"{flag}={'true' if change.kind == 'ENABLE' else 'false'}")
+    if flags:
+        _run_gh(["repo", "edit", repo, *flags])
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROGRAM,
-        description="Check or sync the repository description, homepage and topics exactly.",
+        description="Check or sync the repository About metadata and settings exactly.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "sync"):

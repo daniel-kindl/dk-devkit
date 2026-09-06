@@ -78,11 +78,13 @@ Two GitHub repository settings are tracked here rather than typed into a web for
 
 ```bash
 repo-labels check                 # label drift against manifests/github-labels.json
-repo-meta check                   # description, homepage and topic drift
+repo-meta check                   # About metadata and repository settings drift
 repo-meta sync --dry-run          # the exact plan, without changing anything
 ```
 
-Both read the existing `gh` login and hold no credential of their own. Both refuse a destructive sync without confirmation, because deleting a label removes it from issues and pull requests, and removing a topic removes the repository from that topic search. Read [docs/repo-labels.md](docs/repo-labels.md) and [docs/repo-meta.md](docs/repo-meta.md).
+`repo-meta` holds the description, the homepage and the topics a reader sees, and the settings that decide which surfaces exist and how a branch is merged: the default branch, issues, wiki, projects, discussions, the three merge methods, and the deletion of a merged head branch. A setting the manifest does not name stays unmanaged.
+
+Both read the existing `gh` login and hold no credential of their own. Both refuse a destructive sync without confirmation, because deleting a label removes it from issues and pull requests, removing a topic removes the repository from that topic search, turning a surface off hides the content in it, and retargeting the default branch moves where every new clone lands. Read [docs/repo-labels.md](docs/repo-labels.md) and [docs/repo-meta.md](docs/repo-meta.md).
 
 ## Current architecture
 
