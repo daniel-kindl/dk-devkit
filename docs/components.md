@@ -311,7 +311,7 @@ and `--profile minimal` resolves exactly what `--components minimal` resolves.
 | --- | --- |
 | `minimal` | The `devbox` router and the shared agent policy. |
 | `developer` | `minimal`, the third-party skills, and the development environments. |
-| `agent-dev` | `developer`, plus `agentbox`, `agentq` and `repo-labels`. |
+| `agent-dev` | `developer`, plus `pi`, `agentbox`, `agentq` and `repo-labels`. |
 | `daniel` | `agent-dev`, plus the host CLI tools and the desktop applications. |
 
 Each profile contains the smaller one, so the four are one ladder rather than

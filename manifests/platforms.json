@@ -18,6 +18,8 @@
         "flatpak": "Bazzite ships Flatpak. Add the Flathub remote: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo.",
         "gh": "Install the GitHub CLI with Homebrew: brew install gh.",
         "git": "Bazzite ships git.",
+        "curl": "Bazzite ships curl.",
+        "xz": "Bazzite ships xz.",
         "python3": "Bazzite ships Python 3."
       }
     },
@@ -42,6 +44,8 @@
         "flatpak": "sudo dnf install flatpak",
         "gh": "sudo dnf install gh",
         "git": "sudo dnf install git",
+        "curl": "sudo dnf install curl",
+        "xz": "sudo dnf install xz",
         "python3": "sudo dnf install python3"
       }
     },
@@ -66,6 +70,8 @@
         "flatpak": "sudo apt-get install flatpak",
         "gh": "Follow https://github.com/cli/cli/blob/trunk/docs/install_linux.md, then: sudo apt-get install gh",
         "git": "sudo apt-get install git",
+        "curl": "sudo apt-get install curl",
+        "xz": "sudo apt-get install xz-utils",
         "python3": "sudo apt-get install python3"
       }
     },
@@ -90,6 +96,8 @@
         "flatpak": "sudo pacman -S flatpak",
         "gh": "sudo pacman -S github-cli",
         "git": "sudo pacman -S git",
+        "curl": "sudo pacman -S curl",
+        "xz": "sudo pacman -S xz",
         "python3": "sudo pacman -S python"
       }
     },
@@ -115,6 +123,8 @@
         "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
         "gh": "brew install gh",
         "git": "brew install git",
+        "curl": "macOS ships curl.",
+        "xz": "brew install xz",
         "python3": "brew install python",
         "linux": "This component needs a Linux kernel. Run it in a Linux virtual machine.",
         "distrobox": "Distrobox needs a Linux kernel. Run it in a Linux virtual machine."

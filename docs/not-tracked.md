@@ -55,6 +55,28 @@ it. Removing one means re-authenticating that environment, which is why
 These are large, and every one is reproducible from
 `manifests/toolchain.env`. The repository pins the versions, not the bytes.
 
+## The host Pi installation
+
+`~/.local/share/pi-node/` (the private Node runtime),
+`~/.local/share/pi/npm/` (the npm prefix that holds the Pi package), and
+`~/.local/bin/pi` (the launcher).
+
+All three are payload or generated text, and together they are about 350 MB.
+`manifests/pi.env` pins the versions and the locations, and
+`bootstrap/lib/pi.sh` writes the launcher, so this repository tracks the
+generator rather than the result.
+
+## Pi private state
+
+`~/.pi/agent/auth.json`, `~/.pi/agent/trust.json`, `~/.pi/agent/sessions/`,
+`~/.pi/agent/settings.json`, `~/.pi/agent/models-store.json`,
+`~/.pi/agent/npm/`, `~/.pi/agent/git/`.
+
+Pi owns this directory. It holds the provider sign-ins, the per-project trust
+decisions, the conversation sessions and the installed pi packages. The one
+file this repository puts in it is `~/.pi/agent/AGENTS.md`, which is a symlink
+to the tracked shared policy and holds nothing of its own.
+
 ## Third-party skill content
 
 `~/.agents/skills/*`, 43 skills from four upstream repositories.

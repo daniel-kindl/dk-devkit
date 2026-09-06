@@ -41,6 +41,33 @@ Host `claude` and `codex` shims use the same router so interactive agents execut
 
 Each environment is an independent module: `web-dev`, `python-dev` and `rust-dev` are installable today, and `dotnet-dev` and `android-dev` are declared but not implemented. Read [docs/environments.md](docs/environments.md).
 
+### `pi`
+
+The Pi terminal coding harness, installed **once**, on the host.
+
+```bash
+./install.sh --components pi
+pi --version
+pi                                # then /login for each provider
+```
+
+Pi is a host control-plane tool, so it is not installed into a development
+environment and `~/.local/bin/pi` is not a router shim. That is what separates
+it from the `claude` and `codex` shims above: those CLIs live inside the
+environment that owns a repository, and Pi does not.
+
+Pi needs Node, and the host keeps no Node development toolchain. The component
+therefore installs Pi's own private runtime, which only the generated launcher
+puts on a PATH. A host shell still resolves no `node`, `npm` or `pnpm`, and
+`./verify.sh` checks that.
+
+Pi reads the same `config/agents/AGENTS.md` policy as Claude Code and Codex, as
+a link. The policy keeps one source.
+
+Delegating a project command from Pi into the environment that owns the
+repository is **planned, not implemented**. It will call the existing `devbox`
+router rather than repeat its resolution.
+
 ### `agentbox`
 
 Runs an unattended coding agent against a **disposable clone** in an isolated Podman sandbox. The real repository is not mounted into the model sandbox. `agentbox` validates the result before importing accepted commits onto an `agent/*` branch and never receives GitHub push or merge authority.
@@ -105,6 +132,11 @@ Bazzite/Fedora host
 |                                  +-- Rust / cargo, through rustup
 |                                  `-- Claude Code, Codex
 |
++-- pi
+|    +-- exactly one installation, on the host
+|    +-- private Node runtime, reachable from Pi only
+|    `-- private auth and session state in ~/.pi/agent
+|
 +-- agentbox
 |    +-- disposable clone
 |    +-- agent-runner control plane
@@ -136,6 +168,7 @@ personal development toolkit
 |
 +-- commands
 |   +-- devbox
+|   +-- pi
 |   +-- agentbox
 |   +-- agentq
 |   `-- repository tools

@@ -47,6 +47,8 @@ keyring*
 .codex/
 .copilot/
 .orca/
+.pi/
+trust.json
 session-env/
 sessions/
 shell-snapshots/
