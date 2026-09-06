@@ -128,7 +128,7 @@ Each profile contains the smaller one. The `daniel` profile composes the complet
 
 Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/dk-devkit/issues/8) and [#24](https://github.com/daniel-kindl/dk-devkit/issues/24).
 
-The repository was renamed from `workstation` to `dk-devkit` to name the product rather than one machine. [docs/naming.md](docs/naming.md) records that evaluation. GitHub redirects the old URL, and the checkout directory is still `~/projects/workstation` until the machine is converged again.
+The repository was renamed from `workstation` to `dk-devkit` to name the product rather than one machine. [docs/naming.md](docs/naming.md) records that evaluation. GitHub redirects the old URL. A checkout made before the rename keeps working after `git remote set-url origin`, and the checkout directory is `~/projects/dk-devkit`.
 
 ## Platform support
 
@@ -154,23 +154,23 @@ On Bazzite/Fedora:
 ```bash
 # Clone the repository.
 mkdir -p ~/projects
-git clone git@github.com:daniel-kindl/dk-devkit.git ~/projects/workstation
+git clone git@github.com:daniel-kindl/dk-devkit.git ~/projects/dk-devkit
 
 # Configure the host and create web-dev when absent.
-~/projects/workstation/bootstrap/host.sh
+~/projects/dk-devkit/bootstrap/host.sh
 
 # Configure the web-dev environment.
-~/.local/bin/devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh
+~/.local/bin/devbox exec web-dev --cwd ~/projects/dk-devkit -- ./bootstrap/web-dev.sh
 
 # Verify the current installation.
-~/projects/workstation/verify.sh
+~/projects/dk-devkit/verify.sh
 ```
 
 To install one part instead of the whole machine:
 
 ```bash
-~/projects/workstation/install.sh --dry-run --components agentbox
-~/projects/workstation/install.sh --components agentbox
+~/projects/dk-devkit/install.sh --dry-run --components agentbox
+~/projects/dk-devkit/install.sh --components agentbox
 ```
 
 Every installer converges existing state rather than blindly replacing it. Use `--dry-run` to preview changes.

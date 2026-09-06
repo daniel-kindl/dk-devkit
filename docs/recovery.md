@@ -49,17 +49,17 @@ which is how `web-dev` reaches the same agent without a copy of the key.
 
 ```bash
 mkdir -p ~/projects
-git clone git@github.com:daniel-kindl/dk-devkit.git ~/projects/workstation
+git clone git@github.com:daniel-kindl/dk-devkit.git ~/projects/dk-devkit
 ```
 
-Clone it to exactly `~/projects/workstation`. The bootstrap links live
+Clone it to exactly `~/projects/dk-devkit`. The bootstrap links live
 configuration into the checkout, so the path matters. See "The checkout is
 load-bearing" in [architecture.md](architecture.md).
 
 ## 4. Bootstrap the host
 
 ```bash
-~/projects/workstation/bootstrap/host.sh            # add --dry-run to preview
+~/projects/dk-devkit/bootstrap/host.sh            # add --dry-run to preview
 ```
 
 This step:
@@ -83,7 +83,7 @@ Log out and back in if `~/.local/bin` is not yet on your `PATH`.
 ## 5. Bootstrap the web-dev container
 
 ```bash
-~/.local/bin/devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh
+~/.local/bin/devbox exec web-dev --cwd ~/projects/dk-devkit -- ./bootstrap/web-dev.sh
 ```
 
 This step:
@@ -215,7 +215,7 @@ devbox assign web-dev ~/projects/dkkb
 ## 11. Verify
 
 ```bash
-~/projects/workstation/verify.sh
+~/projects/dk-devkit/verify.sh
 ```
 
 Expect every module to pass. `--full` also launches the real agent CLIs through
@@ -253,8 +253,8 @@ it deliberately.
 ```bash
 devbox exec web-dev -- true                    # confirm it is really unusable
 podman rm -f web-dev                           # the isolated HOME survives this
-distrobox assemble create --file ~/projects/workstation/distrobox/web-dev.ini
-devbox exec web-dev --cwd ~/projects/workstation -- ./bootstrap/web-dev.sh
+distrobox assemble create --file ~/projects/dk-devkit/distrobox/web-dev.ini
+devbox exec web-dev --cwd ~/projects/dk-devkit -- ./bootstrap/web-dev.sh
 ```
 
 `podman rm -f` removes the container, not `~/.local/share/distrobox-homes/web-dev`.

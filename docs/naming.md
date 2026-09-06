@@ -136,12 +136,18 @@ so it survives the objection the first decision was built on.
 Both decisions are recorded because the reversal is the useful part. The cost
 analysis above did not change; the weighing did.
 
-### The machine step is not done
+### The machine step is done
 
-The GitHub rename and the tracked references are complete. The checkout
-directory is still `~/projects/workstation`, and it stays load-bearing there.
-That is step 4 below, it is optional, and it is a machine operation rather than
-a repository one. Do it deliberately, with the relink in step 5.
+The GitHub rename, the tracked references and the checkout directory are all
+complete. `~/projects/workstation` is now `~/projects/dk-devkit`, and the 21
+symlinks that point into the checkout were repointed with it: the `~/.local/bin`
+commands, the `devbox` router configuration, and the agent home of each
+development environment. The router's global assignment in `repos.tsv` moved
+too.
+
+The checkout stays load-bearing at the new path, so the property in
+[architecture.md](architecture.md) is unchanged: delete it and the shared
+policy, the status line and the router all break.
 
 This closes the evaluation that #24 requires. It does not close the question.
 

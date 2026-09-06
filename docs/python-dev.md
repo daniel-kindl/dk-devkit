@@ -37,7 +37,7 @@ The host bootstrap creates the container when it is absent and registers the rou
 Then bootstrap the isolated container HOME:
 
 ```bash
-devbox exec python-dev --cwd ~/projects/workstation -- ./bootstrap/python-dev.sh
+devbox exec python-dev --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh
 ```
 
 Authentication is manual per isolated HOME:
