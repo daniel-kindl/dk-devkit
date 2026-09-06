@@ -394,6 +394,39 @@ class ShippedCatalogueCase(unittest.TestCase):
         _, order = toolkit.closure(self.components, ["web-dev"])
         self.assertEqual(set(order), {"devbox", "distrobox", "web-dev"})
 
+    def test_every_named_profile_exists(self):
+        self.assertEqual(
+            toolkit.profile_ids(self.components),
+            ("agent-dev", "daniel", "developer", "minimal"),
+        )
+
+    def test_a_profile_installs_nothing_of_its_own(self):
+        for name in toolkit.profile_ids(self.components):
+            self.assertIsNone(self.components[name].install, name)
+            self.assertIsNone(self.components[name].doctor, name)
+
+    def test_each_profile_contains_the_smaller_one(self):
+        expansions = [
+            set(toolkit.closure(self.components, [name])[1])
+            for name in ("minimal", "developer", "agent-dev", "daniel")
+        ]
+        for smaller, larger in zip(expansions, expansions[1:]):
+            self.assertTrue(smaller < larger, f"{smaller} is not inside {larger}")
+
+    def test_a_profile_is_never_a_dependency_of_a_reusable_component(self):
+        for component in self.components.values():
+            if component.kind == "profile":
+                continue
+            for dependency in component.requires:
+                self.assertNotEqual(
+                    self.components[dependency].kind, "profile",
+                    f"{component.id} depends on the {dependency} profile",
+                )
+
+    def test_a_small_profile_pulls_in_no_workstation_extras(self):
+        _, order = toolkit.closure(self.components, ["minimal"])
+        self.assertEqual(set(order), {"minimal", "devbox", "agent-home"})
+
     def test_no_component_declares_a_credential_path_as_public_state(self):
         for component in self.components.values():
             for entry in component.public_state:
@@ -401,14 +434,176 @@ class ShippedCatalogueCase(unittest.TestCase):
                 self.assertNotIn("auth", entry, f"{component.id}: {entry}")
 
 
+# --------------------------------------------------------------- profiles --
+
+
+def picker(*documents):
+    return toolkit.picker_entries(catalogue(*documents))
+
+
+class ProfileCase(unittest.TestCase):
+    def setUp(self):
+        self.components = catalogue(
+            manifest("tiny", kind="profile", requires=["alpha"], install=None),
+            manifest("alpha"),
+        )
+
+    def test_a_profile_expands_to_the_components_it_composes(self):
+        _, order = toolkit.closure(self.components, ["tiny"])
+        self.assertEqual(order, ("alpha", "tiny"))
+
+    def test_the_profiles_are_listed_in_one_order(self):
+        self.assertEqual(toolkit.profile_ids(self.components), ("tiny",))
+
+    def test_an_unknown_profile_names_the_ones_that_exist(self):
+        with self.assertRaisesRegex(toolkit.ResolveError, "unknown profile: ghost"):
+            toolkit.resolve_profiles(self.components, ["ghost"])
+
+    def test_a_component_is_not_a_profile(self):
+        with self.assertRaisesRegex(toolkit.ResolveError, "not a profile"):
+            toolkit.resolve_profiles(self.components, ["alpha"])
+
+    def test_a_repeated_profile_is_resolved_once(self):
+        self.assertEqual(
+            toolkit.resolve_profiles(self.components, ["tiny", "tiny"]), ("tiny",)
+        )
+
+
+# ----------------------------------------------------------------- picker --
+
+
+class PickerCase(unittest.TestCase):
+    def setUp(self):
+        self.entries = picker(
+            manifest("alpha", group="Core tools"),
+            manifest("beta", group="Core tools", capabilities=["flatpak"]),
+            manifest("tiny", group="Profiles", kind="profile", install=None),
+        )
+
+    def test_the_number_of_a_component_comes_from_group_then_identifier(self):
+        self.assertEqual([item.id for item in self.entries], ["alpha", "beta", "tiny"])
+
+    def test_a_number_toggles_the_component_it_names(self):
+        action, selection, _ = toolkit.picker_command(self.entries, (), "2")
+        self.assertEqual((action, selection), (toolkit.TOGGLE, ("beta",)))
+
+    def test_the_same_number_toggles_the_component_off_again(self):
+        _, selection, _ = toolkit.picker_command(self.entries, ("beta",), "2")
+        self.assertEqual(selection, ())
+
+    def test_an_identifier_selects_the_same_component_as_its_number(self):
+        by_name = toolkit.picker_command(self.entries, (), "tiny")[1]
+        by_number = toolkit.picker_command(self.entries, (), "3")[1]
+        self.assertEqual(by_name, by_number)
+
+    def test_several_choices_are_accepted_on_one_line(self):
+        _, selection, _ = toolkit.picker_command(self.entries, (), "1, 2 tiny")
+        self.assertEqual(selection, ("alpha", "beta", "tiny"))
+
+    def test_the_selection_does_not_depend_on_the_order_it_was_typed(self):
+        first = toolkit.picker_command(self.entries, (), "1 3")[1]
+        second = toolkit.picker_command(self.entries, (), "3 1")[1]
+        self.assertEqual(first, second)
+
+    def test_an_unknown_word_changes_nothing_and_says_so(self):
+        action, selection, message = toolkit.picker_command(
+            self.entries, ("alpha",), "1 ghost"
+        )
+        self.assertEqual((action, selection), (toolkit.TOGGLE, ("alpha",)))
+        self.assertIn("unknown choice: ghost", message)
+
+    def test_a_number_outside_the_list_changes_nothing(self):
+        _, selection, message = toolkit.picker_command(self.entries, ("alpha",), "9")
+        self.assertEqual(selection, ("alpha",))
+        self.assertIn("no such number: 9", message)
+
+    def test_none_clears_the_selection(self):
+        _, selection, _ = toolkit.picker_command(self.entries, ("alpha", "beta"), "none")
+        self.assertEqual(selection, ())
+
+    def test_an_empty_line_confirms_the_selection(self):
+        action, selection, _ = toolkit.picker_command(self.entries, ("alpha",), "")
+        self.assertEqual((action, selection), (toolkit.CONFIRM, ("alpha",)))
+
+    def test_an_empty_selection_cannot_be_confirmed(self):
+        action, _, message = toolkit.picker_command(self.entries, (), "")
+        self.assertEqual(action, toolkit.TOGGLE)
+        self.assertIn("nothing is selected", message)
+
+    def test_q_cancels(self):
+        self.assertEqual(
+            toolkit.picker_command(self.entries, ("alpha",), "q")[0], toolkit.CANCEL
+        )
+
+    def test_the_picker_marks_the_selection_and_the_missing_capability(self):
+        text = toolkit.render_picker(self.entries, ("alpha",), frozenset())
+        self.assertIn("[x]", text)
+        self.assertIn("!", text)
+        self.assertIn("Core tools", text)
+        self.assertIn("Profiles", text)
+
+    def test_a_long_summary_stays_on_one_line(self):
+        entries = picker(manifest("alpha", summary="w" * 200))
+        for line in toolkit.render_picker(entries, (), frozenset()).splitlines():
+            self.assertLessEqual(len(line), 100)
+
+    def test_the_picker_returns_what_the_human_confirmed(self):
+        answers = iter(["2", ""])
+        chosen = toolkit.run_picker(
+            self.entries, frozenset(), read=lambda _: next(answers),
+            write=lambda _text="": None,
+        )
+        self.assertEqual(chosen, ("beta",))
+
+    def test_the_picker_returns_nothing_when_the_human_cancels(self):
+        answers = iter(["1", "q"])
+        self.assertIsNone(toolkit.run_picker(
+            self.entries, frozenset(), read=lambda _: next(answers),
+            write=lambda _text="": None,
+        ))
+
+    def test_a_closed_input_cancels_the_picker(self):
+        def closed(_prompt):
+            raise EOFError
+
+        self.assertIsNone(toolkit.run_picker(
+            self.entries, frozenset(), read=closed, write=lambda _text="": None,
+        ))
+
+    def test_help_explains_the_choices_and_keeps_the_selection(self):
+        answers = iter(["1", "?", ""])
+        written = []
+        chosen = toolkit.run_picker(
+            self.entries, frozenset(), read=lambda _: next(answers),
+            write=written.append,
+        )
+        self.assertEqual(chosen, ("alpha",))
+        self.assertTrue(any("toggle" in line for line in written))
+
+    def test_only_an_explicit_yes_confirms_the_plan(self):
+        self.assertTrue(toolkit.confirm("go?", read=lambda _: "y"))
+        self.assertTrue(toolkit.confirm("go?", read=lambda _: "YES"))
+        self.assertFalse(toolkit.confirm("go?", read=lambda _: ""))
+        self.assertFalse(toolkit.confirm("go?", read=lambda _: "n"))
+
+    def test_a_closed_input_does_not_confirm_the_plan(self):
+        def closed(_prompt):
+            raise EOFError
+
+        self.assertFalse(toolkit.confirm("go?", read=closed))
+
+
 # --------------------------------------------------------------------- CLI --
 
 
 class CommandLineCase(unittest.TestCase):
-    def run_installer(self, *args):
+    def run_installer(self, *args, timeout=120):
+        # stdin is closed, so a run that tried to ask a question would fail
+        # here instead of blocking a machine that cannot answer it.
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
             cwd=ROOT, capture_output=True, text=True, check=False,
+            stdin=subprocess.DEVNULL, timeout=timeout,
         )
 
     def test_list_changes_nothing_and_succeeds(self):
@@ -430,6 +625,36 @@ class CommandLineCase(unittest.TestCase):
         result = self.run_installer("--dry-run", "--components", "daniel")
         self.assertEqual(result.returncode, toolkit.EXIT_OK)
         self.assertIn("daniel", result.stdout)
+
+    def test_no_selection_names_the_profiles_and_does_not_wait(self):
+        result = self.run_installer(timeout=30)
+        self.assertEqual(result.returncode, toolkit.EXIT_USAGE)
+        self.assertIn("--profile", result.stderr)
+        self.assertIn("developer", result.stderr)
+
+    def test_a_profile_resolves_the_same_closure_a_component_would(self):
+        by_profile = self.run_installer("--dry-run", "--profile", "minimal")
+        by_component = self.run_installer("--dry-run", "--components", "minimal")
+        self.assertEqual(by_profile.returncode, toolkit.EXIT_OK)
+        self.assertEqual(by_profile.stdout, by_component.stdout)
+
+    def test_an_unknown_profile_exits_with_the_resolve_code(self):
+        result = self.run_installer("--profile", "ghost")
+        self.assertEqual(result.returncode, toolkit.EXIT_RESOLVE)
+        self.assertIn("unknown profile: ghost", result.stderr)
+
+    def test_a_component_passed_as_a_profile_is_refused(self):
+        result = self.run_installer("--profile", "devbox")
+        self.assertEqual(result.returncode, toolkit.EXIT_RESOLVE)
+        self.assertIn("not a profile", result.stderr)
+
+    def test_a_profile_and_a_component_select_both(self):
+        result = self.run_installer(
+            "--dry-run", "--profile", "minimal", "--components", "repo-labels"
+        )
+        self.assertEqual(result.returncode, toolkit.EXIT_OK)
+        self.assertIn("repo-labels", result.stdout)
+        self.assertIn("minimal", result.stdout)
 
 
 if __name__ == "__main__":

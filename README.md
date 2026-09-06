@@ -4,7 +4,7 @@ Reusable development tools, agent workflows, environment definitions, and automa
 
 This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-> The toolkit architecture is in transition. Current commands below exist now. Modular component installation exists as `./install.sh`; interactive selection, named profiles, and broader platform adapters are roadmap work tracked in #8 and #24, and this README does not present them as already implemented.
+> The toolkit architecture is in transition. Current commands below exist now. Modular component installation, interactive selection, and named profiles exist as `./install.sh`; broader platform adapters are roadmap work tracked in #8 and #24, and this README does not present them as already implemented.
 
 ## Current tools
 
@@ -13,14 +13,16 @@ This repository is evolving from a Bazzite workstation definition into a **porta
 Installs reusable components. It resolves the dependency and capability closure of what you name, shows the plan, converges in deterministic order, and verifies only what it selected.
 
 ```bash
+./install.sh                      # pick the components on a terminal
 ./install.sh --list
 ./install.sh --dry-run --components web-dev
 ./install.sh --components agentbox
+./install.sh --profile developer
 ```
 
 A component declares its dependencies, the platform capabilities its installation needs, and where its public configuration ends and machine-local state begins. Read [docs/components.md](docs/components.md).
 
-Interactive selection and named `--profile` options are roadmap work; a profile is currently selected the way any other component is.
+With no selection, and only on a terminal, it opens a component picker. `--profile` selects a tracked component set: `minimal`, `developer`, `agent-dev` or `daniel`. An automated run that names nothing gets a usage error instead of a prompt.
 
 ### `devbox`
 
@@ -113,7 +115,7 @@ personal development toolkit
     `-- daniel
 ```
 
-The `daniel` profile composes the complete personal workstation. It is not a dependency of any reusable tool, and `./install.sh --dry-run --components daniel` shows what it resolves to.
+Each profile contains the smaller one. The `daniel` profile composes the complete personal workstation. No profile is a dependency of a reusable tool, and `./install.sh --dry-run --profile daniel` shows what it resolves to.
 
 Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/workstation/issues/8) and [#24](https://github.com/daniel-kindl/workstation/issues/24).
 

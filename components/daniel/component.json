@@ -6,15 +6,7 @@
   "group": "Profiles",
   "summary": "Daniel's complete workstation, expressed as a composition of reusable components. It holds no credential and no machine identity.",
   "requires": [
-    "devbox",
-    "agent-home",
-    "agent-skills",
-    "distrobox",
-    "web-dev",
-    "python-dev",
-    "agentbox",
-    "agentq",
-    "repo-labels",
+    "agent-dev",
     "host-cli-tools",
     "desktop-apps"
   ],
