@@ -39,7 +39,7 @@ devbox exec web-dev --cwd ~/projects/example -- pnpm check
 
 Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
 
-Each environment is an independent module: `web-dev` and `python-dev` are installable today, and `dotnet-dev`, `rust-dev` and `android-dev` are declared but not implemented. Read [docs/environments.md](docs/environments.md).
+Each environment is an independent module: `web-dev`, `python-dev` and `rust-dev` are installable today, and `dotnet-dev` and `android-dev` are declared but not implemented. Read [docs/environments.md](docs/environments.md).
 
 ### `agentbox`
 

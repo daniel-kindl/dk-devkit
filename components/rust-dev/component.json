@@ -4,18 +4,27 @@
   "name": "rust-dev environment",
   "kind": "environment",
   "group": "Development environments",
-  "status": "planned",
-  "summary": "Planned Rust environment. The module declares its router markers; the container and the toolchain do not exist yet.",
+  "status": "supported",
+  "summary": "Fedora Distrobox with an isolated home and the Rust/rustup toolchain.",
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
-  "unattended": false,
-  "install": null,
+  "unattended": true,
+  "install": ["components/rust-dev/install.sh"],
   "doctor": null,
-  "verify": null,
+  "verify": ["./verify.sh", "--only", "26"],
   "manual": [],
   "environment": {
     "container": "rust-dev",
-    "inference": "components/rust-dev/inference.tsv"
+    "ini": "distrobox/rust-dev.ini",
+    "packages": "manifests/rust-dev-packages.txt",
+    "toolchain": "manifests/rust-dev.env",
+    "bootstrap": "bootstrap/rust-dev.sh",
+    "router": "config/devbox-router/environments.d/rust-dev.env",
+    "inference": "components/rust-dev/inference.tsv",
+    "home": "~/.local/share/distrobox-homes/rust-dev/"
   },
-  "state": { "public": ["components/rust-dev/inference.tsv"], "local": [] }
+  "state": {
+    "public": ["distrobox/rust-dev.ini", "manifests/rust-dev-packages.txt", "manifests/rust-dev.env"],
+    "local": ["~/.local/share/distrobox-homes/rust-dev/"]
+  }
 }

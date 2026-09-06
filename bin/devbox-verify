@@ -230,10 +230,10 @@ expect_rc 'H1 exits 4 (unresolved)' 4 "$rc" "$out"
 expect_contains 'H2 error names the repository' "$(canon "$SCRATCH/unknown")" "$out"
 expect_contains 'H3 error suggests devbox assign' 'devbox assign' "$out"
 
-mkrepo "$SCRATCH/rustish" Cargo.toml
-out=$(cd "$SCRATCH/rustish" && dbx_cfg run -- true 2>&1); rc=$?
+mkrepo "$SCRATCH/dotnetish" global.json
+out=$(cd "$SCRATCH/dotnetish" && dbx_cfg run -- true 2>&1); rc=$?
 expect_rc 'H4 inferred-but-unconfigured env exits 5' 5 "$rc" "$out"
-expect_contains 'H5 error names the inferred environment' 'rust-dev' "$out"
+expect_contains 'H5 error names the inferred environment' 'dotnet-dev' "$out"
 
 mkrepo "$SCRATCH/mixed" package.json Cargo.toml
 out=$(cd "$SCRATCH/mixed" && dbx_cfg run -- true 2>&1); rc=$?

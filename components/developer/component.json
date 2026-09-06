@@ -5,7 +5,7 @@
   "kind": "profile",
   "group": "Profiles",
   "summary": "The minimal profile, the third-party skills and the containerised development environments.",
-  "requires": ["minimal", "agent-skills", "distrobox", "web-dev", "python-dev"],
+  "requires": ["minimal", "agent-skills", "distrobox", "web-dev", "python-dev", "rust-dev"],
   "capabilities": [],
   "unattended": false,
   "install": null,
