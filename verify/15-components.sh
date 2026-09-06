@@ -28,12 +28,20 @@ if command -v python3 >/dev/null 2>&1; then
     check 'C10 --list reports the catalogue' -- "$INSTALLER" --list
     check_contains 'C11 the catalogue groups the components' 'Development environments' \
         "$("$INSTALLER" --list 2>/dev/null || true)"
-    check 'C12 a selection is required' -- \
-        sh -c "'$INSTALLER' >/dev/null 2>&1; test \$? = 2"
+    # No terminal means no picker: an automated run reports what it needs and
+    # stops, and never waits for an answer that cannot arrive.
+    check 'C12 a selection is required without a terminal' -- \
+        sh -c "'$INSTALLER' </dev/null >/dev/null 2>&1; test \$? = 2"
     check 'C13 an unknown component is refused (exit 3)' -- \
         sh -c "'$INSTALLER' --components ghost >/dev/null 2>&1; test \$? = 3"
     check_contains 'C14 a dry run says why a dependency is included' 'required by web-dev' \
         "$("$INSTALLER" --dry-run --components web-dev 2>/dev/null || true)"
+    check_contains 'C14b a profile expands to the components it composes' 'required by minimal' \
+        "$("$INSTALLER" --dry-run --profile minimal </dev/null 2>/dev/null || true)"
+    check 'C14c an unknown profile is refused (exit 3)' -- \
+        sh -c "'$INSTALLER' --profile ghost </dev/null >/dev/null 2>&1; test \$? = 3"
+    check 'C14d a component is not accepted as a profile (exit 3)' -- \
+        sh -c "'$INSTALLER' --profile devbox </dev/null >/dev/null 2>&1; test \$? = 3"
 
     component_out=$(python3 "$COMPONENT_TEST" 2>&1) && component_rc=0 || component_rc=$?
     component_n=$(printf '%s\n' "$component_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
@@ -46,8 +54,12 @@ if command -v python3 >/dev/null 2>&1; then
 else
     for name in 'C8 the resolver compiles' 'C9 the capability manifest is valid JSON' \
                 'C10 --list reports the catalogue' 'C11 the catalogue groups the components' \
-                'C12 a selection is required' 'C13 an unknown component is refused (exit 3)' \
+                'C12 a selection is required without a terminal' \
+                'C13 an unknown component is refused (exit 3)' \
                 'C14 a dry run says why a dependency is included' \
+                'C14b a profile expands to the components it composes' \
+                'C14c an unknown profile is refused (exit 3)' \
+                'C14d a component is not accepted as a profile (exit 3)' \
                 'C15 component installer tests pass'; do
         skip "$name" 'no python3 on this side'
     done
@@ -64,3 +76,10 @@ check 'C17 the host bootstrap composes the libraries' -- \
     grep -q 'install_devbox_router "\$REPO_ROOT"' "$REPO_ROOT/bootstrap/host.sh"
 check 'C18 the devbox component composes the same library' -- \
     grep -q 'install_devbox_router "\$REPO_ROOT"' "$REPO_ROOT/components/devbox/install.sh"
+
+# Every profile this repository documents must exist, so that a documented
+# --profile selection never fails on a clean machine.
+for profile in minimal developer agent-dev daniel; do
+    check "C19 the $profile profile is tracked" -- \
+        test -f "$REPO_ROOT/components/$profile/component.json"
+done

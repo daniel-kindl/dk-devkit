@@ -6,10 +6,12 @@ name the components you want, and the installer resolves everything they
 declare and nothing else.
 
 ```bash
+./install.sh                               # pick on a terminal
 ./install.sh --list                        # every component
 ./install.sh --dry-run --components web-dev
 ./install.sh --components agentbox
-./install.sh --components daniel           # the complete personal workstation
+./install.sh --profile developer           # a tracked component set
+./install.sh --profile daniel              # the complete personal workstation
 ```
 
 `bootstrap/host.sh` and `bootstrap/web-dev.sh` remain supported. Both entry
@@ -152,13 +154,14 @@ MANUAL ACTION
 | --- | --- |
 | `--list` | Print the catalogue and change nothing. |
 | `--components a,b` | Install these components and what they declare. |
+| `--profile name` | Install what a tracked profile composes. |
 | `--dry-run` | Print the resolved plan and change nothing. |
 | `--force` | Install a component again even when it is already ready. |
 | `--no-verify` | Install without verifying. |
 
-An interactive component picker and named `--profile` selection are issue #12.
-Until then, a profile is selected the way any other component is:
-`--components daniel`.
+`--profile` and `--components` can be combined. `--profile` accepts a profile
+only, so a typo selects nothing unexpected; a profile can also be named as an
+ordinary component with `--components daniel`.
 
 ## Exit codes
 
@@ -178,21 +181,66 @@ component that needs authentication declares it in `manual`, and the run
 reports it as an action to complete before a re-run. `state.local` says where
 the private state lives, which is always outside this repository.
 
+## The picker
+
+With no `--components` and no `--profile`, the installer opens a picker. It is
+a plain prompt, not a full-screen program.
+
+```text
+Core tools
+   3 [ ]   agent-home      Installs the shared agent policy, the status line...
+   4 [ ]   agent-skills    Installs the skills in manifests/skills.tsv into...
+   5 [x]   devbox          Routes an interactive command into the development...
+Development environments
+   6 [ ] ! distrobox       The container runtime every development environment...
+
+  ! the machine is missing a capability this component needs
+
+Select what to install. '?' explains the choices.
+select>
+```
+
+| Input | Effect |
+| --- | --- |
+| `5` | Toggle that component. Several numbers on one line are allowed. |
+| `web-dev` | Toggle a component, or a profile, by name. |
+| `none` | Clear the selection. |
+| Enter | Resolve the selection and show the plan. |
+| `q` | Cancel and change nothing. |
+
+Nothing is selected when the picker opens, and the plan is shown before the
+question `Install this plan?`. Only an explicit `y` installs anything.
+
+The picker opens **only on a terminal**. Without one, the installer prints what
+it needs and exits 2, so an automated run never waits for an answer that cannot
+arrive.
+
 ## Profiles
 
 A profile is a component of kind `profile`. It installs nothing; it only
-declares what it composes.
+declares what it composes. A profile therefore expands the same way every time,
+and `--profile minimal` resolves exactly what `--components minimal` resolves.
+
+| Profile | What it composes |
+| --- | --- |
+| `minimal` | The `devbox` router and the shared agent policy. |
+| `developer` | `minimal`, the third-party skills, and the development environments. |
+| `agent-dev` | `developer`, plus `agentbox`, `agentq` and `repo-labels`. |
+| `daniel` | `agent-dev`, plus the host CLI tools and the desktop applications. |
+
+Each profile contains the smaller one, so the four are one ladder rather than
+four unrelated lists.
 
 `daniel` is Daniel's complete workstation. It is public and reproducible
 because it holds only component choices, never a credential or a machine
 identity.
 
 ```bash
-./install.sh --dry-run --components daniel
+./install.sh --dry-run --profile daniel
 ```
 
-Nothing depends on `daniel`. Every component it names is installable on its
-own.
+No reusable component depends on a profile. Every component a profile names is
+installable on its own.
 
 ## Adding a component
 
@@ -200,6 +248,6 @@ own.
 2. Put the operations in the same directory, or point at a shared library
    function in `bootstrap/lib/` when the host bootstrap runs the same step.
 3. Declare the capabilities the installation needs, not the distribution.
-4. Add the component to the `daniel` profile only if Daniel's workstation has
-   it.
+4. Add the component to a profile only where that profile genuinely composes
+   it. A reusable component must not depend on a profile.
 5. `./verify.sh --only 15` checks the contract, the resolver and the tests.

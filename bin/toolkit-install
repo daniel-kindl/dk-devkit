@@ -5,6 +5,10 @@ Run it through install.sh at the top of the checkout. It discovers the
 components in components/*/component.json, resolves the dependency and
 capability closure of an explicit selection, shows the plan, converges the
 components in deterministic order, and verifies only what it selected.
+
+A selection comes from --components, from --profile, or from the interactive
+picker. The picker runs only on a terminal, so an automated run reports a usage
+error instead of waiting for an answer that never arrives.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ COMPONENT_DIR = ROOT / "components"
 CAPABILITY_MANIFEST = ROOT / "manifests" / "capabilities.json"
 
 KINDS = ("tool", "runtime", "environment", "extras", "profile")
+PROFILE = "profile"
 PROBE_KINDS = ("command", "executable", "uname", "not-container", "any")
 
 EXIT_OK = 0
@@ -477,6 +482,170 @@ def render_catalogue(
     return "\n".join(lines).rstrip()
 
 
+# --------------------------------------------------------------- profiles --
+
+
+def profile_ids(components: Mapping[str, Component]) -> tuple[str, ...]:
+    """Every profile identifier, in one deterministic order."""
+    return tuple(
+        sorted(name for name, item in components.items() if item.kind == PROFILE)
+    )
+
+
+def resolve_profiles(
+    components: Mapping[str, Component], names: Sequence[str]
+) -> tuple[str, ...]:
+    """Accept profile identifiers only, so --profile cannot select a tool."""
+    known = profile_ids(components)
+    for name in names:
+        if name not in components:
+            raise ResolveError(
+                f"unknown profile: {name}; the profiles are: {', '.join(known)}"
+            )
+        if components[name].kind != PROFILE:
+            raise ResolveError(
+                f"{name} is a component, not a profile; "
+                f"select it with --components {name}"
+            )
+    return tuple(dict.fromkeys(names))
+
+
+# ----------------------------------------------------------------- picker --
+
+TOGGLE = "toggle"
+CONFIRM = "confirm"
+CANCEL = "cancel"
+HELP = "help"
+
+PICKER_HELP = """\
+  <number>   toggle that component; several numbers on one line are allowed
+  <id>       toggle a component or a profile by name
+  none       clear the selection
+  Enter      resolve the selection and show the plan
+  q          cancel and change nothing"""
+
+
+SUMMARY_WIDTH = 64
+
+
+def picker_entries(components: Mapping[str, Component]) -> tuple[Component, ...]:
+    """The picker order: by group, then by identifier. A number never moves."""
+    return tuple(
+        sorted(components.values(), key=lambda item: (item.group, item.id))
+    )
+
+
+def _short(text: str, width: int = SUMMARY_WIDTH) -> str:
+    """Keep one picker line on one terminal line."""
+    if len(text) <= width:
+        return text
+    return text[: width - 3].rstrip() + "..."
+
+
+def render_picker(
+    entries: Sequence[Component], selection: Sequence[str], present: frozenset[str]
+) -> str:
+    lines: list[str] = []
+    width = max((len(item.id) for item in entries), default=0)
+    group = ""
+    for number, component in enumerate(entries, start=1):
+        if component.group != group:
+            group = component.group
+            lines.append(group)
+        mark = "x" if component.id in selection else " "
+        missing = [c for c in component.capabilities if c not in present]
+        note = "!" if missing else " "
+        lines.append(
+            f"  {number:>2} [{mark}] {note} {component.id.ljust(width)}  "
+            f"{_short(component.summary)}"
+        )
+    lines.append("")
+    lines.append("  ! the machine is missing a capability this component needs")
+    return "\n".join(lines)
+
+
+def picker_command(
+    entries: Sequence[Component], selection: Sequence[str], line: str
+) -> tuple[str, tuple[str, ...], str]:
+    """Apply one picker line. Return the action, the selection and a message.
+
+    A line is applied completely or not at all, so an unknown word never
+    changes half of the selection.
+    """
+    text = line.strip()
+    current = tuple(selection)
+    if not text:
+        if not current:
+            return TOGGLE, current, "nothing is selected; type a number, or q to cancel"
+        return CONFIRM, current, ""
+    lowered = text.lower()
+    if lowered in ("q", "quit"):
+        return CANCEL, current, ""
+    if lowered in ("?", "h", "help"):
+        return HELP, current, ""
+    if lowered == "none":
+        return TOGGLE, (), ""
+
+    known = {component.id for component in entries}
+    wanted: list[str] = []
+    for word in text.replace(",", " ").split():
+        if word.isdigit():
+            number = int(word)
+            if not 1 <= number <= len(entries):
+                return TOGGLE, current, f"no such number: {word}"
+            wanted.append(entries[number - 1].id)
+        elif word in known:
+            wanted.append(word)
+        else:
+            return TOGGLE, current, f"unknown choice: {word}"
+
+    chosen = set(current)
+    for name in wanted:
+        chosen.symmetric_difference_update({name})
+    return TOGGLE, tuple(sorted(chosen)), ""
+
+
+def run_picker(
+    entries: Sequence[Component],
+    present: frozenset[str],
+    read: Callable[[str], str] = input,
+    write: Callable[[str], None] = print,
+) -> tuple[str, ...] | None:
+    """Ask a human what to install. Return None when the human cancels."""
+    selection: tuple[str, ...] = ()
+    message = ""
+    while True:
+        write("")
+        write(render_picker(entries, selection, present))
+        write("")
+        write("Select what to install. '?' explains the choices.")
+        if message:
+            write(message)
+        try:
+            line = read("select> ")
+        except (EOFError, KeyboardInterrupt):
+            write("")
+            return None
+        action, selection, message = picker_command(entries, selection, line)
+        if action == CANCEL:
+            return None
+        if action == CONFIRM:
+            return selection
+        if action == HELP:
+            write("")
+            write(PICKER_HELP)
+            message = ""
+
+
+def confirm(question: str, read: Callable[[str], str] = input) -> bool:
+    """Ask before mutation. Anything but an explicit yes means no."""
+    try:
+        answer = read(f"{question} [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
 # -------------------------------------------------------------- execution --
 
 
@@ -530,6 +699,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--components", default="",
                         help="comma-separated component identifiers to install")
+    parser.add_argument("--profile", default="",
+                        help="comma-separated profiles; each expands to a component set")
     parser.add_argument("--list", action="store_true",
                         help="list the components and change nothing")
     parser.add_argument("--dry-run", action="store_true",
@@ -543,6 +714,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _selection(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _on_a_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -562,12 +737,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(render_catalogue(components, present))
         return EXIT_OK
 
-    selection = _selection(args.components)
+    try:
+        selection = list(resolve_profiles(components, _selection(args.profile)))
+    except ResolveError as exc:
+        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        return EXIT_RESOLVE
+    selection += _selection(args.components)
+
+    # The picker is the only part that asks a question, and it asks it only on
+    # a terminal. An automated run says what it needs and stops.
+    picked = False
     if not selection:
-        print(f"{PROGRAM}: name the components to install, for example "
-              f"--components devbox,web-dev", file=sys.stderr)
-        print(f"{PROGRAM}: '{PROGRAM} --list' shows every component", file=sys.stderr)
-        return EXIT_USAGE
+        if not _on_a_terminal():
+            print(f"{PROGRAM}: name what to install, for example "
+                  f"--components devbox,web-dev or --profile developer",
+                  file=sys.stderr)
+            print(f"{PROGRAM}: the profiles are: "
+                  f"{', '.join(profile_ids(components))}", file=sys.stderr)
+            print(f"{PROGRAM}: '{PROGRAM} --list' shows every component",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        chosen = run_picker(picker_entries(components), present)
+        if chosen is None:
+            print(f"{PROGRAM}: cancelled; nothing was installed")
+            return EXIT_OK
+        selection = list(chosen)
+        picked = True
 
     try:
         reasons, order = closure(components, selection)
@@ -585,6 +780,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         names = ", ".join(step.component.id for step in plan.blocked)
         print(f"{PROGRAM}: refusing to install; blocked components: {names}", file=sys.stderr)
         return EXIT_CAPABILITY
+    if picked and not confirm("\nInstall this plan?"):
+        print(f"{PROGRAM}: cancelled; nothing was installed")
+        return EXIT_OK
 
     failure = execute(plan, ROOT)
     if failure is not None:

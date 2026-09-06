@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "minimal",
+  "name": "minimal profile",
+  "kind": "profile",
+  "group": "Profiles",
+  "summary": "The smallest useful toolkit: the devbox router and the shared agent policy.",
+  "requires": ["devbox", "agent-home"],
+  "capabilities": [],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "state": { "public": ["components/minimal/component.json"], "local": [] }
+}

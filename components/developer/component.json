@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "developer",
+  "name": "developer profile",
+  "kind": "profile",
+  "group": "Profiles",
+  "summary": "The minimal profile, the third-party skills and the containerised development environments.",
+  "requires": ["minimal", "agent-skills", "distrobox", "web-dev", "python-dev"],
+  "capabilities": [],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "state": { "public": ["components/developer/component.json"], "local": [] }
+}

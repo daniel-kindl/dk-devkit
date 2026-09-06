@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "agent-dev",
+  "name": "agent-dev profile",
+  "kind": "profile",
+  "group": "Profiles",
+  "summary": "The developer profile and the agent orchestration tools: agentbox, agentq and repo-labels.",
+  "requires": ["developer", "agentbox", "agentq", "repo-labels"],
+  "capabilities": [],
+  "unattended": false,
+  "install": null,
+  "doctor": null,
+  "verify": null,
+  "manual": [],
+  "state": { "public": ["components/agent-dev/component.json"], "local": [] }
+}
