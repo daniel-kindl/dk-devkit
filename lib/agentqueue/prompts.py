@@ -294,7 +294,7 @@ The GitHub checks of this pull request are the gate that decides the merge.
 - base commit `{base_commit[:12]}`
 - every commit is authored by the neutral sandbox identity, not by a person
 
-See `docs/agentq.md` in the workstation repository for the pipeline.
+See `docs/agentq.md` in the toolkit repository for the pipeline.
 """
 
 

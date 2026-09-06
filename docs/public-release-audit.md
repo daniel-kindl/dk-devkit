@@ -161,7 +161,7 @@ documented, rather than inventing one. #16 recorded the same gap.
 
 GitHub's private vulnerability reporting is the obvious channel, and it cannot
 be turned on now: the repository is private, and the API answers `404` for
-`repos/<owner>/workstation/private-vulnerability-reporting` while it stays
+`repos/<owner>/dk-devkit/private-vulnerability-reporting` while it stays
 private. The setting exists for public repositories.
 
 So the order is fixed. Enable private vulnerability reporting immediately after

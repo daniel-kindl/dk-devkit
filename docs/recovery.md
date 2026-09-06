@@ -49,7 +49,7 @@ which is how `web-dev` reaches the same agent without a copy of the key.
 
 ```bash
 mkdir -p ~/projects
-git clone git@github.com:daniel-kindl/workstation.git ~/projects/workstation
+git clone git@github.com:daniel-kindl/dk-devkit.git ~/projects/workstation
 ```
 
 Clone it to exactly `~/projects/workstation`. The bootstrap links live

@@ -1,4 +1,4 @@
-# Agent instructions for the workstation repository
+# Agent instructions for the dk-devkit repository
 
 This repository is a portable personal development toolkit: reusable commands,
 agent workflows, environment definitions and policies. Daniel's complete
