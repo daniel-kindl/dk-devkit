@@ -123,6 +123,15 @@ class TestTheLabelCatalog(unittest.TestCase):
                       "agent-failed"):
             self.assertIn(label, names)
 
+    def test_the_workflow_group_holds_nothing_else(self):
+        # The catalog also carries issue-taxonomy groups. A run must not treat
+        # one of those as a lifecycle label, so the selection stays exact.
+        names = {item["name"] for item in setup_mod.workflow_labels(_ROOT)}
+        self.assertEqual(names, {
+            "ready-for-agent", "agent-in-progress", "ready-for-human",
+            "agent-failed", "wayfinder",
+        })
+
     def test_a_missing_catalog_is_reported_and_not_guessed(self):
         with tempfile.TemporaryDirectory() as empty:
             with self.assertRaises(setup_mod.SetupError):
