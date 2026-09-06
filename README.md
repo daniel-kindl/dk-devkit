@@ -204,7 +204,7 @@ The repository does not intentionally track:
 
 See [docs/secrets.md](docs/secrets.md) for the policy, and `./install.sh --state` for the public and local boundary of each component.
 
-[docs/public-release-audit.md](docs/public-release-audit.md) is the public-readiness audit: what a reader of the public repository learns, what was classified as intentionally public, and the steps publication still owes.
+[docs/public-release-audit.md](docs/public-release-audit.md) is the public-readiness audit: what a reader of the public repository learns, what was classified as intentionally public, and the steps publication still owes. `bin/publication-gate` runs the mechanical gates of that audit against the exact commit and prints one verdict.
 
 ## Repository layout
 
