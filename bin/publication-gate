@@ -13,7 +13,7 @@
 # it does not decide for a human. docs/public-release-audit.md holds the audit,
 # the GO decision and the publication order; issue #17 owns publication.
 #
-# The last gate is the reason this command exists. The GO decision names the
+# G7 is the reason this command exists. The GO decision names the
 # commit it was recorded against. Publication exposes a different commit, and
 # a decision that names an older one carries nothing by itself. The gate
 # confirms that the audited commit is an ancestor, then prints what changed
@@ -50,6 +50,7 @@ GATES=(
     'G5  full verification passes with no failed check'
     'G6  the repository metadata and settings match the manifest'
     'G7  the audit records a GO for an ancestor of this commit'
+    'G8  the remote holds no undeclared branch, tag, release or artifact'
 )
 
 usage() { sed -n '2,25p' "$0"; }
@@ -190,6 +191,71 @@ elif ! git merge-base --is-ancestor "$audited" HEAD; then
         "the audited commit $audited is not an ancestor of $head_short"
 else
     gate_pass "${GATES[6]}"
+fi
+
+# --- G8 the remote holds nothing that no review approved -------------------
+#
+# The checklist item in #17 is "no unintended branches, tags or artifacts". A
+# ref is unintended when no review declared it, so the declaration is a tracked
+# file and this gate is a comparison, in both directions.
+#
+# A release and an Actions artifact need no declaration. This repository cuts
+# no release and tracks no workflow, so either one is something that no review
+# approved, and publication would expose it beside the tree.
+
+REFS_MANIFEST=manifests/published-refs.txt
+
+refs_declared=$(sed -e 's/#.*//' -e 's/[[:blank:]]//g' "$REFS_MANIFEST" 2>/dev/null \
+    | grep -v '^$')
+refs_extra=''
+refs_absent=''
+refs_detail=''
+
+if [ ! -f "$REFS_MANIFEST" ]; then
+    refs_detail="$REFS_MANIFEST does not exist"
+elif [ -z "$refs_declared" ]; then
+    refs_detail="$REFS_MANIFEST declares no ref"
+elif ! refs_listed=$(git ls-remote --heads --tags origin 2>&1); then
+    refs_detail="origin cannot be read: $(printf '%s\n' "$refs_listed" | tail -n 1)"
+else
+    # A ref name holds no space, and Git refuses "*", "?" and "[" in one, so
+    # the word split below is safe.
+    refs_remote=$(printf '%s\n' "$refs_listed" | awk 'NF { print $2 }')
+    for ref in $refs_remote; do
+        printf '%s\n' "$refs_declared" | grep -Fxq -- "$ref" \
+            || refs_extra="$refs_extra $ref"
+    done
+    for ref in $refs_declared; do
+        printf '%s\n' "$refs_remote" | grep -Fxq -- "$ref" \
+            || refs_absent="$refs_absent $ref"
+    done
+    [ -n "$refs_extra" ] && refs_detail="undeclared on origin:$refs_extra"
+    if [ -n "$refs_absent" ]; then
+        refs_detail="${refs_detail:+$refs_detail; }declared but absent:$refs_absent"
+    fi
+fi
+
+# The release list and the artifact count are the other half of the item, and
+# both need the remote through gh. A count that cannot be read is not a zero.
+if ! command -v gh >/dev/null 2>&1; then
+    refs_detail="${refs_detail:+$refs_detail; }gh is not on PATH, so no release and no artifact was read"
+else
+    releases=$(gh release list --limit 100 2>/dev/null | grep -c .)
+    artifacts=$(gh api repos/{owner}/{repo}/actions/artifacts --jq '.total_count' 2>/dev/null)
+    if [ "$releases" != 0 ]; then
+        refs_detail="${refs_detail:+$refs_detail; }$releases undeclared release(s)"
+    fi
+    if [ -z "$artifacts" ]; then
+        refs_detail="${refs_detail:+$refs_detail; }the Actions artifact count cannot be read"
+    elif [ "$artifacts" != 0 ]; then
+        refs_detail="${refs_detail:+$refs_detail; }$artifacts Actions artifact(s)"
+    fi
+fi
+
+if [ -z "$refs_detail" ]; then
+    gate_pass "${GATES[7]}  ${DIM}$(printf '%s\n' "$refs_declared" | grep -c .) ref(s), 0 releases, 0 artifacts${RESET}"
+else
+    gate_fail "${GATES[7]}" "$refs_detail"
 fi
 
 # --- what the GO does not cover -------------------------------------------
