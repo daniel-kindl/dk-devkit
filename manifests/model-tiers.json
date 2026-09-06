@@ -1,0 +1,128 @@
+{
+  "$comment": [
+    "The canonical model-routing catalog for unattended work.",
+    "",
+    "One task gets one effort tier. A tier names the implementer model and the",
+    "independent reviewer model, and both are pinned provider model IDs. A",
+    "family name such as \"Sonnet\" is a display name for an operator. It is",
+    "never what a run resolves to.",
+    "",
+    "The markers are L, S and H, for Lightweight, Standard and Hard. They",
+    "describe the execution effort that was selected. They do not describe the",
+    "estimated size of a ticket.",
+    "",
+    "lib/agentqueue/effort.py loads this file, and docs/agentq.md explains how",
+    "a tier is selected. A repository can pin a tier in its own policy.",
+    "",
+    "Every tier must pair two different providers. A model does not review its",
+    "own implementation."
+  ],
+
+  "version": 1,
+  "default": "standard",
+
+  "tiers": [
+    {
+      "id": "lightweight",
+      "marker": "L",
+      "rank": 1,
+      "summary": "bounded, low-risk, mechanically simple work",
+      "implementer": {
+        "agent": "claude",
+        "family": "Haiku",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "reviewer": {
+        "agent": "codex",
+        "family": "Luna",
+        "model": "gpt-5.6-luna"
+      }
+    },
+    {
+      "id": "standard",
+      "marker": "S",
+      "rank": 2,
+      "summary": "normal engineering work, and the tier a task gets when no signal says otherwise",
+      "implementer": {
+        "agent": "claude",
+        "family": "Sonnet",
+        "model": "claude-sonnet-5"
+      },
+      "reviewer": {
+        "agent": "codex",
+        "family": "Terra",
+        "model": "gpt-5.6-terra"
+      }
+    },
+    {
+      "id": "hard",
+      "marker": "H",
+      "rank": 3,
+      "summary": "work that genuinely benefits from the strongest reasoning models",
+      "implementer": {
+        "agent": "claude",
+        "family": "Opus",
+        "model": "claude-opus-5"
+      },
+      "reviewer": {
+        "agent": "codex",
+        "family": "Sol",
+        "model": "gpt-5.6-sol"
+      }
+    }
+  ],
+
+  "signals": {
+    "$comment": [
+      "The transparent part of the classifier. Every rule below reads issue",
+      "metadata that a human wrote: the labels, and the title. A rule never",
+      "reads model output, and no rule calls a model to choose a model.",
+      "",
+      "escalate.labels and escalate.words raise a task to escalate.tier. A word",
+      "matches on a word boundary in the lower-cased title.",
+      "",
+      "byLabel maps the ordinary issue taxonomy onto a tier.",
+      "",
+      "breadth.acceptanceCriteria.hard is the number of acceptance-criteria",
+      "items in the issue body that makes a task hard on scope alone."
+    ],
+
+    "escalate": {
+      "tier": "hard",
+      "summary": "the task changes a security, authority, release or persistence boundary",
+      "labels": ["security", "release"],
+      "words": [
+        "auth",
+        "authentication",
+        "authority",
+        "credential",
+        "ci",
+        "isolation",
+        "merge",
+        "migrate",
+        "migration",
+        "permission",
+        "persistence",
+        "release",
+        "sandbox",
+        "schema",
+        "secret",
+        "security",
+        "token"
+      ]
+    },
+
+    "byLabel": {
+      "documentation": "lightweight",
+      "chore": "lightweight",
+      "bug": "standard",
+      "refactor": "standard",
+      "feature": "standard",
+      "enhancement": "standard"
+    },
+
+    "breadth": {
+      "acceptanceCriteria": { "hard": 6 }
+    }
+  }
+}

@@ -136,6 +136,7 @@ class AgentboxRunner:
         prompt_file: str,
         base_ref: str,
         continuation: bool = False,
+        effort=None,
     ) -> List[str]:
         args = [
             self.agentbox,
@@ -149,6 +150,19 @@ class AgentboxRunner:
             "--max-fix-rounds", str(self.policy.maxFixRounds),
             "--agent-output", self.agent_output,
         ]
+        # The resolved tier reaches agentbox as pinned model IDs, never as a
+        # tier name. agentbox runs what it is told to run, and the choice
+        # stays in the trusted layer that can explain it.
+        if effort is not None:
+            args += [
+                "--agent", effort.implementer.agent,
+                "--model", effort.implementer.model,
+            ]
+            if self.policy.reviewPolicy != "none":
+                args += [
+                    "--review-agent", effort.reviewer.agent,
+                    "--review-model", effort.reviewer.model,
+                ]
         if continuation:
             # The branch is its own base. agentbox validates the descent and
             # updates the ref with a compare and swap, exactly as it does for
@@ -173,6 +187,7 @@ class AgentboxRunner:
         log_dir: str = "",
         on_event: Optional[Callable[[dict], None]] = None,
         on_raw: Optional[Callable[[str], None]] = None,
+        effort=None,
     ) -> AgentRun:
         """Start agentbox, stream what it writes, and classify the result.
 
@@ -181,7 +196,7 @@ class AgentboxRunner:
         reaches the run log as it arrives, so an interrupted run still leaves
         its evidence behind, and the caller decides what a human sees.
         """
-        cmd = self.command(repo, branch, prompt_file, base_ref, continuation)
+        cmd = self.command(repo, branch, prompt_file, base_ref, continuation, effort)
         if self.dry_run:
             raise RuntimeError("a dry run tried to start agentbox")
 

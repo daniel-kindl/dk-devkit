@@ -318,12 +318,14 @@ class FakeRunner:
         self.agent_output = "progress"
 
     def run(self, repo, branch, prompt_file, base_ref, continuation=False,
-            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None,
+            effort=None):
         step = self.script.pop(0) if self.script else {}
         self.calls.append(
             {"branch": branch, "continuation": continuation,
              "prompt": _read(prompt_file),
-             "log_name": log_name, "log_dir": log_dir}
+             "log_name": log_name, "log_dir": log_dir,
+             "effort": effort}
         )
         for item in step.get("events", []):
             if on_event is not None:
@@ -357,6 +359,13 @@ class FakeRunner:
             command=["agentbox"],
             log_path=os.path.join(log_dir or "/fake/logs", f"{log_name}.log"),
         )
+
+
+def make_catalog(path=None):
+    """The repository's own model tier catalog, as the tests read it."""
+    from agentqueue import effort as effort_mod
+
+    return effort_mod.load(path or effort_mod.manifest_path(REPO_ROOT))
 
 
 def make_policy(**overrides):

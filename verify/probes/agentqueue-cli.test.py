@@ -27,7 +27,7 @@ from agentqueue import cli as cli_mod  # noqa: E402
 from agentqueue.model import CheckRun, Outcome  # noqa: E402
 
 READY = "ready-for-agent"
-COMMANDS = ("run", "plan", "doctor", "policy", "init")
+COMMANDS = ("run", "plan", "doctor", "effort", "policy", "init")
 SCANNER = os.path.join(_ROOT, "bin", "scan-secrets")
 
 _IDENTITY = cli_mod._agent_identities(_ROOT) or ["Agent <agent@local>"]
@@ -90,7 +90,8 @@ class CommittingRunner(fakes.FakeRunner):
         self.work = work
 
     def run(self, repo, branch, prompt_file, base_ref, continuation=False,
-            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None,
+            effort=None):
         from agentqueue.model import classify_agentbox_exit
         from agentqueue.runner import AgentRun
 
@@ -349,6 +350,39 @@ class TestEveryCommandWorksWithoutRepo(CliCase):
         self.assertIn("mutations attempted: 0", out)
         self.assertEqual(self.github.mutations, [])
         self.assertEqual(self.refs_on_the_remote(), "main")
+
+    def test_plan_states_the_tier_each_issue_would_run_on(self):
+        self.github.add_issue(85, "Implement the module", labels=(READY,))
+        code, out, _ = self.invoke(["plan"])
+        self.assertEqual(code, cli_mod.EXIT_OK)
+        self.assertIn("S standard", out)
+        self.assertEqual(self.github.mutations, [])
+
+    def test_effort_lists_the_catalog(self):
+        code, out, _ = self.invoke(["effort"])
+        self.assertEqual(code, cli_mod.EXIT_OK)
+        for tier in ("lightweight", "standard", "hard"):
+            self.assertIn(tier, out)
+        self.assertEqual(self.github.mutations, [])
+
+    def test_effort_json_names_the_pinned_models(self):
+        code, out, _ = self.invoke(["effort", "--json"])
+        self.assertEqual(code, cli_mod.EXIT_OK)
+        document = json.loads(out)
+        self.assertEqual(document["default"], "standard")
+        for tier in document["tiers"]:
+            self.assertTrue(tier["implementer"]["model"])
+            self.assertNotEqual(
+                tier["implementer"]["agent"], tier["reviewer"]["agent"]
+            )
+
+    def test_effort_explains_one_issue(self):
+        self.github.add_issue(85, "Rotate the credential", labels=(READY,))
+        code, out, _ = self.invoke(["effort", "--issue", "85"])
+        self.assertEqual(code, cli_mod.EXIT_OK)
+        self.assertIn("H  hard", out)
+        self.assertIn("escalate word: credential", out)
+        self.assertEqual(self.github.mutations, [])
 
     def test_init(self):
         os.remove(os.path.join(self.repo.work, ".agentqueue.json"))

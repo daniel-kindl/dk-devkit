@@ -31,6 +31,10 @@ check 'A6a the output test exists'           -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-output.test.py"
 check 'A6b the command surface test exists'  -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-cli.test.py"
+check 'A6c the model routing test exists'    -- \
+    test -f "$REPO_ROOT/verify/probes/agentqueue-effort.test.py"
+check 'A6d the model tier catalog exists'    -- \
+    test -f "$REPO_ROOT/manifests/model-tiers.json"
 check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentq.md"
 check 'A7a the obsolete command is absent'   -- test ! -e "$REPO_ROOT/bin/agentqueue"
 
@@ -319,6 +323,56 @@ PY
         'False False 1 True True True' "$defaults_out"
 fi
 
+# --- model routing ----------------------------------------------------------
+#
+# The catalog says which model implements a task and which model reviews it.
+# Both are pinned provider model IDs, and the pairing is cross-provider, so a
+# model never reviews its own implementation.
+
+TIERS=$REPO_ROOT/manifests/model-tiers.json
+RUNNER_CODE_2=$(aq_code_of "$AQ_LIB/runner.py")
+
+if command -v python3 >/dev/null 2>&1 && [ -f "$TIERS" ]; then
+    check 'R1 the tier catalog is valid JSON' -- \
+        python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$TIERS"
+    check 'R2 the tier catalog passes its own validation' -- \
+        python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/lib')
+from agentqueue import effort
+effort.load(effort.manifest_path(sys.argv[1]))
+" "$REPO_ROOT"
+    tiers_out=$(python3 -c "
+import json, sys
+document = json.load(open(sys.argv[1]))
+tiers = document['tiers']
+print(len(tiers),
+      ''.join(t['marker'] for t in tiers),
+      all(t['implementer']['agent'] != t['reviewer']['agent'] for t in tiers),
+      all(t['implementer']['model'] and t['reviewer']['model'] for t in tiers))
+" "$TIERS")
+    check_eq 'R3 three tiers, marked L S H, each pinned and cross-provider' \
+        '3 LSH True True' "$tiers_out"
+else
+    skip 'R1 the tier catalog is valid JSON' 'no python3 or no catalog on this side'
+    skip 'R2 the tier catalog passes its own validation' \
+        'no python3 or no catalog on this side'
+    skip 'R3 three tiers, marked L S H, each pinned and cross-provider' \
+        'no python3 or no catalog on this side'
+fi
+
+check_contains 'R4 the resolved implementer model reaches agentbox' \
+    'effort.implementer.model' "$RUNNER_CODE_2"
+check_contains 'R5 the resolved reviewer model reaches agentbox' \
+    'effort.reviewer.model' "$RUNNER_CODE_2"
+check_not_contains 'R6 a tier name is never passed as a model' \
+    'effort.id' "$RUNNER_CODE_2"
+check_not_contains 'R7 a family name is never passed as a model' \
+    'family' "$RUNNER_CODE_2"
+
+EFFORT_CODE=$(aq_code_of "$AQ_LIB/effort.py")
+check_not_contains 'R8 the classifier starts no process to choose a model' \
+    'subprocess' "$EFFORT_CODE"
+
 # --- the tests --------------------------------------------------------------
 
 if command -v python3 >/dev/null 2>&1; then
@@ -352,6 +406,16 @@ if command -v python3 >/dev/null 2>&1; then
             "$(printf '%s\n' "$cli_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 
+    eff_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-effort.test.py" 2>&1) &&
+        eff_rc=0 || eff_rc=$?
+    eff_n=$(printf '%s\n' "$eff_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
+    if [ "$eff_rc" = 0 ]; then
+        pass "H1c the model routing tests pass ($eff_n tests)"
+    else
+        fail 'H1c the model routing tests pass' \
+            "$(printf '%s\n' "$eff_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
+    fi
+
     int_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-integration.test.py" 2>&1) &&
         int_rc=0 || int_rc=$?
     int_n=$(printf '%s\n' "$int_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
@@ -365,6 +429,7 @@ else
     skip 'H1 the coordinator unit tests pass' 'no python3 on this side'
     skip 'H1a the output tests pass' 'no python3 on this side'
     skip 'H1b the command surface tests pass' 'no python3 on this side'
+    skip 'H1c the model routing tests pass' 'no python3 on this side'
     skip 'H2 the coordinator integration tests pass' 'no python3 on this side'
 fi
 
@@ -413,7 +478,7 @@ found = set()
 for action in build_parser()._actions:
     if isinstance(action, argparse._SubParsersAction):
         found.update(action.choices)
-assert found == {'run', 'plan', 'doctor', 'policy', 'init'}, found
+assert found == {'run', 'plan', 'doctor', 'effort', 'policy', 'init'}, found
 " "$REPO_ROOT"
     check 'J4 the help advertises run and never drain' -- \
         python3 -c "

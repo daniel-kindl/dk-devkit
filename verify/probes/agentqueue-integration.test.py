@@ -94,7 +94,8 @@ class CommittingRunner(fakes.FakeRunner):
         self.content = content
 
     def run(self, repo, branch, prompt_file, base_ref, continuation=False,
-            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None,
+            effort=None):
         step = self.script.pop(0) if self.script else {}
         self.calls.append({"branch": branch, "continuation": continuation,
                            "prompt": fakes._read(prompt_file), "log_name": log_name,

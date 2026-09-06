@@ -42,6 +42,12 @@
   "deleteLocalBranchOnMerge": false,
   "closeIssueIfPullRequestDidNot": false,
 
+  "effortMode": "auto",
+  "effort": "standard",
+  "effortLabelPrefix": "effort:",
+  "escalateEffortOnRetry": true,
+  "modelTiers": "",
+
   "maxParallel": 1,
   "maxRetries": 2,
   "maxFixRounds": 2,
