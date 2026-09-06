@@ -73,8 +73,8 @@ repository tracks the generator rather than the result.
 
 `~/.config/devbox-router/repos.tsv`.
 
-The live file assigns one absolute host path, `/var/home/dkindl/projects/dkkb`,
-to `web-dev`. That path exists on one machine only.
+The live file assigns one absolute host path, the expansion of
+`~/projects/dkkb`, to `web-dev`. That path exists on one machine only.
 
 It is also unnecessary. `dkkb` has a `package.json`, and `inference.tsv` already
 resolves a `package.json` to `web-dev`. The repository therefore tracks the

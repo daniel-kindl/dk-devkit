@@ -62,8 +62,8 @@ component identifier, and `component.json` is the contract.
 | `doctor` | The command that reports readiness, or `null`. |
 | `verify` | The command that verifies the component, or `null`. |
 | `manual` | Actions only a human can complete. |
-| `state.public` | Tracked configuration this component owns. |
-| `state.local` | Machine-local or private state, which stays out of Git. |
+| `state.public` | Tracked configuration this component owns, relative to this checkout. |
+| `state.local` | Machine-local or private state, outside this checkout, which stays out of Git. |
 | `environment` | Only for `kind: environment`. Read [environments.md](environments.md). |
 
 Every operation is a plain executable. The installer runs it from the top of
@@ -205,6 +205,56 @@ ordinary component with `--components daniel`.
 | 4 | A selected component is blocked by a missing capability. |
 | 5 | A component installation failed. The message names the component. |
 | 6 | Verification failed after installation. |
+
+## Public configuration and local state
+
+Every component declares where its public configuration ends and where machine-
+local state begins. The two sides never overlap.
+
+```text
+tracked reusable defaults  +  selected profile  +  optional local overrides
+                           +  runtime discovery
+                           =  effective configuration
+```
+
+`state.public` names tracked configuration this component owns. A public path
+is relative to this checkout, so the same manifest describes the component on
+every machine. It must not be absolute, must not start at the home directory,
+and must not leave the checkout.
+
+`state.local` names machine-local or private state. A local path starts at
+`~/` or at an XDG variable, and it always resolves outside this checkout. It
+must never name one machine's home directory, such as `/home/<user>/...`: a
+declaration that does could only be true on the machine that wrote it.
+
+The installer refuses a manifest that breaks either rule, so the boundary is a
+rule and not a comment. `verify.sh` module 1b checks the tracked tree against
+the same rules: every public path exists here, and no local path is tracked
+here.
+
+Read the boundary with `--state`. It reads the manifests only, so it touches
+nothing on the machine:
+
+```bash
+./install.sh --state                        # every component
+./install.sh --state --components web-dev   # that component and what it needs
+./install.sh --state --profile daniel
+```
+
+```text
+web-dev  (environment)
+  public  distrobox/web-dev.ini
+  public  manifests/web-dev-packages.txt
+  local   ~/.local/share/distrobox-homes/web-dev/
+  manual  Sign in to Claude Code and Codex inside web-dev; ...
+```
+
+Machine-local state stays out of Git even when it holds no secret. It is state
+of one machine, and it has no meaning on another.
+[not-tracked.md](not-tracked.md) records what was left out and why.
+
+Installing a reusable component requires none of it. A local override is
+optional, and a clean clone installs a component without one.
 
 ## Credentials
 

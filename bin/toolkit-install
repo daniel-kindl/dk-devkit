@@ -46,6 +46,14 @@ ENVIRONMENT_SUPPORTED_REQUIRED = ("ini", "packages", "toolchain", "bootstrap",
 PROBE_KINDS = ("command", "executable", "uname", "not-container", "any", "platform")
 SUPPORT = ("verified", "supported", "experimental", "unsupported")
 
+# The public/local state boundary. state.public names tracked configuration
+# inside this checkout. state.local names machine-local or private state, which
+# always lives outside it. A local path therefore starts at the home directory
+# or at an XDG variable, and never at one machine's home directory, so that the
+# same manifest describes every machine. docs/components.md says why.
+LOCAL_STATE_PREFIXES = ("~/", "$")
+HOME_PREFIXES = ("/home/", "/var/home/", "/Users/", "/root/")
+
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_RESOLVE = 3
@@ -165,6 +173,50 @@ def _string_list(value: object, where: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _names_a_home_directory(path: str) -> bool:
+    """True when a path hard-codes one machine's home directory."""
+    return any(path.startswith(prefix) for prefix in HOME_PREFIXES)
+
+
+def _public_state(value: object, where: str) -> tuple[str, ...]:
+    """Tracked configuration this component owns, relative to the checkout."""
+    paths = _string_list(value, where)
+    for path in paths:
+        if not path.strip():
+            raise ConfigError(f"{where} must not have an empty path")
+        if path.startswith("/") or path.startswith("~") or path.startswith("$"):
+            raise ConfigError(
+                f"{where}: {path!r} must be relative to the checkout; "
+                "public configuration is tracked here"
+            )
+        if path == ".." or path.startswith("../") or "/../" in path:
+            raise ConfigError(f"{where}: {path!r} must not leave the checkout")
+    if len(set(paths)) != len(paths):
+        raise ConfigError(f"{where} must not repeat a path")
+    return paths
+
+
+def _local_state(value: object, where: str) -> tuple[str, ...]:
+    """Machine-local or private state, which always lives outside the checkout."""
+    paths = _string_list(value, where)
+    for path in paths:
+        if not path.strip():
+            raise ConfigError(f"{where} must not have an empty path")
+        if _names_a_home_directory(path):
+            raise ConfigError(
+                f"{where}: {path!r} names one machine's home directory; "
+                "start the path at '~/' or at an XDG variable"
+            )
+        if not path.startswith(LOCAL_STATE_PREFIXES):
+            raise ConfigError(
+                f"{where}: {path!r} must start at '~/' or at an XDG variable; "
+                "local state never lives inside the checkout"
+            )
+    if len(set(paths)) != len(paths):
+        raise ConfigError(f"{where} must not repeat a path")
+    return paths
+
+
 def _command(value: object, where: str) -> tuple[str, ...] | None:
     if value is None:
         return None
@@ -257,8 +309,8 @@ def component_from(document: object, where: str) -> Component:
         doctor=_command(document.get("doctor"), f"{where}.doctor"),
         verify=_command(document.get("verify"), f"{where}.verify"),
         manual=_string_list(document.get("manual"), f"{where}.manual"),
-        public_state=_string_list(state.get("public"), f"{where}.state.public"),
-        local_state=_string_list(state.get("local"), f"{where}.state.local"),
+        public_state=_public_state(state.get("public"), f"{where}.state.public"),
+        local_state=_local_state(state.get("local"), f"{where}.state.local"),
         environment=_environment(document.get("environment"), kind, status, where),
     )
 
@@ -627,6 +679,27 @@ def closure(
     return reasons, order
 
 
+def state_selection(
+    components: Mapping[str, Component], selection: Sequence[str]
+) -> tuple[Component, ...]:
+    """Every component a selection reaches, for reporting only.
+
+    It walks the same 'requires' edges as closure(), but it reports a planned
+    module instead of refusing it. A planned module still declares where its
+    configuration and its state belong, and that boundary is what a reader asks
+    '--state' about.
+    """
+    unknown = [name for name in selection if name not in components]
+    if unknown:
+        raise ResolveError("unknown component: " + ", ".join(sorted(unknown)))
+    reached = list(dict.fromkeys(selection))
+    for name in reached:
+        for dependency in components[name].requires:
+            if dependency not in reached:
+                reached.append(dependency)
+    return tuple(components[name] for name in reached)
+
+
 def _topological_order(
     components: Mapping[str, Component], names: Iterable[str]
 ) -> tuple[str, ...]:
@@ -772,6 +845,31 @@ def render_catalogue(
     lines.append("  ! the machine is missing a capability this component needs")
     lines.append("  ~ the module exists; the installation is future work")
     return "\n".join(lines).rstrip()
+
+
+def render_state(components: Sequence[Component]) -> str:
+    """Report the public/local state boundary of the components it is given.
+
+    It reads the manifests and nothing else, so it never touches the machine.
+    A component that owns no state at all still appears, because 'nothing' is
+    the answer a reader needs when they look for its private state.
+    """
+    lines: list[str] = []
+    for component in sorted(components, key=lambda item: (item.group, item.id)):
+        lines.append(f"{component.id}  ({component.kind})")
+        for path in component.public_state:
+            lines.append(f"  public  {path}")
+        for path in component.local_state:
+            lines.append(f"  local   {path}")
+        if not component.public_state and not component.local_state:
+            lines.append("  none    this component owns no configuration and no state")
+        for item in component.manual:
+            lines.append(f"  manual  {item}")
+        lines.append("")
+    lines.append("  public  tracked in this checkout, and reusable on any machine")
+    lines.append("  local   machine-local or private, and never tracked here")
+    lines.append("  manual  a step a human completes, such as authentication")
+    return "\n".join(lines)
 
 
 def environment_modules(
@@ -1112,6 +1210,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="list the development environment modules as TSV")
     parser.add_argument("--doctor", action="store_true",
                         help="report the platform and its capabilities, and change nothing")
+    parser.add_argument("--state", action="store_true",
+                        help="report the public/local state boundary, and change nothing")
     parser.add_argument("--hint", default="",
                         help="print how to obtain one capability on this platform")
     parser.add_argument("--dry-run", action="store_true",
@@ -1171,6 +1271,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.list:
         print(render_catalogue(components, present))
+        return EXIT_OK
+
+    if args.state:
+        # A selection narrows the report. Without one it covers every
+        # component, so a clean clone can read the whole boundary at once.
+        try:
+            wanted = list(resolve_profiles(components, _selection(args.profile)))
+            wanted += _selection(args.components)
+            chosen = (state_selection(components, wanted) if wanted
+                      else tuple(components.values()))
+        except ResolveError as exc:
+            print(f"{PROGRAM}: {exc}", file=sys.stderr)
+            return EXIT_RESOLVE
+        print(render_state(chosen))
         return EXIT_OK
 
     try:

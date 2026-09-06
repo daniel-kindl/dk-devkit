@@ -77,6 +77,66 @@ check 'C17 the host bootstrap composes the libraries' -- \
 check 'C18 the devbox component composes the same library' -- \
     grep -q 'install_devbox_router "\$REPO_ROOT"' "$REPO_ROOT/components/devbox/install.sh"
 
+# The public/local state boundary. A component declares the tracked
+# configuration it owns and the machine-local state it writes. Both sides are
+# enforced, so the declaration stays a rule and does not decay into a comment.
+# docs/components.md says why.
+if command -v python3 >/dev/null 2>&1; then
+    check_contains 'C20 --state reports the tracked configuration' \
+        'public  manifests/github-labels.json' \
+        "$("$INSTALLER" --state </dev/null 2>/dev/null || true)"
+    check_contains 'C21 --state reports the machine-local state' \
+        'local   ~/.local/share/distrobox-homes/web-dev/' \
+        "$("$INSTALLER" --state </dev/null 2>/dev/null || true)"
+    check 'C22 --state narrows to a selection' -- \
+        sh -c "'$INSTALLER' --state --components repo-labels </dev/null 2>/dev/null | grep -q 'github-labels.json'"
+
+    # A public path must exist here, and a local path must not. The second one
+    # is the rule that keeps private state out of a public repository.
+    check 'C23 every public path exists in the checkout' -- \
+        python3 - "$REPO_ROOT" <<'PYEOF'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+missing = [
+    f"{manifest.parent.name}: {entry}"
+    for manifest in sorted(root.glob("components/*/component.json"))
+    for entry in json.loads(manifest.read_text()).get("state", {}).get("public", [])
+    if not (root / entry).exists()
+]
+if missing:
+    print("\n".join(missing))
+    sys.exit(1)
+PYEOF
+    check 'C24 no local path is tracked in the checkout' -- \
+        python3 - "$REPO_ROOT" <<'PYEOF'
+import json, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+tracked = set(subprocess.run(
+    ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True,
+).stdout.split())
+leaked = []
+for manifest in sorted(root.glob("components/*/component.json")):
+    for entry in json.loads(manifest.read_text()).get("state", {}).get("local", []):
+        inside = entry.removeprefix("~/").rstrip("/")
+        if any(path == inside or path.startswith(inside + "/") for path in tracked):
+            leaked.append(f"{manifest.parent.name}: {entry}")
+if leaked:
+    print("\n".join(leaked))
+    sys.exit(1)
+PYEOF
+    check 'C25 no component names one machine home directory' -- \
+        sh -c "! grep -rEq '\"(/home/|/var/home/|/Users/|/root/)' '$REPO_ROOT'/components/*/component.json"
+else
+    for name in 'C20 --state reports the tracked configuration' \
+                'C21 --state reports the machine-local state' \
+                'C22 --state narrows to a selection' \
+                'C23 every public path exists in the checkout' \
+                'C24 no local path is tracked in the checkout' \
+                'C25 no component names one machine home directory'; do
+        skip "$name" 'no python3 on this side'
+    done
+fi
+
 # Every profile this repository documents must exist, so that a documented
 # --profile selection never fails on a clean machine.
 for profile in minimal developer agent-dev daniel; do

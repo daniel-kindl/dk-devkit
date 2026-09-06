@@ -56,7 +56,7 @@ trim() {
 }
 
 # Canonical absolute path. Does not require the path to exist, but resolves
-# every symlink that does (this is what collapses /home/dkindl -> /var/home/dkindl).
+# every symlink that does (this is what collapses /home/<user> -> /var/home/<user>).
 canon() {
     realpath -m -- "$1"
 }

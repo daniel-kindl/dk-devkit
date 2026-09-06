@@ -339,7 +339,7 @@ machine that has no Podman at all and so can never catch a missing package.
 same directory *from inside the container*, but only one of them exists for the
 host Podman engine:
 
-    podman run -v /home/dkindl/.local/share/agentbox/runs/x/repo:/mnt ...  works
+    podman run -v $HOME/.local/share/agentbox/runs/x/repo:/mnt ...  works
     podman run -v /workspace/...:/mnt                                     statfs: no such file or directory
 
 `agentbox` therefore tracks two spellings of every path: `*_HOST`, which Podman

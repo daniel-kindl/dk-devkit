@@ -630,6 +630,130 @@ class ShippedCatalogueCase(unittest.TestCase):
                 self.assertNotIn("secrets", entry, f"{component.id}: {entry}")
                 self.assertNotIn("auth", entry, f"{component.id}: {entry}")
 
+    def test_every_public_path_exists_in_the_checkout(self):
+        for component in self.components.values():
+            for entry in component.public_state:
+                self.assertTrue((ROOT / entry).exists(), f"{component.id}: {entry}")
+
+    def test_no_local_path_is_tracked_in_the_checkout(self):
+        tracked = set(subprocess.run(
+            ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.split())
+        for component in self.components.values():
+            for entry in component.local_state:
+                inside = entry.removeprefix("~/").rstrip("/")
+                self.assertFalse(
+                    any(path == inside or path.startswith(inside + "/")
+                        for path in tracked),
+                    f"{component.id}: {entry} is tracked",
+                )
+
+    def test_a_component_that_installs_can_be_installed_without_private_state(self):
+        # Nothing a reusable component needs may live under another user's
+        # home directory: an installation on a clean machine has none of it.
+        for component in self.components.values():
+            for entry in component.local_state:
+                self.assertFalse(
+                    toolkit._names_a_home_directory(entry), f"{component.id}: {entry}"
+                )
+
+
+# ------------------------------------------------- public/local boundary --
+
+
+class StateBoundaryCase(unittest.TestCase):
+    """state.public is tracked here; state.local never is."""
+
+    def state(self, **state):
+        return catalogue(manifest("alpha", state=state))["alpha"]
+
+    def test_a_component_may_own_no_state_at_all(self):
+        component = self.state(public=[], local=[])
+        self.assertEqual(component.public_state, ())
+        self.assertEqual(component.local_state, ())
+
+    def test_public_configuration_is_relative_to_the_checkout(self):
+        component = self.state(public=["manifests/alpha.env", "config/alpha/"])
+        self.assertEqual(
+            component.public_state, ("manifests/alpha.env", "config/alpha/")
+        )
+
+    def test_public_configuration_may_not_be_an_absolute_path(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "relative to the checkout"):
+            self.state(public=["/etc/alpha.conf"])
+
+    def test_public_configuration_may_not_start_at_the_home_directory(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "relative to the checkout"):
+            self.state(public=["~/.config/alpha/"])
+
+    def test_public_configuration_may_not_leave_the_checkout(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "must not leave"):
+            self.state(public=["../elsewhere/alpha.env"])
+
+    def test_local_state_starts_at_the_home_directory(self):
+        component = self.state(local=["~/.config/alpha/", "$XDG_STATE_HOME/alpha/"])
+        self.assertEqual(
+            component.local_state, ("~/.config/alpha/", "$XDG_STATE_HOME/alpha/")
+        )
+
+    def test_local_state_may_not_name_one_machine_home_directory(self):
+        for path in ("/home/daniel/.config/alpha/", "/var/home/daniel/x",
+                     "/Users/daniel/x", "/root/x"):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(toolkit.ConfigError, "home directory"):
+                    self.state(local=[path])
+
+    def test_local_state_may_not_live_inside_the_checkout(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "XDG"):
+            self.state(local=["config/alpha/local.env"])
+
+    def test_a_repeated_path_is_refused_on_both_sides(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "must not repeat"):
+            self.state(public=["manifests/a.env", "manifests/a.env"])
+        with self.assertRaisesRegex(toolkit.ConfigError, "must not repeat"):
+            self.state(local=["~/.config/a/", "~/.config/a/"])
+
+
+class StateReportCase(unittest.TestCase):
+    def report(self, *documents, selection=()):
+        components = catalogue(*documents)
+        chosen = (toolkit.state_selection(components, selection) if selection
+                  else tuple(components.values()))
+        return toolkit.render_state(chosen)
+
+    def test_the_report_separates_the_two_sides(self):
+        text = self.report(manifest("alpha", state={
+            "public": ["manifests/alpha.env"], "local": ["~/.config/alpha/"],
+        }))
+        self.assertIn("public  manifests/alpha.env", text)
+        self.assertIn("local   ~/.config/alpha/", text)
+
+    def test_the_report_says_when_a_component_owns_nothing(self):
+        self.assertIn("owns no configuration", self.report(manifest("alpha")))
+
+    def test_the_report_names_the_manual_steps(self):
+        text = self.report(manifest("alpha", manual=["Sign in with gh auth login."]))
+        self.assertIn("manual  Sign in with gh auth login.", text)
+
+    def test_a_selection_reaches_what_it_requires(self):
+        text = self.report(
+            manifest("alpha", requires=["beta"], state={
+                "public": ["manifests/alpha.env"], "local": []}),
+            manifest("beta", state={"public": [], "local": ["~/.config/beta/"]}),
+            manifest("gamma", state={"public": ["manifests/gamma.env"], "local": []}),
+            selection=["alpha"],
+        )
+        self.assertIn("~/.config/beta/", text)
+        self.assertNotIn("gamma", text)
+
+    def test_a_planned_module_still_reports_its_boundary(self):
+        text = self.report(environment("later", status="planned"), selection=["later"])
+        self.assertIn("later", text)
+
+    def test_an_unknown_selection_is_refused(self):
+        with self.assertRaisesRegex(toolkit.ResolveError, "unknown component: ghost"):
+            self.report(manifest("alpha"), selection=["ghost"])
+
 
 # --------------------------------------------------------------- profiles --
 
@@ -844,6 +968,28 @@ class CommandLineCase(unittest.TestCase):
         result = self.run_installer("--profile", "devbox")
         self.assertEqual(result.returncode, toolkit.EXIT_RESOLVE)
         self.assertIn("not a profile", result.stderr)
+
+    def test_state_reports_the_boundary_and_changes_nothing(self):
+        result = self.run_installer("--state")
+        self.assertEqual(result.returncode, toolkit.EXIT_OK)
+        self.assertIn("public  manifests/github-labels.json", result.stdout)
+        self.assertIn("local   ~/.local/share/distrobox-homes/web-dev/", result.stdout)
+        self.assertEqual(
+            "", subprocess.run(["git", "status", "--porcelain", "--", "components"],
+                               cwd=ROOT, capture_output=True, text=True,
+                               check=True).stdout.strip(),
+        )
+
+    def test_state_narrows_to_a_selection(self):
+        result = self.run_installer("--state", "--components", "repo-labels")
+        self.assertEqual(result.returncode, toolkit.EXIT_OK)
+        self.assertIn("github-labels.json", result.stdout)
+        self.assertNotIn("distrobox-homes", result.stdout)
+
+    def test_state_refuses_an_unknown_component(self):
+        result = self.run_installer("--state", "--components", "ghost")
+        self.assertEqual(result.returncode, toolkit.EXIT_RESOLVE)
+        self.assertIn("unknown component: ghost", result.stderr)
 
     def test_a_profile_and_a_component_select_both(self):
         result = self.run_installer(
