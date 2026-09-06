@@ -298,6 +298,51 @@ See `docs/agentq.md` in the workstation repository for the pipeline.
 """
 
 
+def budget_exceeded_comment(run_id: str, detail: str, efficiency: dict) -> str:
+    """The comment a hard efficiency breach leaves on the issue.
+
+    It says what was measured and what to do about it. It does NOT split the
+    issue: rewriting a human's backlog is a separate decision, and no policy
+    here enables it.
+    """
+    measured = []
+    for name, key, unit in (
+        ("model time", "seconds", "s"),
+        ("tool calls", "toolCalls", ""),
+        ("model invocations", "invocations", ""),
+    ):
+        value = (efficiency or {}).get(key)
+        if isinstance(value, int):
+            measured.append(f"- {name}: {value}{unit}")
+    tokens = (efficiency or {}).get("tokens") or {}
+    if tokens:
+        measured.append(
+            f"- tokens: {tokens.get('inputTokens', 0)} in, "
+            f"{tokens.get('outputTokens', 0)} out"
+        )
+    body = "\n".join(measured) or "- no measurement was recorded"
+    return f"""**agentq** stopped this run because one model invocation passed its
+execution-efficiency budget.
+
+**Reason:** {detail}
+
+What the run cost before it was stopped:
+
+{body}
+
+Nothing was imported, no branch was pushed, and no pull request was opened.
+The work is not validated.
+
+An issue that passes the hard budget is usually too broad for one bounded
+implementation invocation. Split it into smaller leaf issues, each of which one
+agent can finish in a single pass, and label those for the queue. Raise the
+budget in the repository policy only when the measurement says the work itself
+is genuinely that large.
+
+_agentq run `{run_id}`_
+"""
+
+
 def needs_human_comment(run_id: str, reason: str, detail: str) -> str:
     return f"""**agentq** stopped work on this issue and asks for a human.
 

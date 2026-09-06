@@ -33,7 +33,17 @@
 #   --continue               work on an EXISTING agent/ branch, based on its
 #                            own tip. This is how a repair reaches work that
 #                            is already imported
-#   --max-iterations N       agent iterations, default 1
+#   --max-iterations N       agent iterations, default 1. One bounded
+#                            invocation is the normal path; a repair round is
+#                            what earns another
+#   --soft-budget-seconds N  one model invocation that passes this many
+#                            seconds reports an efficiency warning and keeps
+#                            going. 0 turns the warning off
+#   --hard-budget-seconds N  one model invocation that passes this many
+#                            seconds is stopped, and nothing is imported.
+#                            0 turns the limit off
+#   --soft-tool-calls N      the same warning, counted in tool calls
+#   --hard-tool-calls N      the same stop, counted in tool calls
 #   --agent-output MODE      terminal (default) renders Sandcastle's
 #                            interactive terminal UI on stdout. progress writes
 #                            the agent log to a file inside the disposable
@@ -93,6 +103,17 @@
 #   * run a command, a hook or a filter that the disposable clone configures
 #   * change the real repository's git configuration, including its identity
 #
+# Four limits bound a run, and each answers a different question:
+#
+#   idle timeout        the agent stopped producing output       (Sandcastle)
+#   completion timeout  the agent signalled done but ran on      (Sandcastle)
+#   wall-clock timeout  the whole run took too long              (--timeout)
+#   efficiency budget   ONE invocation did too much work         (--*-budget-*)
+#
+# Only the last one sees an agent that keeps talking while it gets nowhere.
+# A soft breach is a warning in the run evidence. A hard breach stops the
+# agent, keeps every log and commit as evidence, and imports NOTHING.
+#
 # The disposable clone is given a neutral Git identity of its own at clone
 # time, before anything else reads it. An imported commit is therefore authored
 # and committed by that identity, not by the user and not by the agent vendor.
@@ -115,6 +136,7 @@ VERSION=0.2.0
 #   9   the result was refused at import; the real repository did not change
 #   10  the run passed its wall-clock timeout
 #   11  another run holds the branch
+#   12  one model invocation passed its efficiency budget; nothing was imported
 
 fail() {
     local code=$1 line
@@ -231,6 +253,15 @@ SANDBOX_REF=$SANDBOX_IMAGE:$SANDBOX_TAG
 # than discovered at the end of a run.
 [ -n "${AGENTBOX_GIT_NAME:-}" ] && [ -n "${AGENTBOX_GIT_EMAIL:-}" ] ||
     fail 2 "AGENTBOX_GIT_NAME and AGENTBOX_GIT_EMAIL must be set in $MANIFEST"
+
+# The efficiency budget. Every key must be present, because an absent limit and
+# a limit of 0 mean different things to a reader, and only one of them is a
+# deliberate choice. 0 turns that limit off, and it has to be written down.
+for _key in AGENTBOX_SOFT_BUDGET_SECONDS AGENTBOX_HARD_BUDGET_SECONDS \
+            AGENTBOX_SOFT_TOOL_CALLS AGENTBOX_HARD_TOOL_CALLS; do
+    [ -n "${!_key:-}" ] || fail 2 "$_key must be set in $MANIFEST"
+done
+unset _key
 
 # ------------------------------------------------------------ Podman client --
 #
@@ -939,7 +970,7 @@ stage_policy_and_skills() {
 # Sandcastle dependency tree.
 stage_script() {
     local f
-    for f in "$1" clone-integrity.mjs; do
+    for f in "$1" clone-integrity.mjs budget.mjs; do
         cp -- "$REPO_ROOT/config/sandcastle/$f" "$RUN_DIR_VIEW/staging/$f" ||
             fail 2 "cannot copy config/sandcastle/$f"
     done
@@ -1038,6 +1069,7 @@ run_in_runner() {
         -v "$RUN_DIR_HOST/creds:$RUN_DIR_HOST/creds:ro" \
         -v "$RUN_DIR_HOST/staging/$script:/opt/workstation/sandcastle/$script:ro" \
         -v "$RUN_DIR_HOST/staging/clone-integrity.mjs:/opt/workstation/sandcastle/clone-integrity.mjs:ro" \
+        -v "$RUN_DIR_HOST/staging/budget.mjs:/opt/workstation/sandcastle/budget.mjs:ro" \
         -w "$CLONE_HOST" \
         "$RUNNER_REF" \
         "/opt/workstation/sandcastle/$script" </dev/null 2>&1 | redact
@@ -1297,6 +1329,10 @@ cmd_run() {
     local timeout=$AGENTBOX_TIMEOUT_SECONDS max_commits=$AGENTBOX_MAX_COMMITS
     local allow_merges=0 ambient=0 continuation=0
     local max_fix_rounds=$AGENTBOX_MAX_FIX_ROUNDS
+    local soft_budget_seconds=$AGENTBOX_SOFT_BUDGET_SECONDS
+    local hard_budget_seconds=$AGENTBOX_HARD_BUDGET_SECONDS
+    local soft_tool_calls=$AGENTBOX_SOFT_TOOL_CALLS
+    local hard_tool_calls=$AGENTBOX_HARD_TOOL_CALLS
     local agent_output=terminal
     local -a checks=()
 
@@ -1315,6 +1351,10 @@ cmd_run() {
             --max-fix-rounds) max_fix_rounds=${2:?}; shift 2 ;;
             --continue) continuation=1; shift ;;
             --max-iterations) max_iterations=${2:?}; shift 2 ;;
+            --soft-budget-seconds) soft_budget_seconds=${2:?}; shift 2 ;;
+            --hard-budget-seconds) hard_budget_seconds=${2:?}; shift 2 ;;
+            --soft-tool-calls) soft_tool_calls=${2:?}; shift 2 ;;
+            --hard-tool-calls) hard_tool_calls=${2:?}; shift 2 ;;
             --agent-output) agent_output=${2:?}; shift 2 ;;
             --max-commits) max_commits=${2:?}; shift 2 ;;
             --allow-merges) allow_merges=1; shift ;;
@@ -1360,6 +1400,29 @@ cmd_run() {
         terminal|progress) ;;
         *) fail 2 "--agent-output must be terminal or progress: $agent_output" ;;
     esac
+
+    # The efficiency budget. Zero turns one limit off. A soft limit at or above
+    # its hard limit is refused rather than clamped: it would mean the warning
+    # arrives after the stop, and whoever wrote it believes there is a warning
+    # stage when there is none.
+    local name value
+    for name in soft_budget_seconds hard_budget_seconds \
+                soft_tool_calls hard_tool_calls; do
+        value=${!name}
+        case $value in
+            ''|*[!0-9]*) fail 2 "--${name//_/-} must be a whole number: $value" ;;
+        esac
+    done
+    if [ "$hard_budget_seconds" -gt 0 ] && [ "$soft_budget_seconds" -gt 0 ] &&
+       [ "$soft_budget_seconds" -ge "$hard_budget_seconds" ]; then
+        fail 2 '--soft-budget-seconds must be below --hard-budget-seconds' \
+            "soft $soft_budget_seconds, hard $hard_budget_seconds"
+    fi
+    if [ "$hard_tool_calls" -gt 0 ] && [ "$soft_tool_calls" -gt 0 ] &&
+       [ "$soft_tool_calls" -ge "$hard_tool_calls" ]; then
+        fail 2 '--soft-tool-calls must be below --hard-tool-calls' \
+            "soft $soft_tool_calls, hard $hard_tool_calls"
+    fi
     # A fix round with no check to run is a second agent turn with no evidence.
     # Saying so is better than running it.
     if [ "$max_fix_rounds" -gt 0 ] && [ "${#checks[@]}" -eq 0 ]; then
@@ -1432,6 +1495,8 @@ cmd_run() {
         MAX_COMMITS="$max_commits" ALLOW_MERGES="$allow_merges" \
         MAX_FIX="$max_fix_rounds" CONTINUATION="$continuation" \
         AGENT_OUTPUT="$agent_output" \
+    SOFT_SECONDS="$soft_budget_seconds" HARD_SECONDS="$hard_budget_seconds" \
+    SOFT_TOOLS="$soft_tool_calls" HARD_TOOLS="$hard_tool_calls" \
         TIMEOUT="$timeout" EFFORT="$effort" IMAGE="$image" \
         ASSERT="$assert_isolation" STATE="$STATE_HOST" \
         GIT_NAME="$AGENTBOX_GIT_NAME" GIT_EMAIL="$AGENTBOX_GIT_EMAIL" \
@@ -1452,6 +1517,12 @@ plan = {
     "reviewModel": os.environ["REVIEW_MODEL"],
     "maxIterations": int(os.environ["MAX_ITER"]),
     "maxFixRounds": int(os.environ["MAX_FIX"]),
+    "budget": {
+        "softSeconds": int(os.environ["SOFT_SECONDS"]),
+        "hardSeconds": int(os.environ["HARD_SECONDS"]),
+        "softToolCalls": int(os.environ["SOFT_TOOLS"]),
+        "hardToolCalls": int(os.environ["HARD_TOOLS"]),
+    },
     "agentOutput": os.environ["AGENT_OUTPUT"],
     "continuation": os.environ["CONTINUATION"] == "1",
     "maxCommits": int(os.environ["MAX_COMMITS"]),
@@ -1530,6 +1601,8 @@ print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
     REVIEW_AGENT="$review_agent" REVIEW_MODEL="$review_model" \
     MAX_ITER="$max_iterations" EFFORT="$effort" IMAGE="$image" \
     MAX_FIX="$max_fix_rounds" AGENT_OUTPUT="$agent_output" \
+    SOFT_SECONDS="$soft_budget_seconds" HARD_SECONDS="$hard_budget_seconds" \
+    SOFT_TOOLS="$soft_tool_calls" HARD_TOOLS="$hard_tool_calls" \
     MOUNTS="$mounts_json" ASSERT="$assert_isolation" TIMEOUT="$timeout" \
     HAS_CLAUDE="$( [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] && printf 1 || printf 0 )" \
     HAS_CODEX="$( [ -n "$OPENAI_API_KEY" ] && printf 1 || printf 0 )" \
@@ -1556,6 +1629,12 @@ cfg = {
     "reviewModel": os.environ["REVIEW_MODEL"],
     "maxIterations": int(os.environ["MAX_ITER"]),
     "maxFixRounds": int(os.environ["MAX_FIX"]),
+    "budget": {
+        "softSeconds": int(os.environ["SOFT_SECONDS"]),
+        "hardSeconds": int(os.environ["HARD_SECONDS"]),
+        "softToolCalls": int(os.environ["SOFT_TOOLS"]),
+        "hardToolCalls": int(os.environ["HARD_TOOLS"]),
+    },
     "agentOutput": os.environ["AGENT_OUTPUT"],
     "checks": checks,
     "sandboxImage": os.environ["IMAGE"],
@@ -1583,6 +1662,13 @@ print(json.dumps(cfg))' > "$RUN_DIR_VIEW/staging/config.json"
         if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
             fail 10 "the run passed its ${timeout}s wall-clock limit" \
                 "Nothing was imported. The disposable clone is at $CLONE_HOST"
+        fi
+        if [ "$rc" = 12 ]; then
+            fail 12 'one model invocation passed its efficiency budget' \
+                'The work is not validated, and nothing was imported.' \
+                'An issue that goes over budget repeatedly is probably too broad' \
+                'for one bounded invocation. Split it into smaller issues.' \
+                "The disposable clone is at $CLONE_HOST"
         fi
         fail 8 "the agent run failed (exit $rc)" \
             "Nothing was imported. The disposable clone is at $CLONE_HOST"

@@ -47,6 +47,7 @@ def render_summary(report, policy) -> List[str]:
         f"  issues needing a human    {report.count(Outcome.NEEDS_HUMAN) + len(human)}",
         f"  issues failed             "
         f"{report.count(Outcome.FAILED_FINAL) + report.count(Outcome.FAILED_TRANSIENT)}",
+        f"  issues over budget        {report.count(Outcome.BUDGET_EXCEEDED)}",
         f"  dependency state unclear  {len(ambiguous)}",
         f"  dependency cycles         {len(cyclic)}",
         f"  remaining {policy.issueLabel:<15} {len(remaining)}",

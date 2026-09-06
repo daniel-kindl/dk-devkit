@@ -751,6 +751,7 @@ class JsonUi(NullUi):
             failed=report.count(Outcome.FAILED_FINAL)
             + report.count(Outcome.FAILED_TRANSIENT),
             needsHuman=report.count(Outcome.NEEDS_HUMAN),
+            overBudget=report.count(Outcome.BUDGET_EXCEEDED),
             remaining=sum(
                 1 for v in report.verdicts if v.runnability is Runnability.RUNNABLE
             ),
@@ -791,6 +792,7 @@ def render_compact_summary(ui, report, policy) -> List[str]:
         Outcome.SUCCESS: Status.OK,
         Outcome.BLOCKED: Status.SKIPPED,
         Outcome.NEEDS_HUMAN: Status.ATTENTION,
+        Outcome.BUDGET_EXCEEDED: Status.ATTENTION,
         Outcome.FAILED_FINAL: Status.FAILED,
         Outcome.FAILED_TRANSIENT: Status.FAILED,
         Outcome.SECURITY_OR_INTEGRITY_FAILURE: Status.SECURITY,
@@ -813,8 +815,13 @@ def render_compact_summary(ui, report, policy) -> List[str]:
         f"{report.count(Outcome.SUCCESS)} completed",
         f"{failed} failed",
         f"{report.count(Outcome.NEEDS_HUMAN)} human intervention",
-        human_duration(report.elapsed_seconds),
     ]
+    # Only when it happened. A budget breach is rare, and a permanent
+    # "0 over budget" would teach a reader to stop looking at the line.
+    over_budget = report.count(Outcome.BUDGET_EXCEEDED)
+    if over_budget:
+        counts.append(f"{over_budget} over budget")
+    counts.append(human_duration(report.elapsed_seconds))
     lines.append(f" {dot} ".join(counts))
 
     remaining = [

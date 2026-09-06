@@ -27,6 +27,7 @@ class Outcome(enum.Enum):
     SUCCESS = "SUCCESS"
     BLOCKED = "BLOCKED"
     NEEDS_HUMAN = "NEEDS_HUMAN"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     FAILED_TRANSIENT = "FAILED_TRANSIENT"
     FAILED_FINAL = "FAILED_FINAL"
     SECURITY_OR_INTEGRITY_FAILURE = "SECURITY_OR_INTEGRITY_FAILURE"
@@ -34,6 +35,17 @@ class Outcome(enum.Enum):
     @property
     def stops_queue(self) -> bool:
         return self is Outcome.SECURITY_OR_INTEGRITY_FAILURE
+
+    @property
+    def is_success(self) -> bool:
+        """A budget breach is never a successful implementation.
+
+        It exists as its own outcome because "this cost too much" and "this
+        crashed" call for different answers from a human, and because the
+        first is the signal that an issue is too broad for one bounded
+        invocation.
+        """
+        return self is Outcome.SUCCESS
 
 
 class Runnability(enum.Enum):
@@ -224,6 +236,12 @@ def classify_agentbox_exit(code: int, output: str) -> Outcome:
         return Outcome.FAILED_FINAL  # the branch name is unsafe
     if code in (8, 10):
         return Outcome.FAILED_TRANSIENT  # the agent failed, or ran out of time
+    if code == 12:
+        # One model invocation passed its efficiency budget. agentbox stopped
+        # it and imported nothing, so the repository is unchanged and the work
+        # is not validated. This is not a transient failure: running the same
+        # instruction again would cost the same.
+        return Outcome.BUDGET_EXCEEDED
     if code == 9:
         if any(marker in output for marker in _PRODUCT_REFUSALS):
             return Outcome.FAILED_FINAL

@@ -39,6 +39,7 @@ from agentqueue.model import (  # noqa: E402
     classify_agentbox_exit,
     extract_agentbox_summary,
 )
+from agentqueue.runner import AgentboxRunner  # noqa: E402
 from agentqueue.schedule import (  # noqa: E402
     DependencyResolver,
     Scheduler,
@@ -919,6 +920,205 @@ class TestPrompts(unittest.TestCase):
             issue, "run1", "b" * 40, ["pnpm check"], False, {"ran": True}, 1
         )
         self.assertIn("FAILED", body)
+
+
+# ------------------------------------------------- the efficiency budget --
+#
+# The limit that measures WORK rather than silence. Sandcastle's idle timeout
+# sees an agent that stops talking, and agentTimeoutSeconds sees a run that
+# takes too long. Neither sees an agent that stays busy and gets nowhere.
+#
+# What these cases hold in place:
+#
+#   * the normal path is ONE implementation invocation
+#   * a budget breach is never reported as a success
+#   * nothing is pushed, no pull request is opened and nothing is merged
+#     after a breach, in either repair loop
+#   * the issue leaves the queue with the human label and a comment that says
+#     the issue is probably too broad
+#   * a security or integrity failure still outranks a budget breach
+
+BUDGET_SUMMARY = {
+    "checksPassed": None,
+    "fixRounds": 0,
+    "efficiency": {
+        "limits": {"softSeconds": 600, "hardSeconds": 1200,
+                   "softToolCalls": 30, "hardToolCalls": 60},
+        "seconds": 640,
+        "invocations": 1,
+        "toolCalls": 60,
+        "tokens": {"inputTokens": 120, "outputTokens": 40},
+        "warnings": [{"phase": "implement"}],
+        "exceeded": {"phase": "implement"},
+    },
+    "budgetExceeded": {
+        "phase": "implement",
+        "seconds": 640,
+        "toolCalls": 60,
+        "breaches": [{"metric": "toolCalls", "level": "hard",
+                      "limit": 60, "value": 60}],
+    },
+}
+
+
+def budget_step(**overrides):
+    """One scripted agentbox run that was stopped by its hard budget."""
+    step = {"exit": 12, "summary": dict(BUDGET_SUMMARY),
+            "output": "agentbox: one model invocation passed its efficiency budget"}
+    step.update(overrides)
+    return step
+
+
+class TestExecutionBudget(unittest.TestCase):
+    def setUp(self):
+        self.github = fakes.FakeGitHub()
+        self.git = fakes.FakeGit()
+        self.github.head_sha_source = lambda b: self.git.refs[f"refs/heads/{b}"]
+        self.policy = fakes.make_policy(
+            autoMerge=True, mergeWithoutReview=True, checks=("pnpm check",),
+            requiredChecks=("Quality",),
+        )
+
+    def _green(self, sha):
+        self.github.checks[sha] = [CheckRun("Quality", "completed", "success")]
+
+    def _red(self, sha, log="the test failed"):
+        self.github.checks[sha] = [CheckRun("Quality", "completed", "failure")]
+        self.github.logs[sha] = log
+
+    def _process(self, runner):
+        with tempfile.TemporaryDirectory() as tmp:
+            return build_coordinator(
+                self.github, self.git, self.policy, runner, tmp
+            ).process_issue(1)
+
+    # --- the one-shot implementation path ---------------------------------
+
+    def test_the_default_policy_gives_the_implementer_one_invocation(self):
+        self.assertEqual(fakes.make_policy().maxIterations, 1)
+
+    def test_a_normal_issue_uses_exactly_one_implementation_run(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        runner = fakes.FakeRunner(self.git, [{"sha": "s1"}])
+        self._green("s1")
+        result = self._process(runner)
+        self.assertIs(result.outcome, Outcome.SUCCESS)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(result.agentbox_runs, 1)
+
+    def test_the_budget_reaches_agentbox_on_every_run(self):
+        policy = fakes.make_policy()
+        command = AgentboxRunner("agentbox", policy, "/logs").command(
+            "/repo", "agent/x", "/p.md", "origin/main"
+        )
+        for flag, value in (
+            ("--max-iterations", str(policy.maxIterations)),
+            ("--soft-budget-seconds", str(policy.softBudgetSeconds)),
+            ("--hard-budget-seconds", str(policy.hardBudgetSeconds)),
+            ("--soft-tool-calls", str(policy.softToolCalls)),
+            ("--hard-tool-calls", str(policy.hardToolCalls)),
+        ):
+            self.assertIn(flag, command)
+            self.assertEqual(command[command.index(flag) + 1], value)
+
+    # --- the classification ------------------------------------------------
+
+    def test_exit_twelve_is_its_own_outcome_and_is_not_a_success(self):
+        outcome = classify_agentbox_exit(12, "")
+        self.assertIs(outcome, Outcome.BUDGET_EXCEEDED)
+        self.assertFalse(outcome.is_success)
+        self.assertFalse(outcome.stops_queue)
+        self.assertTrue(Outcome.SUCCESS.is_success)
+
+    def test_an_integrity_failure_outranks_a_budget_breach(self):
+        self.assertIs(
+            classify_agentbox_exit(12, "DISPOSABLE CLONE INTEGRITY FAILED"),
+            Outcome.SECURITY_OR_INTEGRITY_FAILURE,
+        )
+
+    # --- the implementation path -------------------------------------------
+
+    def test_a_breach_imports_nothing_and_asks_for_a_human(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        result = self._process(fakes.FakeRunner(self.git, [budget_step()]))
+
+        self.assertIs(result.outcome, Outcome.BUDGET_EXCEEDED)
+        self.assertFalse(result.merged)
+        self.assertIsNone(result.pull_request)
+        self.assertEqual(self.git.pushed, [])
+        self.assertEqual(self.github.merge_calls, [])
+        self.assertIn("ready-for-human", self.github.get_issue(1).labels)
+
+    def test_the_comment_says_what_it_cost_and_asks_for_a_split(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        self._process(fakes.FakeRunner(self.git, [budget_step()]))
+        body = "\n".join(c.body for c in self.github.list_comments(1))
+        self.assertIn("efficiency budget", body)
+        self.assertIn("60", body)          # the tool calls it made
+        self.assertIn("Split it into smaller leaf issues", body)
+        self.assertIn("Nothing was imported", body)
+        self.assertNotIn("secrets.env", body)
+
+    def test_the_detail_names_the_limit_that_was_passed(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        result = self._process(fakes.FakeRunner(self.git, [budget_step()]))
+        self.assertIn("60 tool calls (limit 60)", result.detail)
+        self.assertIn("too broad", result.detail)
+
+    def test_a_breach_does_not_start_another_implementation_run(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        runner = fakes.FakeRunner(self.git, [budget_step(), {"sha": "s2"}])
+        result = self._process(runner)
+        self.assertIs(result.outcome, Outcome.BUDGET_EXCEEDED)
+        self.assertEqual(len(runner.calls), 1)
+
+    # --- the repair paths ---------------------------------------------------
+
+    def test_a_repair_that_goes_over_budget_is_never_pushed(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        failing = {"sha": "s1", "checks_passed": False,
+                   "failed_checks": [{"command": "pnpm check", "exitCode": 1,
+                                      "tail": "type error"}]}
+        runner = fakes.FakeRunner(self.git, [failing, budget_step()])
+        result = self._process(runner)
+
+        self.assertIs(result.outcome, Outcome.BUDGET_EXCEEDED)
+        self.assertEqual(self.git.pushed, [])
+        self.assertEqual(self.github.merge_calls, [])
+        self.assertIn("ready-for-human", self.github.get_issue(1).labels)
+
+    def test_a_ci_repair_that_goes_over_budget_is_never_merged(self):
+        self.github.add_issue(1, "Do the thing", labels=(READY,))
+        runner = fakes.FakeRunner(self.git, [{"sha": "s1"}, budget_step()])
+        self._red("s1", "AssertionError: expected 1")
+        result = self._process(runner)
+
+        self.assertIs(result.outcome, Outcome.BUDGET_EXCEEDED)
+        self.assertFalse(result.merged)
+        self.assertEqual(self.github.merge_calls, [])
+        self.assertIsNotNone(result.pull_request)
+        self.assertIn("ready-for-human", self.github.get_issue(1).labels)
+
+    # --- the policy ---------------------------------------------------------
+
+    def test_a_soft_limit_at_or_above_its_hard_limit_is_refused(self):
+        for field, twin in (("softToolCalls", "hardToolCalls"),
+                            ("softBudgetSeconds", "hardBudgetSeconds")):
+            pol = fakes.make_policy()
+            setattr(pol, field, getattr(pol, twin))
+            with self.assertRaises(policy_mod.PolicyError):
+                pol.validate()
+
+    def test_a_zero_limit_turns_that_limit_off(self):
+        pol = fakes.make_policy(softToolCalls=0, hardToolCalls=0)
+        pol.validate()
+        self.assertEqual(pol.hardToolCalls, 0)
+
+    def test_a_negative_limit_is_refused(self):
+        pol = fakes.make_policy()
+        pol.hardToolCalls = -1
+        with self.assertRaises(policy_mod.PolicyError):
+            pol.validate()
 
 
 if __name__ == "__main__":

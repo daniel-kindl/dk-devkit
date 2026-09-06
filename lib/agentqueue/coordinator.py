@@ -176,6 +176,19 @@ class Coordinator:
         """The tier the current thread resolved, or None when there is none."""
         return getattr(self._effort_state, "decision", None)
 
+    @property
+    def _budget_warning(self) -> bool:
+        """Whether the current thread's run has crossed a soft budget.
+
+        Per thread, for the reason the phase set is: with maxParallel above 1
+        one issue's warning must never appear on another issue's line.
+        """
+        return bool(getattr(self._agent_events, "budget_warning", False))
+
+    @_budget_warning.setter
+    def _budget_warning(self, value: bool) -> None:
+        self._agent_events.budget_warning = bool(value)
+
     def _resolve_effort(self, issue: Issue, attempt: int, run_dir: str):
         """Choose the models for one invocation, and record why.
 
@@ -307,6 +320,7 @@ class Coordinator:
         Outcome.SUCCESS: Status.OK,
         Outcome.BLOCKED: Status.SKIPPED,
         Outcome.NEEDS_HUMAN: Status.ATTENTION,
+        Outcome.BUDGET_EXCEEDED: Status.ATTENTION,
         Outcome.FAILED_FINAL: Status.FAILED,
         Outcome.FAILED_TRANSIENT: Status.FAILED,
         Outcome.SECURITY_OR_INTEGRITY_FAILURE: Status.SECURITY,
@@ -511,11 +525,14 @@ class Coordinator:
                 )
                 return result
             if agent_run.outcome is not Outcome.SUCCESS:
-                self.ui.failure(
-                    Stage.IMPLEMENT, f"agentbox exited {agent_run.exit_code}",
-                    tail=ui_mod.bounded_tail(agent_run.output),
-                    log_path=agent_run.log_path,
-                )
+                # A budget breach states itself, and it states more than an
+                # exit code does. Two lines for one event would read as two.
+                if agent_run.outcome is not Outcome.BUDGET_EXCEEDED:
+                    self.ui.failure(
+                        Stage.IMPLEMENT, f"agentbox exited {agent_run.exit_code}",
+                        tail=ui_mod.bounded_tail(agent_run.output),
+                        log_path=agent_run.log_path,
+                    )
                 return self._after_failed_agent(issue, run_id, result, agent_run)
             if "implement.done" not in self._seen():
                 # agentbox published no event for this phase, so the
@@ -547,6 +564,11 @@ class Coordinator:
                 agent_run.failure_evidence, attempts, run_id,
             )
             result.agentbox_runs += 1
+            if agent_run.outcome is Outcome.BUDGET_EXCEEDED:
+                # A repair that costs too much is as wasteful as a first
+                # attempt that does, and its work was not imported either. The
+                # branch still fails its checks, so nothing may be pushed.
+                return self._after_budget_breach(issue, run_id, result, agent_run)
             if agent_run.outcome.stops_queue:
                 result.outcome = agent_run.outcome
                 result.detail = "agentbox reported an integrity failure during a repair"
@@ -622,6 +644,10 @@ class Coordinator:
                     log_path=agent_run.log_path,
                 )
                 return result
+            if agent_run.outcome is Outcome.BUDGET_EXCEEDED:
+                return self._after_budget_breach(
+                    issue, run_id, result, agent_run, pull=pull.number
+                )
             if agent_run.outcome is not Outcome.SUCCESS:
                 result.outcome = Outcome.FAILED_FINAL
                 result.detail = f"the repair run failed (exit {agent_run.exit_code})"
@@ -728,6 +754,7 @@ class Coordinator:
         added is where the lines go.
         """
         self._agent_events.seen = set()
+        self._budget_warning = False
         return self.runner.run(
             self.git.root, branch, prompt_file, self.base_ref(),
             continuation=continuation, log_name=log_name, log_dir=run_dir,
@@ -761,7 +788,26 @@ class Coordinator:
             if isinstance(tools, int) and tools:
                 parts.append(f"{tools} tool call" if tools == 1
                              else f"{tools} tool calls")
+            # A soft breach stays on the line for the rest of the phase. It is
+            # the reason a reader is looking at this run at all.
+            if self._budget_warning:
+                parts.append("efficiency warning")
             ui.stage_detail(_join(parts, ui), key=f"{phase}:{iteration}")
+        elif name == "budget.warning":
+            # The invocation is expensive, and it keeps going. The line says so
+            # at once, because the next progress heartbeat is 20 seconds away.
+            self._budget_warning = True
+            phase = str(event.get("phase", ""))
+            ui.stage_detail(
+                _join([_budget_breach_detail(event), "efficiency warning"], ui),
+                key=f"budget:{phase}",
+            )
+        elif name == "budget.exceeded":
+            self._budget_warning = True
+            ui.stage(
+                Stage.IMPLEMENT, Status.ATTENTION,
+                _join(["over budget", _budget_breach_detail(event)], ui),
+            )
         elif name == "implement.done":
             ui.stage(Stage.IMPLEMENT, Status.OK, _commits_label(event))
         elif name == "check.start":
@@ -917,9 +963,49 @@ class Coordinator:
     def _after_failed_agent(self, issue, run_id, result, agent_run) -> IssueResult:
         result.outcome = agent_run.outcome
         result.detail = f"agentbox exited {agent_run.exit_code}"
+        if agent_run.outcome is Outcome.BUDGET_EXCEEDED:
+            return self._after_budget_breach(issue, run_id, result, agent_run)
         if agent_run.outcome is Outcome.FAILED_TRANSIENT:
             result.detail += " (transient)"
         return self._flag_failed(issue, run_id, result)
+
+    def _after_budget_breach(self, issue, run_id, result, agent_run,
+                             pull=None) -> IssueResult:
+        """One model invocation cost too much, so the run was stopped.
+
+        Nothing was imported, so there is no branch to push and no pull request
+        to open. The issue leaves the queue with the human label, and the
+        comment says what was measured and that the issue is probably too broad
+        for one bounded invocation.
+
+        The queue does not try again by itself. Replaying the same instruction
+        would cost the same, and an issue that is too broad stays too broad
+        until a human splits it. Splitting it is a human decision: no policy
+        here rewrites a backlog.
+        """
+        breach = agent_run.budget_exceeded or {}
+        phase = str(breach.get("phase") or "the implementation")
+        detail = _budget_breach_detail(breach)
+        result.outcome = Outcome.BUDGET_EXCEEDED
+        result.detail = (
+            f"{phase} passed its efficiency budget: {detail}. Nothing was "
+            "imported. The issue is probably too broad for one bounded "
+            "invocation; split it."
+        )
+        self.ui.stage(
+            Stage.IMPLEMENT, Status.ATTENTION,
+            _join(["over budget", detail, "nothing imported"], self.ui),
+        )
+        if not self.dry_run:
+            self.github.add_label(issue.number, self.policy.humanLabel)
+            self.github.create_comment(
+                issue.number,
+                prompts.budget_exceeded_comment(
+                    run_id, f"{phase} passed its efficiency budget: {detail}",
+                    agent_run.efficiency,
+                ),
+            )
+        return result
 
     def _flag_human(self, issue, run_id, result, pull=None) -> IssueResult:
         result.outcome = Outcome.NEEDS_HUMAN
@@ -975,6 +1061,24 @@ def _agent_label(event, decision=None) -> str:
         if agent == decision.reviewer.agent:
             return decision.review_label()
     return agent.capitalize() if agent else "agent"
+
+
+def _budget_breach_detail(breach) -> str:
+    """One efficiency breach, as a line a human reads.
+
+    The orchestrator publishes the numbers. This renders them, and it renders
+    nothing when the run died before it could report one.
+    """
+    parts = []
+    for item in (breach or {}).get("breaches", []) or []:
+        metric = item.get("metric")
+        limit = item.get("limit")
+        value = item.get("value")
+        if metric == "seconds":
+            parts.append(f"{value}s of model time (limit {limit}s)")
+        elif metric == "toolCalls":
+            parts.append(f"{value} tool calls (limit {limit})")
+    return ", ".join(parts) or "the limit is not reported"
 
 
 def _commits_label(event) -> str:
