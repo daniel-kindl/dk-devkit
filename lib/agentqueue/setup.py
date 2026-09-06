@@ -328,6 +328,15 @@ def inspect(
         findings.append(Finding(
             "base-branch", "base branch", OK, remote_default,
         ))
+    elif not any(f.key == "base-branch" for f in findings):
+        # The read returned nothing: the repository is not there, or this
+        # account cannot see it. Either way a run cannot work, and an absent
+        # finding would read as an answer that was never given.
+        findings.append(Finding(
+            "base-branch", "base branch", GAP,
+            f"GitHub named no default branch for {slug}",
+            "check the repository name and what this gh account can read",
+        ))
 
     if git is not None:
         ref = f"refs/remotes/origin/{pol.baseBranch}"
