@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "repo-meta",
+  "name": "repository metadata tool",
+  "kind": "tool",
+  "group": "Repository tooling",
+  "summary": "Checks or converges a GitHub repository to the canonical description, homepage and topic manifest.",
+  "requires": [],
+  "capabilities": [
+    "python3"
+  ],
+  "unattended": true,
+  "install": null,
+  "doctor": [
+    "components/repo-meta/doctor.sh"
+  ],
+  "verify": [
+    "./verify.sh",
+    "--only",
+    "87"
+  ],
+  "manual": [
+    "Authenticate the GitHub CLI where you run repo-meta: gh auth login."
+  ],
+  "state": {
+    "public": [
+      "manifests/github-metadata.json"
+    ],
+    "local": []
+  }
+}

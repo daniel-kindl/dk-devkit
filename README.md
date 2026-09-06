@@ -1,4 +1,4 @@
-# workstation
+# dk-devkit
 
 Reusable development tools, agent workflows, environment definitions, and automation that power Daniel's software-development setup.
 
@@ -71,6 +71,18 @@ Installing the coordinator and preparing a repository are separate operations. `
 The host command is a router shim; the real coordinator currently runs inside `web-dev`, where `gh` and the forwarded SSH agent are available. Read [docs/agentq.md](docs/agentq.md).
 
 The coordinator's public name is `agentq`. Some durable internal identifiers intentionally keep the older `agentqueue` name, including `.agentqueue.json`, existing run-state paths, internal configuration variables, and historical claim markers.
+
+### `repo-labels` and `repo-meta`
+
+Two GitHub repository settings are tracked here rather than typed into a web form, so that each one is reviewable in a pull request and checkable afterwards.
+
+```bash
+repo-labels check                 # label drift against manifests/github-labels.json
+repo-meta check                   # description, homepage and topic drift
+repo-meta sync --dry-run          # the exact plan, without changing anything
+```
+
+Both read the existing `gh` login and hold no credential of their own. Both refuse a destructive sync without confirmation, because deleting a label removes it from issues and pull requests, and removing a topic removes the repository from that topic search. Read [docs/repo-labels.md](docs/repo-labels.md) and [docs/repo-meta.md](docs/repo-meta.md).
 
 ## Current architecture
 
