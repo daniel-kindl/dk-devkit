@@ -10,7 +10,7 @@
   "unattended": true,
   "install": null,
   "doctor": ["components/distrobox/doctor.sh"],
-  "verify": null,
+  "verify": ["./verify.sh", "--only", "18"],
   "manual": [],
   "state": { "public": ["distrobox/"], "local": [] }
 }

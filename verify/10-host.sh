@@ -1,4 +1,7 @@
 # Bazzite host: required commands, directories and package managers.
+#
+# The container runtime lives in module 1e, and the desktop applications in
+# module 1f, because each of them is one component's own verification.
 
 section '1. Bazzite host'
 
@@ -7,7 +10,7 @@ if [ "$IN_CONTAINER" = 1 ]; then
         -- on_host true
 fi
 
-for cmd in distrobox podman git flatpak; do
+for cmd in git flatpak; do
     if host_sh "command -v $cmd" >/dev/null 2>&1; then
         pass "host command: $cmd"
     else
@@ -55,20 +58,4 @@ if on_host test -x "$brew_bin" 2>/dev/null; then
     fi
 else
     skip 'Homebrew manifest' 'brew not installed'
-fi
-
-if host_sh 'command -v flatpak' >/dev/null 2>&1; then
-    flat_have=$(host_sh 'flatpak list --app --columns=application' 2>/dev/null || true)
-    missing=''
-    while read -r app; do
-        case ${app:-} in ''|'#'*) continue ;; esac
-        printf '%s\n' "$flat_have" | grep -qxF "$app" || missing="$missing $app"
-    done < <(sed -e 's/#.*//' "$REPO_ROOT/manifests/flatpaks.txt" | awk 'NF')
-    if [ -z "$missing" ]; then
-        pass 'every Flatpak in manifests/flatpaks.txt is installed'
-    else
-        fail 'Flatpak manifest is satisfied' "missing:$missing" 'run bootstrap/host.sh'
-    fi
-else
-    skip 'Flatpak manifest' 'flatpak not available'
 fi
