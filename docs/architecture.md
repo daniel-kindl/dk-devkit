@@ -30,7 +30,7 @@ The host holds **no language toolchain**. There is no Node and no npm on the
 host. `verify.sh` checks this, and reports a failure if one appears.
 
 **A Distrobox container** holds one purpose-specific development environment.
-`web-dev` and `python-dev` exist today. `dotnet-dev`, `rust-dev` and
+`web-dev`, `python-dev` and `rust-dev` exist today. `dotnet-dev` and
 `android-dev` are planned modules: each declares its container name and the
 router markers it owns, and nothing else yet. `docs/environments.md` describes
 the module.

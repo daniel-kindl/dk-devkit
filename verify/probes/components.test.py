@@ -413,14 +413,14 @@ class EnvironmentModuleCase(unittest.TestCase):
             catalogue(document)
 
     def test_a_planned_environment_declares_the_boundary_only(self):
-        components = catalogue(environment("rust-dev", status="planned"))
-        self.assertTrue(components["rust-dev"].planned)
+        components = catalogue(environment("dotnet-dev", status="planned"))
+        self.assertTrue(components["dotnet-dev"].planned)
         self.assertEqual(
-            set(components["rust-dev"].environment), {"container", "inference"}
+            set(components["dotnet-dev"].environment), {"container", "inference"}
         )
 
     def test_a_planned_component_must_have_no_installer(self):
-        document = environment("rust-dev", status="planned")
+        document = environment("dotnet-dev", status="planned")
         document["install"] = ["true"]
         with self.assertRaisesRegex(toolkit.ConfigError, "no install and no doctor"):
             catalogue(document)
@@ -430,36 +430,36 @@ class EnvironmentModuleCase(unittest.TestCase):
             catalogue(manifest("alpha", status="someday"))
 
     def test_a_planned_component_cannot_be_selected(self):
-        components = catalogue(environment("rust-dev", status="planned"))
+        components = catalogue(environment("dotnet-dev", status="planned"))
         with self.assertRaisesRegex(toolkit.ResolveError, "planned"):
-            toolkit.closure(components, ["rust-dev"])
+            toolkit.closure(components, ["dotnet-dev"])
 
     def test_a_planned_dependency_is_refused_the_same_way(self):
         components = catalogue(
-            environment("rust-dev", status="planned"),
-            manifest("alpha", requires=["rust-dev"]),
+            environment("dotnet-dev", status="planned"),
+            manifest("alpha", requires=["dotnet-dev"]),
         )
-        with self.assertRaisesRegex(toolkit.ResolveError, "rust-dev"):
+        with self.assertRaisesRegex(toolkit.ResolveError, "dotnet-dev"):
             toolkit.closure(components, ["alpha"])
 
     def test_a_planned_component_is_not_offered_by_the_picker(self):
         components = catalogue(
-            environment("web-dev"), environment("rust-dev", status="planned")
+            environment("web-dev"), environment("dotnet-dev", status="planned")
         )
         entries = [item.id for item in toolkit.picker_entries(components)]
         self.assertEqual(entries, ["web-dev"])
 
     def test_the_catalogue_says_a_module_is_planned(self):
-        components = catalogue(environment("rust-dev", status="planned"))
+        components = catalogue(environment("dotnet-dev", status="planned"))
         rendered = toolkit.render_catalogue(components, frozenset())
-        self.assertIn("~ rust-dev", rendered)
+        self.assertIn("~ dotnet-dev", rendered)
         self.assertIn("planned: no installation yet", rendered)
 
     def test_the_report_says_a_planned_module_cannot_be_installed(self):
-        components = catalogue(environment("rust-dev", status="planned"))
+        components = catalogue(environment("dotnet-dev", status="planned"))
         self.assertEqual(
             toolkit.unsupported(components, frozenset()),
-            {"rust-dev": "planned: no installation yet"},
+            {"dotnet-dev": "planned: no installation yet"},
         )
 
     def test_the_modules_are_listed_in_identifier_order(self):
@@ -473,22 +473,22 @@ class EnvironmentModuleCase(unittest.TestCase):
 
     def test_only_the_requested_status_is_listed(self):
         components = catalogue(
-            environment("web-dev"), environment("rust-dev", status="planned")
+            environment("web-dev"), environment("dotnet-dev", status="planned")
         )
         self.assertEqual(
             [item.id for item in toolkit.environment_modules(components, "planned")],
-            ["rust-dev"],
+            ["dotnet-dev"],
         )
 
     def test_the_tsv_names_every_field_and_marks_an_absent_one(self):
-        components = catalogue(environment("rust-dev", status="planned"))
+        components = catalogue(environment("dotnet-dev", status="planned"))
         header, record = toolkit.render_environments(components).splitlines()
         self.assertEqual(
             header.split("\t"), ["id", "status"] + list(toolkit.ENVIRONMENT_KEYS)
         )
         fields = record.split("\t")
         self.assertEqual(len(fields), len(header.split("\t")))
-        self.assertEqual(fields[:3], ["rust-dev", "planned", "rust-dev"])
+        self.assertEqual(fields[:3], ["dotnet-dev", "planned", "dotnet-dev"])
         # An absent field is "-", so that a shell "read" keeps the columns.
         self.assertEqual(fields[3], "-")
 

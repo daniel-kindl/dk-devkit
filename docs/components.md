@@ -87,8 +87,8 @@ installation. It declares what it will be, and it declares no `install` and no
 required:
 
 ```console
-$ ./install.sh --components rust-dev
-install.sh: planned, so it cannot be installed yet: rust-dev
+$ ./install.sh --components dotnet-dev
+install.sh: planned, so it cannot be installed yet: dotnet-dev
 ```
 
 `--list` marks it `~`, the picker does not offer it, and no profile composes

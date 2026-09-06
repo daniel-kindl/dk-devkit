@@ -144,23 +144,23 @@ It never downgrades one that is already there.
 An environment is a module under `components/`. The router, the manifests and
 the host bootstrap are already generic: they discover the modules, and they
 name no environment. `docs/environments.md` holds the full procedure, and
-`rust-dev` already exists as a planned module.
+`dotnet-dev` already exists as a planned module.
 
 To make it real:
 
 ```bash
 # 1. Describe the container.
-cp distrobox/web-dev.ini distrobox/rust-dev.ini    # then edit image, home, packages
-distrobox assemble create --file distrobox/rust-dev.ini
+cp distrobox/web-dev.ini distrobox/dotnet-dev.ini  # then edit image, home, packages
+distrobox assemble create --file distrobox/dotnet-dev.ini
 
 # 2. Describe the environment for the router.
-devbox new-env rust-dev --box rust-dev --workspace ~/projects:/workspace
-mv <generated file> config/devbox-router/environments.d/rust-dev.env
+devbox new-env dotnet-dev --box dotnet-dev --workspace ~/projects:/workspace
+mv <generated file> config/devbox-router/environments.d/dotnet-dev.env
 
 # 3. Declare both in the module, and set "status": "supported".
-$EDITOR components/rust-dev/component.json
+$EDITOR components/dotnet-dev/component.json
 
-# 4. Nothing else. components/rust-dev/inference.tsv already routes Cargo.toml.
+# 4. Nothing else. components/dotnet-dev/inference.tsv already routes global.json.
 ./verify.sh --only 17
 ```
 

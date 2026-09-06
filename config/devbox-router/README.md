@@ -78,7 +78,7 @@ workspace".
     devbox run -- pnpm i             run something in this repository's environment
     devbox verify                    run the full verification suite
 
-    devbox new-env rust-dev --box rust-dev --workspace ~/projects:/workspace
+    devbox new-env dotnet-dev --box dotnet-dev --workspace ~/projects:/workspace
     devbox new-shim gemini           add a host shim for another agent CLI
     devbox new-shim aq --env web-dev add a host shim pinned to one environment
     devbox new-shim aq --env web-dev --map-path --repo
