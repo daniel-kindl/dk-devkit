@@ -50,8 +50,44 @@
       "group": "type"
     },
     {
+      "name": "research",
+      "color": "2f8ce0",
+      "description": "Investigation or evaluation intended to produce evidence, findings, or a recommendation",
+      "group": "type"
+    },
+    {
+      "name": "design",
+      "color": "c5def5",
+      "description": "Architecture, API, workflow, interface, or system design work",
+      "group": "type"
+    },
+    {
+      "name": "verification",
+      "color": "bfdadc",
+      "description": "Verification gates, probes, self-tests, validation, or support evidence",
+      "group": "type"
+    },
+    {
+      "name": "performance",
+      "color": "f9d0c4",
+      "description": "Performance, efficiency, startup time, or resource-usage work",
+      "group": "type"
+    },
+    {
+      "name": "dependencies",
+      "color": "0366d6",
+      "description": "Dependency, runtime, toolchain, or pinned-version changes",
+      "group": "type"
+    },
+    {
+      "name": "platform-support",
+      "color": "d4c5f9",
+      "description": "Platform compatibility, capability adapters, or support-tier work",
+      "group": "type"
+    },
+    {
       "name": "ready-for-agent",
-      "color": "0e8a16",
+      "color": "1a9b28",
       "description": "Specified and eligible for unattended agent work",
       "group": "agent-workflow"
     },
@@ -69,7 +105,7 @@
     },
     {
       "name": "agent-failed",
-      "color": "b60205",
+      "color": "a00d0d",
       "description": "Unattended agent execution reached an issue-local terminal failure",
       "group": "agent-workflow"
     },
@@ -78,6 +114,18 @@
       "color": "0e8a8a",
       "description": "Issue participates in the Wayfinder discovery/specification workflow",
       "group": "agent-workflow"
+    },
+    {
+      "name": "breaking-change",
+      "color": "d93f0b",
+      "description": "Intentionally changes a public or compatibility-sensitive contract",
+      "group": "impact"
+    },
+    {
+      "name": "blocked",
+      "color": "c62828",
+      "description": "Cannot progress until a dependency, decision, issue, or external condition is resolved",
+      "group": "status"
     }
   ]
 }

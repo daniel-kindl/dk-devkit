@@ -54,17 +54,58 @@ repo-labels sync --config path/to/labels.json --dry-run
 
 The manifest format is versioned. Version 1 requires an array of unique label names with six-digit hexadecimal colors and explicit descriptions. `group` is optional documentation metadata and does not affect the GitHub label itself.
 
-## Canonical workflow labels
+## The canonical catalog
 
-The shipped catalog includes the labels used by the unattended agent workflow:
+The shipped catalog is bounded. It names the labels that are useful to the repositories and the workflows tracked here. It does not keep the GitHub default labels, and it does not add a category only for completeness.
 
-- `ready-for-agent`
-- `agent-in-progress`
-- `ready-for-human`
-- `agent-failed`
-- `wayfinder`
+`group` divides the catalog into four parts. No two labels in the catalog share a color, because a reader identifies a badge by its color before the reader reads it.
 
-It also includes a bounded general issue taxonomy for bugs, features, refactors, documentation, security, chores, releases, and the existing general `enhancement` category.
+### `type` - what kind of work an issue is
+
+| Label | Meaning |
+| --- | --- |
+| `bug` | Something is not working |
+| `feature` | New user-visible capability |
+| `enhancement` | General improvement that does not fit a more specific type |
+| `refactor` | Structural change without intended behavior change |
+| `documentation` | Documentation-only work |
+| `security` | Security-sensitive work |
+| `chore` | Maintenance and tooling work |
+| `release` | Release and publication work |
+| `research` | Investigation or evaluation intended to produce evidence, findings, or a recommendation |
+| `design` | Architecture, API, workflow, interface, or system design work |
+| `verification` | Verification gates, probes, self-tests, validation, or support evidence |
+| `performance` | Performance, efficiency, startup time, or resource-usage work |
+| `dependencies` | Dependency, runtime, toolchain, or pinned-version changes |
+| `platform-support` | Platform compatibility, capability adapters, or support-tier work |
+
+`enhancement` is the fallback. Use a more specific type when one applies.
+
+### `agent-workflow` - the unattended agent lifecycle
+
+| Label | Meaning |
+| --- | --- |
+| `ready-for-agent` | Specified and eligible for unattended agent work |
+| `agent-in-progress` | Currently claimed by the unattended agent workflow |
+| `ready-for-human` | Requires human decision, review, or intervention |
+| `agent-failed` | Unattended agent execution reached an issue-local terminal failure |
+| `wayfinder` | Issue participates in the Wayfinder discovery/specification workflow |
+
+`agentq` depends on this group. `lib/agentqueue/setup.py` reads the same file and selects the labels whose group is `agent-workflow`, so the catalog stays the one source of truth.
+
+### `impact` - what a change costs a consumer
+
+| Label | Meaning |
+| --- | --- |
+| `breaking-change` | Intentionally changes a public or compatibility-sensitive contract |
+
+### `status` - why an issue is not moving
+
+| Label | Meaning |
+| --- | --- |
+| `blocked` | Cannot progress until a dependency, decision, issue, or external condition is resolved |
+
+A `type` label is expected on every issue. A label from `impact` or `status` is added only when it applies, and more than one group can apply at the same time.
 
 ## Relationship to agentq
 

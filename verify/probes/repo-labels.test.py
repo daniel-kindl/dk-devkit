@@ -8,6 +8,7 @@ from importlib.machinery import SourceFileLoader
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "bin" / "repo-labels"
+MANIFEST = ROOT / "manifests" / "github-labels.json"
 loader = SourceFileLoader("repo_labels", str(SCRIPT))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 assert spec
@@ -37,13 +39,60 @@ class ManifestCase(unittest.TestCase):
         return Path(tmp.name)
 
     def test_shipped_manifest_is_valid(self):
-        labels = repo_labels.load_manifest(ROOT / "manifests" / "github-labels.json")
+        labels = repo_labels.load_manifest(MANIFEST)
         names = {item.name for item in labels}
         self.assertIn("ready-for-agent", names)
         self.assertIn("agent-in-progress", names)
         self.assertIn("ready-for-human", names)
         self.assertIn("agent-failed", names)
         self.assertIn("wayfinder", names)
+
+    def test_every_shipped_label_declares_a_known_group(self):
+        # A group is documentation metadata, but agentq selects the lifecycle
+        # labels by group. A typo there would silently empty that selection.
+        known = {"type", "agent-workflow", "impact", "status"}
+        for item in repo_labels.load_manifest(MANIFEST):
+            self.assertIn(item.group, known, f"{item.name} has group {item.group!r}")
+
+    def test_the_shipped_type_taxonomy_is_the_documented_one(self):
+        types = {item.name for item in repo_labels.load_manifest(MANIFEST)
+                 if item.group == "type"}
+        self.assertEqual(types, {
+            "bug", "feature", "enhancement", "refactor", "documentation",
+            "security", "chore", "release", "research", "design",
+            "verification", "performance", "dependencies", "platform-support",
+        })
+
+    def test_no_two_shipped_labels_share_a_color(self):
+        # A badge is read by its color first. Two labels with one color are two
+        # labels a reader cannot tell apart in an issue list.
+        colors = {}
+        for item in repo_labels.load_manifest(MANIFEST):
+            colors.setdefault(item.color, []).append(item.name)
+        shared = {color: names for color, names in colors.items() if len(names) > 1}
+        self.assertEqual(shared, {}, f"labels share a color: {shared}")
+
+    def test_the_impact_and_status_groups_hold_their_labels(self):
+        labels = repo_labels.load_manifest(MANIFEST)
+        by_group = {}
+        for item in labels:
+            by_group.setdefault(item.group, set()).add(item.name)
+        self.assertEqual(by_group["impact"], {"breaking-change"})
+        self.assertEqual(by_group["status"], {"blocked"})
+
+    def test_the_documentation_describes_every_shipped_label(self):
+        # docs/repo-labels.md prints the catalog as a table. A label the
+        # manifest holds and the table omits is a catalog nobody can read; a
+        # row the manifest does not hold is a label nobody can apply.
+        document = (ROOT / "docs" / "repo-labels.md").read_text(encoding="utf-8")
+        section = re.search(r"^## The canonical catalog$(.*?)^## ",
+                            document, re.M | re.S)
+        self.assertIsNotNone(section, "docs/repo-labels.md lost its catalog section")
+        documented = dict(re.findall(r"^\| `([^`]+)` \| (.+?) \|$",
+                                     section.group(1), re.M))
+        shipped = {item.name: item.description
+                   for item in repo_labels.load_manifest(MANIFEST)}
+        self.assertEqual(documented, shipped)
 
     def test_duplicate_names_are_rejected_case_insensitively(self):
         path = self.write({"version": 1, "labels": [
