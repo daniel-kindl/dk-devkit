@@ -146,8 +146,17 @@ section 'C. host path -> container path translation'
 expect_eq 'C1 ~/projects root'        '/workspace'          "$(dbx path web-dev "$PROJECTS")"
 expect_eq 'C2 repo under ~/projects'  '/workspace/dkkb'     "$(dbx path web-dev "$PROJECTS/dkkb")"
 expect_eq 'C3 path with spaces'       '/workspace/a b/c d'  "$(dbx path web-dev "$PROJECTS/a b/c d")"
-expect_eq 'C4 /home spelling'         '/workspace/dkkb'     "$(dbx path web-dev /home/dkindl/projects/dkkb)"
-expect_eq 'C5 /var/home spelling'     '/workspace/dkkb'     "$(dbx path web-dev /var/home/dkindl/projects/dkkb)"
+# Every spelling of the home directory must collapse to the same container
+# path. The spellings are derived from $HOME, so this suite never names one
+# machine's user. A spelling that this machine does not have is skipped.
+for spelling in "/home/${HOME##*/}" "/var/home/${HOME##*/}"; do
+    label=$([[ $spelling == /var/* ]] && echo 'C5 /var/home spelling' || echo 'C4 /home spelling')
+    if [[ $(canon "$spelling") == "$(canon "$HOME")" ]]; then
+        expect_eq "$label" '/workspace/dkkb' "$(dbx path web-dev "$spelling/projects/dkkb")"
+    else
+        t_skip "$label" "this machine has no $spelling"
+    fi
+done
 expect_eq 'C6 outside workspace'      "/run/host$(canon "$HOME")/.config" "$(dbx path web-dev "$HOME/.config")"
 
 # ------------------------------------------------ D: toolchain -------------

@@ -5,6 +5,7 @@
 #   ./install.sh                              pick the components on a terminal
 #   ./install.sh --list                       show every component
 #   ./install.sh --doctor                     report the platform and its capabilities
+#   ./install.sh --state                      report the public/local state boundary
 #   ./install.sh --dry-run --components X     show the resolved plan only
 #   ./install.sh --components devbox,web-dev  install those, and what they need
 #   ./install.sh --profile developer          a tracked component set

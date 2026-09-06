@@ -83,6 +83,16 @@ Edit it only through this repository.
     `./verify.sh` on that platform. `verify.sh` module 1c checks each of these,
     and `docs/platforms.md` says why.
 
+12. **Declare where state belongs, and keep the two sides apart.** A component
+    declares the tracked configuration it owns in `state.public`, relative to
+    this checkout, and the machine-local state it writes in `state.local`,
+    which starts at `~/` or at an XDG variable and always resolves outside this
+    checkout. Never hard-code one machine's home directory in a manifest, a
+    script, a test or a documentation example; derive it from `$HOME`, or write
+    `~/` or `<user>`. The installer refuses a manifest that breaks the rule,
+    `verify.sh` module 1b checks the tracked tree against it, `./install.sh
+    --state` reports the boundary, and `docs/components.md` says why.
+
 ## Prose
 
 Use ASD-STE100 as the baseline, in STE-flavored mode, for the documentation,

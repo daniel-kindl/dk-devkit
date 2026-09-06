@@ -16,12 +16,13 @@ Installs reusable components. It resolves the dependency and capability closure 
 ./install.sh                      # pick the components on a terminal
 ./install.sh --list
 ./install.sh --doctor             # what this machine is, and what it can install
+./install.sh --state              # public configuration versus machine-local state
 ./install.sh --dry-run --components web-dev
 ./install.sh --components agentbox
 ./install.sh --profile developer
 ```
 
-A component declares its dependencies, the platform capabilities its installation needs, and where its public configuration ends and machine-local state begins. Read [docs/components.md](docs/components.md).
+A component declares its dependencies, the platform capabilities its installation needs, and where its public configuration ends and machine-local state begins. `--state` reports that boundary and changes nothing. Public configuration is tracked here; machine-local state, credentials and private machine identity stay outside Git. Read [docs/components.md](docs/components.md) and [docs/not-tracked.md](docs/not-tracked.md).
 
 With no selection, and only on a terminal, it opens a component picker. `--profile` selects a tracked component set: `minimal`, `developer`, `agent-dev` or `daniel`. An automated run that names nothing gets a usage error instead of a prompt.
 
