@@ -9,6 +9,8 @@ from importlib.machinery import SourceFileLoader
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -459,6 +461,96 @@ class CommandCase(unittest.TestCase):
     def test_a_bad_repository_argument_is_a_usage_error(self):
         with mock.patch.object(repo_meta, "read_current", return_value=repo_meta.Metadata()):
             self.assertEqual(repo_meta.main(["check", "--repo", "name"]), repo_meta.EXIT_USAGE)
+
+
+class OutputOrderCase(unittest.TestCase):
+    """The plan must reach a reader before the message that refuses it.
+
+    stdout is block-buffered when it is not a terminal, and stderr is not. A
+    refusal written straight to stderr therefore arrives before the plan it
+    refuses. These tests join the two streams, which is what a log, a pipe and
+    a "!" shell capture all do.
+    """
+
+    def test_the_helper_flushes_stdout_before_it_writes(self):
+        events = []
+        out = mock.Mock()
+        out.flush.side_effect = lambda: events.append("flush")
+        err = mock.Mock()
+        err.write.side_effect = lambda text: events.append("write")
+        with mock.patch.object(sys, "stdout", out), \
+             mock.patch.object(sys, "stderr", err):
+            repo_meta._error("message")
+        self.assertEqual(events[0], "flush")
+        self.assertIn("write", events)
+
+    def test_the_helper_is_the_only_writer_to_stderr(self):
+        # A message that goes around the helper is a message that overtakes
+        # the plan again, and nothing else would say so.
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(source.count("file=sys.stderr"), 1)
+
+    def gh_document(self, **overrides):
+        """The gh reading of a repository that matches the shipped manifest."""
+        meta = repo_meta.load_manifest(ROOT / "manifests" / "github-metadata.json")
+        document = {
+            "description": meta.description,
+            "homepageUrl": meta.homepage,
+            "repositoryTopics": [{"name": name} for name in meta.topics],
+            "defaultBranchRef": {"name": meta.settings["default_branch"]},
+        }
+        for key, (field, _) in repo_meta.BOOLEAN_SETTINGS.items():
+            document[field] = meta.settings[key]
+        document.update(overrides)
+        return document
+
+    def run_command(self, args, document):
+        """Run the real command with a stub gh, and join both streams."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory)
+        stub = directory / "gh"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *nameWithOwner*) printf 'owner/name\\n' ;;\n"
+            "  *edit*) printf 'the stub gh must not be asked to edit\\n' >&2; exit 9 ;;\n"
+            "  *) cat <<'DOCUMENT'\n"
+            + json.dumps(document)
+            + "\nDOCUMENT\n"
+            "  ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        environment = dict(os.environ)
+        environment["PATH"] = f"{directory}{os.pathsep}{environment['PATH']}"
+        environment["NO_COLOR"] = "1"
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=environment,
+            cwd=str(ROOT),
+        )
+
+    def test_a_refusal_follows_the_plan_it_refuses(self):
+        proc = self.run_command(["sync"], self.gh_document(hasWikiEnabled=True))
+        self.assertEqual(proc.returncode, repo_meta.EXIT_REFUSED)
+        self.assertIn("DISABLE", proc.stdout)
+        self.assertLess(
+            proc.stdout.index("DISABLE"),
+            proc.stdout.index("refused destructive sync"),
+            f"the refusal overtook the plan:\n{proc.stdout}",
+        )
+
+    def test_a_matching_repository_reports_no_drift(self):
+        # The same stub, with nothing changed, proves the reading is complete:
+        # a field this side forgot to request would read as drift here.
+        proc = self.run_command(["check"], self.gh_document())
+        self.assertEqual(proc.returncode, repo_meta.EXIT_OK, proc.stdout)
+        self.assertIn("matches the manifest exactly", proc.stdout)
 
 
 if __name__ == "__main__":

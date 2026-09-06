@@ -83,6 +83,12 @@ Use `--yes` only after reviewing the plan or an equivalent dry run. A plan that
 only adds topics or replaces a non-empty description is not destructive and
 needs no confirmation.
 
+The plan goes to stdout and every message about it goes to stderr, and the plan
+always comes first. That holds when the two streams are joined, which is what a
+pipe, a log and a shell capture all do: stdout is block-buffered away from a
+terminal, so the command flushes it before it writes to stderr. Without that,
+`refused destructive sync` arrives before the plan it refuses.
+
 ## The plan
 
 | Operation | Meaning | Destructive |
