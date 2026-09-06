@@ -3,6 +3,10 @@
 Follow the steps in order. Steps marked **MANUAL** cannot be automated, because
 they need a human, a secret, or a browser.
 
+This is the whole-machine path for the `daniel` profile on Bazzite. To install
+one part of the toolkit instead, read [components.md](components.md) and run
+`./install.sh --components <ids>`.
+
 ## 0. What you need before you start
 
 - A fresh Bazzite KDE installation, logged in as your own user.

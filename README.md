@@ -66,7 +66,7 @@ agentq plan
 agentq run
 ```
 
-Installing the coordinator and preparing a repository are separate operations. `./install.sh --components agentq` installs the command once per machine. `agentq setup` inspects one repository and reports what is still missing: the policy file, the base branch, the local checks, the workflow labels, and the authentication this side holds. It starts no backlog work, and it never rewrites repository labels. Label drift is reported with the `repo-labels` command that repairs it.
+Installing the coordinator and preparing a repository are separate operations. `./install.sh --components agentq` installs the command once per machine. `agentq setup` inspects one repository and reports what is still missing: the policy file, the base branch, the local checks, the workflow labels, and the authentication this side holds. It starts no backlog work, and it never rewrites repository labels. Label drift is reported with the [`repo-labels`](docs/repo-labels.md) command that repairs it.
 
 The host command is a router shim; the real coordinator currently runs inside `web-dev`, where `gh` and the forwarded SSH agent are available. Read [docs/agentq.md](docs/agentq.md).
 
@@ -206,7 +206,7 @@ See [docs/secrets.md](docs/secrets.md) for the policy, and `./install.sh --state
 | `config/` | Public non-secret configuration and agent/runtime policy |
 | `manifests/` | Package, toolchain, skill, capability, platform, and runtime version declarations |
 | `verify/` | Deterministic verification modules and probes |
-| `docs/` | Architecture, recovery, security, and tool documentation |
+| `docs/` | Toolkit, command, and workstation documentation; [docs/README.md](docs/README.md) is the index |
 
 Component operations live with their component. Existing files move only when the component contract makes the new boundary useful.
 
@@ -228,7 +228,7 @@ Some verification is deliberately machine-specific because this repository is al
 - Platform support claims require verification evidence.
 - Credentials and private machine state stay outside Git.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the documentation index in [docs/README.md](docs/README.md).
 
 ## License
 

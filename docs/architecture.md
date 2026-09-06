@@ -1,5 +1,15 @@
 # Architecture
 
+This document describes the machine that the `daniel` profile converges: a
+Bazzite host and its development containers. That is the current implementation
+and the only platform with verification evidence. It is not a requirement on a
+reader who installs one component.
+
+The layers a reusable component sees are described elsewhere:
+[components.md](components.md) for the component contract,
+[platforms.md](platforms.md) for the capability and adapter layer, and
+[environments.md](environments.md) for the environment module.
+
 ## Two layers, one boundary
 
 The workstation has two layers. The boundary between them is deliberate, and
