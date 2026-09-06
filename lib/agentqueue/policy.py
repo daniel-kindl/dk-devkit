@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _MERGE_METHODS = ("squash", "merge", "rebase")
 _REVIEW_POLICIES = ("required", "optional", "none")
 _DEPENDENCY_SOURCES = ("github", "prose")
+_EFFORT_MODES = ("auto", "fixed")
 
 
 class PolicyError(Exception):
@@ -61,6 +62,15 @@ class Policy:
     deleteRemoteBranchOnMerge: bool = True
     deleteLocalBranchOnMerge: bool = False
     closeIssueIfPullRequestDidNot: bool = False
+
+    # Model routing. The tier catalog holds the pinned model IDs, and
+    # lib/agentqueue/effort.py holds the rules. "auto" reads the signals on
+    # the issue; "fixed" pins every task in this repository to "effort".
+    effortMode: str = "auto"
+    effort: str = "standard"
+    effortLabelPrefix: str = "effort:"
+    escalateEffortOnRetry: bool = True
+    modelTiers: str = ""
 
     maxParallel: int = 1
     maxRetries: int = 2
@@ -100,6 +110,14 @@ class Policy:
             raise PolicyError(
                 f"reviewPolicy must be one of {', '.join(_REVIEW_POLICIES)}"
             )
+        if self.effortMode not in _EFFORT_MODES:
+            raise PolicyError(
+                f"effortMode must be one of {', '.join(_EFFORT_MODES)}"
+            )
+        if not self.effort.strip():
+            raise PolicyError("effort must name a tier in the model tier catalog")
+        if not self.effortLabelPrefix.strip():
+            raise PolicyError("effortLabelPrefix must not be empty")
         for source in self.dependencySources:
             if source not in _DEPENDENCY_SOURCES:
                 raise PolicyError(f"unknown dependency source: {source}")

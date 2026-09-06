@@ -26,6 +26,7 @@ from __future__ import annotations
 import concurrent.futures
 import dataclasses
 import datetime
+import json
 import os
 import socket
 import threading
@@ -35,6 +36,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 from . import VERSION
 from . import claims as claims_mod
 from . import ci as ci_mod
+from . import effort as effort_mod
 from . import prompts
 from . import ui as ui_mod
 from .ui import Stage, Status
@@ -117,6 +119,7 @@ class Coordinator:
         agent_identities: Sequence[str] = (),
         sleep: Callable[[float], None] = time.sleep,
         ui=None,
+        effort_catalog=None,
     ):
         self.github = github
         self.git = git
@@ -132,6 +135,9 @@ class Coordinator:
         self.run_id = run_id or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         self.run_log = run_log
         self.agent_identities = tuple(agent_identities)
+        # The model-routing catalog. Without one the coordinator names no
+        # model and agentbox runs the defaults its own manifest pins.
+        self.effort_catalog = effort_catalog
         self.sleep = sleep
         self.claims = claims_mod.ClaimStore(
             github, policy, coordinator="agentqueue", dry_run=dry_run
@@ -152,6 +158,9 @@ class Coordinator:
         # issues run at once and one issue's phases must never answer for
         # another's.
         self._agent_events = threading.local()
+        # The tier the current thread's issue resolved to. The display reads
+        # it, and it is per thread for the same reason the phases are.
+        self._effort_state = threading.local()
 
     # ------------------------------------------------------------- scanning --
 
@@ -162,6 +171,53 @@ class Coordinator:
             seen = set()
             self._agent_events.seen = seen
         return seen
+
+    def _effort(self):
+        """The tier the current thread resolved, or None when there is none."""
+        return getattr(self._effort_state, "decision", None)
+
+    def _resolve_effort(self, issue: Issue, attempt: int, run_dir: str):
+        """Choose the models for one invocation, and record why.
+
+        The choice is made before the implementer starts. It reads the policy,
+        the labels and the title, never model output, and the whole decision is
+        written to the run directory so a surprising tier can be traced.
+        """
+        if self.effort_catalog is None:
+            self._effort_state.decision = None
+            return None
+        decision = effort_mod.resolve(
+            issue, self.policy, self.effort_catalog, attempt=attempt
+        )
+        self._effort_state.decision = decision
+        record = dict(decision.as_dict())
+        record["attempt"] = attempt
+        record["phase"] = "implement" if attempt == 0 else f"repair-{attempt}"
+        history = getattr(self._effort_state, "history", None)
+        if history is None or attempt == 0:
+            history = []
+        history.append(record)
+        self._effort_state.history = history
+        self.emit(
+            f"effort {decision.marker} {decision.id}: "
+            f"{decision.implementer.render()} reviewed by {decision.reviewer.render()} "
+            f"({decision.rule})"
+        )
+        try:
+            os.makedirs(run_dir, exist_ok=True)
+            with open(os.path.join(run_dir, "effort.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "issue": issue.number,
+                        "catalog": getattr(self.effort_catalog, "path", ""),
+                        "decisions": history,
+                    },
+                    handle,
+                    indent=2,
+                )
+        except OSError as exc:  # evidence is written, never enforced
+            self.ui.warn(f"the effort record was not written: {exc}")
+        return decision
 
     def base_ref(self) -> str:
         return f"refs/remotes/origin/{self.policy.baseBranch}"
@@ -435,10 +491,14 @@ class Coordinator:
         if not adopted:
             prompt_file = os.path.join(run_dir, "implement.md")
             self._write_prompt(issue, base_sha, prompt_file)
-            self.ui.stage(Stage.IMPLEMENT, Status.RUNNING)
+            decision = self._resolve_effort(issue, 0, run_dir)
+            self.ui.stage(
+                Stage.IMPLEMENT, Status.RUNNING,
+                decision.label() if decision else "",
+            )
             agent_run = self._run_agent(
                 branch, prompt_file, continuation=False, log_name="implement",
-                run_dir=run_dir,
+                run_dir=run_dir, effort=decision,
             )
             result.agentbox_runs += 1
             if agent_run.outcome.stops_queue:
@@ -640,12 +700,17 @@ class Coordinator:
                     issue, branch, failures, evidence, self.policy.checks, attempt
                 )
             )
+        # A repair is new evidence that the earlier tier was not enough, so the
+        # tier is resolved again for this attempt.
+        decision = self._resolve_effort(issue, attempt, run_dir)
         self.ui.stage(
-            Stage.IMPLEMENT, Status.RUNNING, f"repair {attempt}/{self.policy.maxRetries}"
+            Stage.IMPLEMENT, Status.RUNNING,
+            _join([f"repair {attempt}/{self.policy.maxRetries}",
+                   decision.label() if decision else ""], self.ui),
         )
         run = self._run_agent(
             branch, path, continuation=True, log_name=f"repair-{attempt}",
-            run_dir=run_dir,
+            run_dir=run_dir, effort=decision,
         )
         if run.outcome is Outcome.SUCCESS and "implement.done" not in self._seen():
             self.ui.stage(Stage.IMPLEMENT, Status.OK, _commit_count(run) or "repaired")
@@ -654,7 +719,8 @@ class Coordinator:
     # --------------------------------------------------- the agent, and its --
     # ------------------------------------------------- structured progress --
 
-    def _run_agent(self, branch, prompt_file, continuation, log_name, run_dir):
+    def _run_agent(self, branch, prompt_file, continuation, log_name, run_dir,
+                   effort=None):
         """One agentbox run, with its structured progress wired to the display.
 
         Every argument agentbox receives, every exit code it returns and every
@@ -667,6 +733,7 @@ class Coordinator:
             continuation=continuation, log_name=log_name, log_dir=run_dir,
             on_event=self._on_agentbox_event,
             on_raw=self.ui.raw,
+            effort=effort,
         )
 
     def _on_agentbox_event(self, event: Dict[str, object]) -> None:
@@ -680,12 +747,12 @@ class Coordinator:
         ui = self.ui
         self._seen().add(name)
         if name == "implement.start":
-            ui.stage_detail(_agent_label(event), key="implement:start")
+            ui.stage_detail(_agent_label(event, self._effort()), key="implement:start")
         elif name == "agent.progress":
             phase = str(event.get("phase", ""))
             iteration = event.get("iteration")
             limit = event.get("maxIterations")
-            parts: List[object] = [_agent_label(event)]
+            parts: List[object] = [_agent_label(event, self._effort())]
             if isinstance(iteration, int) and isinstance(limit, int) and limit:
                 parts.append(f"iteration {iteration}/{limit}")
             elif isinstance(iteration, int):
@@ -721,7 +788,7 @@ class Coordinator:
             reason = str(event.get("reason", "no reason given"))
             ui.stage(Stage.REVIEW, Status.SKIPPED, _join(["skipped", reason], ui))
         elif name == "review.start":
-            ui.stage(Stage.REVIEW, Status.RUNNING, _agent_label(event))
+            ui.stage(Stage.REVIEW, Status.RUNNING, _agent_label(event, self._effort()))
         elif name == "review.done":
             ui.stage(Stage.REVIEW, Status.OK, _commits_label(event))
         elif name == "import.done":
@@ -894,8 +961,19 @@ def _join(parts, ui) -> str:
     return separator.join(str(p) for p in parts if p)
 
 
-def _agent_label(event) -> str:
+def _agent_label(event, decision=None) -> str:
+    """What the stage line calls the model that is working.
+
+    With a resolved tier this is the compact marker and the family name, for
+    example "(S) Sonnet". Without one it is the name of the agent CLI, which
+    is all agentbox published.
+    """
     agent = str(event.get("agent", "") or "").strip()
+    if decision is not None and agent:
+        if agent == decision.implementer.agent:
+            return decision.label()
+        if agent == decision.reviewer.agent:
+            return decision.review_label()
     return agent.capitalize() if agent else "agent"
 
 

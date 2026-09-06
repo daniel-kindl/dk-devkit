@@ -49,7 +49,8 @@ import threading
 import time
 from typing import List, Optional
 
-from . import VERSION, policy as policy_mod, report as report_mod, ui as ui_mod
+from . import VERSION, effort as effort_mod, policy as policy_mod
+from . import report as report_mod, ui as ui_mod
 from .coordinator import Coordinator
 from .ghapi import GitHub, GhTransport
 from .gitops import Git, GitError, discover_root
@@ -180,6 +181,15 @@ def build_parser() -> argparse.ArgumentParser:
         "plan", help="show what a run would do and change nothing")
     common(plan)
 
+    effort = sub.add_parser(
+        "effort", help="show the model tier catalog and how an issue resolves")
+    common(effort)
+    effort.add_argument("--issue", type=int,
+                        help="resolve one issue instead of listing the catalog")
+    effort.add_argument("--attempt", type=int, default=0,
+                        help="resolve as the Nth repair attempt")
+    effort.add_argument("--json", action="store_true")
+
     doctor = sub.add_parser(
         "doctor", help="check the repository and the machine")
     common(doctor)
@@ -227,6 +237,80 @@ def _state_dir() -> str:
     return os.path.join(
         os.path.expanduser("~"), ".local", "share", "agentqueue"
     )
+
+
+def _catalog(install_root: str, repo_root: str, pol):
+    """The model tier catalog this repository routes through.
+
+    The built-in catalog is the one in this repository. A policy may name
+    another file, and the path is read relative to the repository the run
+    works on, so a project can pin its own tiers.
+    """
+    override = (getattr(pol, "modelTiers", "") or "").strip()
+    if not override:
+        return effort_mod.load(effort_mod.manifest_path(install_root))
+    path = os.path.expanduser(override)
+    if not os.path.isabs(path):
+        path = os.path.join(repo_root, path)
+    return effort_mod.load(path)
+
+
+def cmd_effort(args, install_root: str) -> int:
+    """Show the tier catalog, and how one issue resolves through it."""
+    repo_root, git, owner, name, pol = _load(args, install_root)
+    catalog = _catalog(install_root, repo_root, pol)
+
+    if getattr(args, "issue", None):
+        github = GitHub(owner, name, dry_run=True)
+        issue = github.get_issue(args.issue)
+        decision = effort_mod.resolve(issue, pol, catalog, attempt=args.attempt)
+        if args.json:
+            print(json.dumps(decision.as_dict(), indent=2, sort_keys=True))
+            return EXIT_OK
+        print(f"#{issue.number} {issue.title}")
+        print(f"  tier         {decision.marker}  {decision.id}")
+        print(f"  rule         {decision.rule}")
+        print(f"  implementer  {decision.implementer.agent}  {decision.implementer.render()}")
+        print(f"  reviewer     {decision.reviewer.agent}  {decision.reviewer.render()}")
+        for signal in decision.signals:
+            print(f"  signal       {signal}")
+        return EXIT_OK
+
+    if args.json:
+        print(json.dumps(
+            {
+                "catalog": catalog.path,
+                "default": catalog.default,
+                "mode": pol.effortMode,
+                "tiers": [
+                    {
+                        "id": tier.id,
+                        "marker": tier.marker,
+                        "rank": tier.rank,
+                        "summary": tier.summary,
+                        "implementer": tier.implementer.as_dict(),
+                        "reviewer": tier.reviewer.as_dict(),
+                    }
+                    for tier in catalog.tiers
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ))
+        return EXIT_OK
+
+    print(f"catalog      {catalog.path}")
+    print(f"mode         {pol.effortMode}"
+          + (f"  (pinned to {pol.effort})" if pol.effortMode == "fixed" else ""))
+    print(f"default      {catalog.default}")
+    print("")
+    for tier in catalog.tiers:
+        print(f"  {tier.marker}  {tier.id:<12} {tier.summary}")
+        print(f"     implement  {tier.implementer.agent:<7} {tier.implementer.render()}")
+        print(f"     review     {tier.reviewer.agent:<7} {tier.reviewer.render()}")
+    print("")
+    print(f"  a {pol.effortLabelPrefix}<tier> label on an issue pins that issue")
+    return EXIT_OK
 
 
 def cmd_policy(args, install_root: str) -> int:
@@ -435,6 +519,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
         # Every other level wants the structured progress channel.
         agent_output="terminal" if _output_level(args) == "debug" else "progress",
     )
+    catalog = _catalog(install_root, repo_root, pol)
     coordinator = Coordinator(
         github, git, pol, runner, state_dir,
         os.path.join(install_root, "bin", "scan-secrets"),
@@ -442,6 +527,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
         run_id=run_id, run_log=run_log.path,
         agent_identities=_agent_identities(install_root),
         ui=ui,
+        effort_catalog=catalog,
     )
 
     for line in (
@@ -450,6 +536,8 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
         f"  base         {pol.baseBranch}",
         f"  label        {pol.issueLabel}",
         f"  autoMerge    {pol.autoMerge}   mergeMethod {pol.mergeMethod}",
+        f"  effort       {pol.effortMode}"
+        + (f" ({pol.effort})" if pol.effortMode == "fixed" else ""),
         f"  maxParallel  {pol.maxParallel}   maxRetries {pol.maxRetries}",
         f"  run id       {run_id}",
     ):
@@ -468,9 +556,12 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
         if not order:
             print("    nothing; the queue is empty or every issue is blocked")
         for number in order[: pol.maxParallel]:
-            branch, note = coordinator._branch_for(github.get_issue(number))
+            issue = github.get_issue(number)
+            branch, note = coordinator._branch_for(issue)
+            decision = effort_mod.resolve(issue, pol, catalog)
             print(f"    #{number} -> {branch or 'NO USABLE BRANCH'}"
                   + (f"  ({note})" if note else ""))
+            print(f"       {decision.render()}")
         print("\n  mutations attempted: "
               f"{len(github.mutations) + len(git.mutations)} (must be 0)")
         return EXIT_OK if not github.mutations and not git.mutations else EXIT_DEFECT
@@ -501,6 +592,8 @@ def main(argv: Optional[List[str]] = None, install_root: str = "") -> int:
             return cmd_policy(args, install_root)
         if args.command == "doctor":
             return cmd_doctor(args, install_root)
+        if args.command == "effort":
+            return cmd_effort(args, install_root)
         if args.command == "init":
             return cmd_init(args, install_root)
         if args.command == "plan":
@@ -509,6 +602,9 @@ def main(argv: Optional[List[str]] = None, install_root: str = "") -> int:
         if args.command == "run":
             return cmd_run(args, install_root, dry_run=bool(args.dry_run))
     except policy_mod.PolicyError as exc:
+        sys.stderr.write(f"agentq: {exc}\n")
+        return EXIT_POLICY
+    except effort_mod.EffortError as exc:
         sys.stderr.write(f"agentq: {exc}\n")
         return EXIT_POLICY
     except SystemExit_ as exc:

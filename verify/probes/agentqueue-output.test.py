@@ -988,7 +988,8 @@ class OverlappingRunner(fakes.FakeRunner):
         self.first_published = threading.Event()
 
     def run(self, repo, branch, prompt_file, base_ref, continuation=False,
-            log_name="agentbox", log_dir="", on_event=None, on_raw=None):
+            log_name="agentbox", log_dir="", on_event=None, on_raw=None,
+            effort=None):
         number = 86 if "issue-86" in branch else 87
         self.calls.append({"branch": branch, "log_dir": log_dir})
         self.started.wait()

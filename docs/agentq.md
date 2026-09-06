@@ -90,6 +90,90 @@ with the local-check loop, so one issue can never spend more than the sum.
 The prompt tells the implementer about the first loop in as many words: run the
 checks yourself, repair what fails, and repeat.
 
+## Which model runs the task
+
+Not every issue needs the strongest model. A task gets one **effort tier**, and
+the tier names both models the run uses.
+
+| Effort | Marker | Implementer | Reviewer |
+| --- | --- | --- | --- |
+| lightweight | `L` | Haiku | Luna |
+| standard | `S` | Sonnet | Terra |
+| hard | `H` | Opus | Sol |
+
+`standard` is normal engineering work. `lightweight` is bounded, low-risk and
+mechanically simple work. `hard` is work that genuinely benefits from the
+strongest reasoning models.
+
+The marker says which execution effort was selected. It does not estimate the
+size of the ticket.
+
+`Haiku` and `Terra` are display names for an operator. A run always resolves
+them to the exact provider model IDs that `manifests/model-tiers.json` pins,
+and only those IDs reach `agentbox`. A tier name and a family name are never
+passed as a model.
+
+Every tier pairs two providers, because a model does not review its own
+implementation. The catalog refuses a tier that names the same provider twice.
+
+### How a tier is chosen
+
+Before the implementer starts, and from data a human wrote. The rules read the
+policy, the labels on the issue, the title and the number of acceptance
+criteria in the body. No model is called to choose a model, and no rule reads
+model output.
+
+The first rule that answers decides:
+
+1. `effortMode: "fixed"` in the policy pins every task in the repository.
+2. An `effort:<tier>` label on the issue pins that issue.
+3. An escalation signal makes the task `hard`. The `security` and `release`
+   labels are signals, and so is a title that names authentication, a
+   credential, a secret, a token, the sandbox, isolation, a permission, CI, a
+   release, a migration, a schema, persistence or a merge.
+4. Six or more acceptance criteria in the body make the task `hard` on stated
+   scope alone.
+5. The ordinary issue taxonomy: `documentation` and `chore` are lightweight,
+   and `bug`, `refactor`, `feature` and `enhancement` are standard.
+6. The catalog default, which is `standard`.
+
+Rules 3 to 6 are then raised, never lowered, by one tier for each earlier
+failed attempt, because a repair is new evidence that the earlier tier was not
+enough. Rules 1 and 2 are explicit human intent, and no signal moves them.
+
+The escalation labels, the escalation words and the taxonomy map are data in
+the catalog, not code. Change them there.
+
+### Reading the decision
+
+```bash
+agentq effort                    # the catalog, and the tier of each row
+agentq effort --json
+agentq effort --issue 42         # how one issue resolves, and why
+agentq effort --issue 42 --attempt 1
+```
+
+`agentq plan` states the tier of each issue it would run. A run writes the
+whole decision to `runs/<run id>-i<issue>/effort.json`, including the rule that
+decided it, every signal that fired, and the pinned model IDs of both roles.
+A repair appends its own decision beside the first.
+
+The stage view shows the marker and the family, so a slow run says which model
+is producing the output:
+
+```text
+● IMPLEMENT  6m 12s · (S) Sonnet · iteration 1/1 · 22 tool calls
+```
+
+### What a tier does not change
+
+A tier chooses a model. It touches no gate. The merge gates, the review
+policy, the secret scan, the import bound and the branch namespace read the
+same for `L` as they do for `H`.
+
+If the catalog names a tier that does not exist, or an `effort:` label names
+one, the run refuses and says so. Nothing falls back to an unrelated model.
+
 ## Continuation mode
 
 A repair has to reach a branch that `agentbox` already imported.
@@ -320,6 +404,11 @@ what it may do with the backlog. Neither reads the other.
 | `mergeWithoutReview` | `false` | see the review table |
 | `autoMerge` | `false` | merge when every gate passes |
 | `mergeMethod` | `squash` | squash, merge or rebase |
+| `effortMode` | `auto` | `auto` reads the signals on the issue, `fixed` pins every task to `effort` |
+| `effort` | `standard` | the tier `effortMode: "fixed"` pins |
+| `effortLabelPrefix` | `effort:` | the label prefix that pins one issue |
+| `escalateEffortOnRetry` | `true` | a failed attempt raises the tier |
+| `modelTiers` | `""` | another tier catalog, relative to the repository |
 | `maxParallel` | `1` | issues at a time |
 | `maxRetries` | `2` | repair attempts per issue, shared across both loops |
 | `maxFixRounds` | `2` | repair rounds inside one sandbox |
@@ -414,6 +503,7 @@ Run them from a host terminal.
 agentq run    [options]   run the eligible issues
 agentq plan   [options]   the plan, an alias of run --dry-run
 agentq doctor [options]   what is ready, what is missing
+agentq effort [--issue N] the model tier catalog, and how an issue resolves
 agentq policy [--json]    the resolved policy and its sources
 agentq init   [--local]   write a policy file to start from
 ```

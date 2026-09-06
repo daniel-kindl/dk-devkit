@@ -15,7 +15,11 @@
     "Authenticate GitHub inside the coordinator environment: gh auth login --git-protocol ssh."
   ],
   "state": {
-    "public": ["manifests/agentqueue.env", "config/agentqueue/"],
+    "public": [
+      "manifests/agentqueue.env",
+      "manifests/model-tiers.json",
+      "config/agentqueue/"
+    ],
     "local": ["~/.config/agentqueue/", "~/.local/share/agentqueue/"]
   }
 }
