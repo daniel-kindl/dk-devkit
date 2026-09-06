@@ -173,6 +173,11 @@ G8 also fails on a release and on an Actions artifact. Neither has a
 declaration, because this repository cuts no release and tracks no workflow, so
 either one is something that no review approved.
 
+An open feature branch fails G8 as well, because a reader of a public
+repository sees it. The repository deletes a branch when it merges, so the
+remote returns to the declared list on its own, and the gate runs on the
+commit that publication exposes rather than during a review.
+
 The declaration reads the remote and not the checkout, which is the mistake the
 correction above records. `archive/agentqueue-run-cli` and `archive/pr19head`
 stay local, and G8 says nothing about them.

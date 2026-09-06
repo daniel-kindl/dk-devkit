@@ -14,6 +14,10 @@
 #
 # A local branch and a local tag are outside this file. The gate reads the
 # remote, because publication exposes what GitHub holds.
+
+# An open feature branch on the remote fails the gate. That is the intended
+# reading: a reader of a public repository sees it. This repository deletes a
+# branch when it merges, so the remote returns to this list on its own.
 #
 # Write the full ref name, one for each line. A blank line and a "#" comment
 # are ignored.
