@@ -128,6 +128,8 @@ Each profile contains the smaller one. The `daniel` profile composes the complet
 
 Current roadmap priorities are tracked in [#8](https://github.com/daniel-kindl/workstation/issues/8) and [#24](https://github.com/daniel-kindl/workstation/issues/24).
 
+The repository is still called `workstation` on purpose. [docs/naming.md](docs/naming.md) records that evaluation, and what would reopen it.
+
 ## Platform support
 
 Every platform below has an adapter in `manifests/platforms.json`. The tier states the verification evidence, not the intent.
