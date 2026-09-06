@@ -2,9 +2,14 @@
 
     agentq run    [options]   run the eligible issues
     agentq plan   [options]   what a run would do, and nothing else
+    agentq setup  [options]   prepare THIS repository, and start no work
     agentq doctor [options]   what is ready, what is missing
     agentq policy [options]   the resolved policy and its source
     agentq init   [options]   write a policy file to start from
+
+Installing the command and preparing a repository are two operations.
+``./install.sh --components agentq`` does the first one, once per machine.
+``agentq setup`` does the second one, once per repository.
 
 Every command works on ONE repository. It is the current Git working tree,
 so the normal case is to stand in the repository and say nothing:
@@ -50,7 +55,7 @@ import time
 from typing import List, Optional
 
 from . import VERSION, effort as effort_mod, policy as policy_mod
-from . import report as report_mod, ui as ui_mod
+from . import report as report_mod, setup as setup_mod, ui as ui_mod
 from .coordinator import Coordinator
 from .ghapi import GitHub, GhTransport
 from .gitops import Git, GitError, discover_root
@@ -197,6 +202,15 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("policy", help="print the resolved policy")
     common(show)
     show.add_argument("--json", action="store_true")
+
+    setup = sub.add_parser(
+        "setup", help="prepare this repository for a run, and start no work")
+    common(setup)
+    setup.add_argument("--write-policy", action="store_true",
+                       help="write the repository policy file from what was detected")
+    setup.add_argument("--force", action="store_true",
+                       help="replace an existing policy file")
+    setup.add_argument("--json", action="store_true")
 
     init = sub.add_parser("init", help="write a policy file to start from")
     common(init)
@@ -372,6 +386,79 @@ def cmd_doctor(args, install_root: str) -> int:
     print(f"  checks             {', '.join(pol.checks) or '(none)'}")
     print("\nagentq: " + ("ready" if rc == EXIT_OK else "not ready"))
     return rc
+
+
+def cmd_setup(args, install_root: str) -> int:
+    """Prepare ONE repository for a run, and start no work.
+
+    The command reports. It reads GitHub through a dry-run client, so a defect
+    that tried to label an issue or open a pull request would raise instead of
+    reaching the API. The one thing it can write is the repository policy
+    file, and only when ``--write-policy`` asks for it.
+
+    Label drift is reported, never repaired. ``repo-labels`` owns the label
+    catalog, a delete removes the label from every issue and pull request that
+    carries it, and that stays a human decision.
+    """
+    repo_root, git, owner, name, pol = _load(args, install_root)
+
+    transport = GhTransport()
+    gh_ready = transport.available() and transport.run(["auth", "status"])[0] == 0
+    github = GitHub(owner, name, dry_run=True) if gh_ready else None
+
+    seen: dict = {}
+
+    def default_branch() -> str:
+        if "value" not in seen:
+            seen["value"] = github.default_branch()
+        return seen["value"]
+
+    if getattr(args, "write_policy", False):
+        target = os.path.join(repo_root, ".agentqueue.json")
+        if os.path.exists(target) and not args.force:
+            print(f"agentq: {target} exists already. Pass --force to replace it.")
+            return EXIT_USAGE
+        remote_default = ""
+        if github is not None:
+            try:
+                remote_default = default_branch()
+            except Exception:
+                # The policy is still written. A base branch that could not be
+                # read stays the one the policy already names, and the report
+                # below says the GitHub side is unknown.
+                remote_default = ""
+        draft = setup_mod.policy_draft(
+            pol, remote_default, setup_mod.detect_checks(repo_root).commands
+        )
+        with open(target, "w", encoding="utf-8") as handle:
+            json.dump(draft, handle, indent=2)
+            handle.write("\n")
+        print(f"agentq: wrote {target}\n")
+        default = os.path.join(
+            install_root, "config", "agentqueue", "policy.default.json")
+        pol = policy_mod.load(repo_root, default, owner, name, args.config)
+        pol.validate()
+
+    report = setup_mod.inspect(
+        repo_root, owner, name, pol, install_root,
+        git=git,
+        read_default_branch=default_branch if github is not None else None,
+        read_labels=github.list_labels if github is not None else None,
+        gh_ready=gh_ready,
+        ssh_agent=os.environ.get("SSH_AUTH_SOCK", ""),
+        agentbox=os.path.join(install_root, "bin", "agentbox"),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
+    else:
+        for line in setup_mod.render(report):
+            print(line)
+
+    if github is not None and github.mutations:
+        sys.stderr.write("agentq: setup changed GitHub state. This is a defect.\n")
+        return EXIT_DEFECT
+    return EXIT_OK if report.ready else EXIT_NOT_READY
 
 
 def cmd_init(args, install_root: str) -> int:
@@ -596,6 +683,8 @@ def main(argv: Optional[List[str]] = None, install_root: str = "") -> int:
             return cmd_effort(args, install_root)
         if args.command == "init":
             return cmd_init(args, install_root)
+        if args.command == "setup":
+            return cmd_setup(args, install_root)
         if args.command == "plan":
             args.once = False
             return cmd_run(args, install_root, dry_run=True)
@@ -607,6 +696,9 @@ def main(argv: Optional[List[str]] = None, install_root: str = "") -> int:
     except effort_mod.EffortError as exc:
         sys.stderr.write(f"agentq: {exc}\n")
         return EXIT_POLICY
+    except setup_mod.SetupError as exc:
+        sys.stderr.write(f"agentq: {exc}\n")
+        return EXIT_NOT_READY
     except SystemExit_ as exc:
         sys.stderr.write(f"agentq: {exc.message}\n")
         return exc.code

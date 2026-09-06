@@ -57,10 +57,13 @@ Coordinates a GitHub issue backlog in the trusted layer. It selects runnable iss
 
 ```bash
 cd ~/projects/dkkb
+agentq setup
 agentq doctor
 agentq plan
 agentq run
 ```
+
+Installing the coordinator and preparing a repository are separate operations. `./install.sh --components agentq` installs the command once per machine. `agentq setup` inspects one repository and reports what is still missing: the policy file, the base branch, the local checks, the workflow labels, and the authentication this side holds. It starts no backlog work, and it never rewrites repository labels. Label drift is reported with the `repo-labels` command that repairs it.
 
 The host command is a router shim; the real coordinator currently runs inside `web-dev`, where `gh` and the forwarded SSH agent are available. Read [docs/agentq.md](docs/agentq.md).
 

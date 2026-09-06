@@ -27,7 +27,7 @@ from agentqueue import cli as cli_mod  # noqa: E402
 from agentqueue.model import CheckRun, Outcome  # noqa: E402
 
 READY = "ready-for-agent"
-COMMANDS = ("run", "plan", "doctor", "effort", "policy", "init")
+COMMANDS = ("run", "plan", "doctor", "effort", "policy", "setup", "init")
 SCANNER = os.path.join(_ROOT, "bin", "scan-secrets")
 
 _IDENTITY = cli_mod._agent_identities(_ROOT) or ["Agent <agent@local>"]

@@ -33,6 +33,8 @@ check 'A6b the command surface test exists'  -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-cli.test.py"
 check 'A6c the model routing test exists'    -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-effort.test.py"
+check 'A6e the repository setup test exists' -- \
+    test -f "$REPO_ROOT/verify/probes/agentqueue-setup.test.py"
 check 'A6d the model tier catalog exists'    -- \
     test -f "$REPO_ROOT/manifests/model-tiers.json"
 check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentq.md"
@@ -455,6 +457,16 @@ if command -v python3 >/dev/null 2>&1; then
             "$(printf '%s\n' "$eff_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 
+    set_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-setup.test.py" 2>&1) &&
+        set_rc=0 || set_rc=$?
+    set_n=$(printf '%s\n' "$set_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
+    if [ "$set_rc" = 0 ]; then
+        pass "H1d the repository setup tests pass ($set_n tests)"
+    else
+        fail 'H1d the repository setup tests pass' \
+            "$(printf '%s\n' "$set_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
+    fi
+
     int_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-integration.test.py" 2>&1) &&
         int_rc=0 || int_rc=$?
     int_n=$(printf '%s\n' "$int_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
@@ -469,8 +481,38 @@ else
     skip 'H1a the output tests pass' 'no python3 on this side'
     skip 'H1b the command surface tests pass' 'no python3 on this side'
     skip 'H1c the model routing tests pass' 'no python3 on this side'
+    skip 'H1d the repository setup tests pass' 'no python3 on this side'
     skip 'H2 the coordinator integration tests pass' 'no python3 on this side'
 fi
+
+# --- repository enrollment stays a report -----------------------------------
+#
+# agentq setup prepares ONE repository. Machine installation is a different
+# operation, and so is label convergence: repo-labels owns the catalog, and a
+# delete removes the label from every issue that carries it.
+
+SETUP_CODE=$(aq_code_of "$AQ_LIB/setup.py")
+GHAPI_CODE=$(aq_code_of "$AQ_LIB/ghapi.py")
+
+check 'S1 the setup module exists' -- test -f "$AQ_LIB/setup.py"
+check_contains 'S2 setup reads GitHub through a dry-run client' \
+    'GitHub(owner, name, dry_run=True)' "$CLI_CODE_ALL"
+check_contains 'S3 setup points label drift at repo-labels' \
+    'repo-labels sync --repo' "$SETUP_CODE"
+check_not_contains 'S4 setup never creates a label' \
+    'labels", method="POST"' "$SETUP_CODE"
+check_not_contains 'S5 setup never deletes a label' \
+    'method="DELETE"' "$SETUP_CODE"
+check_not_contains 'S6 setup starts no agentbox run' \
+    'AgentboxRunner' "$SETUP_CODE"
+check_not_contains 'S7 setup reads no credential out of the environment' \
+    'TOKEN' "$SETUP_CODE"
+check_contains 'S8 the label read is a read' \
+    'def list_labels' "$GHAPI_CODE"
+check_not_contains 'S9 the coordinator never writes a repository label' \
+    'list_labels' "$COORD_CODE_ALL"
+check_contains 'S10 a policy the command drafts keeps every gate closed' \
+    '"autoMerge": False' "$SETUP_CODE"
 
 # --- the machine side -------------------------------------------------------
 
@@ -517,7 +559,8 @@ found = set()
 for action in build_parser()._actions:
     if isinstance(action, argparse._SubParsersAction):
         found.update(action.choices)
-assert found == {'run', 'plan', 'doctor', 'effort', 'policy', 'init'}, found
+assert found == {'run', 'plan', 'doctor', 'effort', 'policy', 'setup',
+                 'init'}, found
 " "$REPO_ROOT"
     check 'J4 the help advertises run and never drain' -- \
         python3 -c "

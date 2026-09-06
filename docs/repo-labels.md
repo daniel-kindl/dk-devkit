@@ -70,7 +70,7 @@ It also includes a bounded general issue taxonomy for bugs, features, refactors,
 
 `agentq` consumes workflow labels according to repository policy. It does **not** silently run `repo-labels sync`.
 
-The future `agentq setup` flow may detect label drift and offer this tool explicitly. Installing `repo-labels`, enrolling a repository for `agentq`, and applying a destructive label sync remain separate actions.
+`agentq setup` detects label drift and names the command that repairs it. It never runs the sync itself. Installing `repo-labels`, enrolling a repository for `agentq`, and applying a destructive label sync are three separate actions, and the third one is a human decision.
 
 ## Exit codes
 

@@ -413,6 +413,89 @@ These stop the queue:
 The last row is the fail-closed rule. "The import was unsafe" and "the import
 could not be shown to be safe" get the same answer.
 
+## Preparing a repository
+
+Installing the coordinator and preparing a repository are two operations.
+
+```bash
+./install.sh --components agentq        # once per machine
+cd ~/projects/example
+agentq setup                            # once per repository
+```
+
+`agentq setup` inspects one repository and reports. It starts no backlog work,
+it labels no issue, and it opens no pull request. It reads GitHub through a
+dry-run client, so a defect that tried to change GitHub state raises instead of
+reaching the API.
+
+```bash
+agentq setup                    # report what is ready, and what is missing
+agentq setup --write-policy     # also write .agentqueue.json from what it found
+agentq setup --write-policy --force
+agentq setup --json             # the same report, for a machine
+```
+
+Each line carries one of four states.
+
+| Marker | Meaning |
+| --- | --- |
+| `ok` | the repository already satisfies this |
+| `GAP` | a run is blocked or unsafe until a human acts |
+| `todo` | a suggestion; a run works without it |
+| (blank) | evidence, so a surprising setting can be traced |
+
+What it looks at:
+
+- the GitHub repository and the branch GitHub calls the default one;
+- the policy file, and whether the repository has one of its own;
+- the local checks in the policy, and the ones this repository suggests;
+- the workflow files, against `requiredChecks`;
+- the workflow labels a run depends on;
+- `gh` authentication, the forwarded ssh-agent, and the `agentbox` command;
+- the merge gates, as evidence.
+
+### What it writes, and what it refuses to write
+
+`--write-policy` writes `<repo>/.agentqueue.json`, and that is the only thing
+the command can change. A file that exists already is kept: pass `--force` to
+replace it. The draft carries the detected base branch and the detected checks.
+Every gate stays closed. `autoMerge` is `false`, `mergeWithoutReview` is
+`false`, and `requiredChecks` is empty, because a merge without a human is a
+decision that setup does not make for you.
+
+A check command is suggested only from unambiguous evidence: a lockfile that
+names the package manager and a script of that name, or an executable
+`verify.sh`. A repository that gives no such evidence gets no suggestion. A
+wrong check command turns every task into a failed one.
+
+### Label drift is reported, never repaired
+
+A run depends on the four lifecycle labels, and the canonical catalog in
+`manifests/github-labels.json` owns their colors and descriptions. `agentq
+setup` compares the repository against that catalog and names what differs.
+
+It changes nothing. The tool that converges a repository is `repo-labels`, and
+setup prints the command:
+
+```bash
+repo-labels check --repo owner/name     # the drift, and no mutation
+repo-labels sync  --repo owner/name     # converge, after an explicit confirmation
+```
+
+The separation is deliberate. A sync deletes obsolete labels, a delete removes
+the label from every issue and pull request that carries it, and that stays a
+human decision. `agentq run` never rewrites the labels of the repository it
+works in. Read `docs/repo-labels.md`.
+
+### Running it twice
+
+Setup is a report, so a second run reaches the same state as the first one.
+`--write-policy` is the one operation that can change something, and it refuses
+an existing file rather than guessing which version was wanted.
+
+The exit code is 0 when no gap remains, and 5 when at least one does. A
+suggestion never changes the exit code.
+
 ## Configuration
 
 Policy is declarative, and it is resolved from files. No repository is named in
@@ -555,6 +638,7 @@ Run them from a host terminal.
 ```bash
 agentq run    [options]   run the eligible issues
 agentq plan   [options]   the plan, an alias of run --dry-run
+agentq setup  [options]   prepare THIS repository, and start no work
 agentq doctor [options]   what is ready, what is missing
 agentq effort [--issue N] the model tier catalog, and how an issue resolves
 agentq policy [--json]    the resolved policy and its sources
