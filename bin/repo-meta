@@ -302,6 +302,18 @@ def read_current(repo: str) -> Metadata:
         raise GitHubError(f"gh returned invalid JSON for {repo}: {exc}") from exc
 
 
+def _error(message: str) -> None:
+    """Write one message to stderr, after everything stdout already holds.
+
+    stdout is block-buffered when it is not a terminal, and stderr is not. A
+    message written straight to stderr therefore reaches a joined log before
+    the plan it talks about, which reverses the only order that helps a
+    reader. Flushing first keeps the plan in front of the verdict on it.
+    """
+    sys.stdout.flush()
+    print(message, file=sys.stderr)
+
+
 def _shown(value: str) -> str:
     return value if value else "(empty)"
 
@@ -337,7 +349,7 @@ def _confirm_destructive(plan: Plan, assume_yes: bool, stdin) -> bool:
     if not getattr(stdin, "isatty", lambda: False)():
         return False
     names = ", ".join(f"{change.kind.lower()} {change.field}" for change in removals)
-    print(f"{PROGRAM}: sync will remove public metadata: {names}", file=sys.stderr)
+    _error(f"{PROGRAM}: sync will remove public metadata: {names}")
     answer = input("Continue with destructive metadata sync? [y/N] ").strip().casefold()
     return answer in {"y", "yes"}
 
@@ -401,10 +413,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         current = read_current(repo)
         plan = build_plan(desired, current)
     except ConfigError as exc:
-        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        _error(f"{PROGRAM}: {exc}")
         return EXIT_USAGE
     except GitHubError as exc:
-        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        _error(f"{PROGRAM}: {exc}")
         return EXIT_GH
 
     print(f"{PROGRAM}: {repo}")
@@ -420,18 +432,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         return EXIT_OK
     if not _confirm_destructive(plan, args.yes, sys.stdin):
-        print(f"{PROGRAM}: refused destructive sync; re-run interactively or pass --yes", file=sys.stderr)
+        _error(f"{PROGRAM}: refused destructive sync; re-run interactively or pass --yes")
         return EXIT_REFUSED
 
     try:
         apply_plan(repo, plan)
         remaining = build_plan(desired, read_current(repo))
     except GitHubError as exc:
-        print(f"{PROGRAM}: {exc}", file=sys.stderr)
+        _error(f"{PROGRAM}: {exc}")
         return EXIT_GH
     if not remaining.exact:
-        print(f"{PROGRAM}: repository still differs after sync", file=sys.stderr)
-        print(render_plan(remaining), file=sys.stderr)
+        _error(f"{PROGRAM}: repository still differs after sync")
+        _error(render_plan(remaining))
         return EXIT_VERIFY
 
     print("sync complete; metadata matches the manifest exactly")
