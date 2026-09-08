@@ -166,7 +166,7 @@ fi
 
 manual 'Authenticate Claude Code in python-dev: claude  (then /login)'
 manual 'Authenticate Codex in python-dev: codex login'
-manual 'Authenticate GitHub in python-dev: gh auth login --git-protocol ssh'
+manual 'Authenticate GitHub in python-dev: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Pin Python in each project with pyproject.toml and/or .python-version'
 manual 'Verify the environment: ./verify.sh --only 25'
 

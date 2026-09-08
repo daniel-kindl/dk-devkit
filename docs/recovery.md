@@ -126,7 +126,7 @@ Once on the host, and once inside the container. They use separate homes.
 
 ```bash
 gh auth login --git-protocol ssh
-devbox exec web-dev -- gh auth login --git-protocol ssh
+devbox exec web-dev -- gh auth login --git-protocol ssh --skip-ssh-key
 ```
 
 Set your Git identity if it is not restored from elsewhere:
@@ -151,12 +151,14 @@ Repeat steps 6 and 7 for every environment you bootstrapped in step 5b. Each
 environment has its own isolated HOME, so each one authenticates on its own:
 
 ```bash
-devbox exec python-dev -- gh auth login --git-protocol ssh
-devbox exec rust-dev   -- gh auth login --git-protocol ssh
+devbox exec python-dev -- gh auth login --git-protocol ssh --skip-ssh-key
+devbox exec rust-dev   -- gh auth login --git-protocol ssh --skip-ssh-key
 ```
 
 The SSH key is not copied into any of them. Every container reaches GitHub
-through the forwarded host ssh-agent from step 2.
+through the forwarded host ssh-agent from step 2. `--skip-ssh-key` keeps it
+that way: without the flag, `gh` generates a key inside the isolated HOME and
+uploads it to GitHub.
 
 Pi is the exception, because it runs on the host and there is exactly one
 installation. Authenticate it from a host terminal:
