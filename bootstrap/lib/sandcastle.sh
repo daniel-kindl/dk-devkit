@@ -13,7 +13,7 @@ install_agentbox() {
     local repo_root=$1
     local home=${2:-$HOME}
 
-    link_into "$repo_root/bin/agentbox" "$home/.local/bin/agentbox"
+    install_user_command "$repo_root" agentbox "$home"
 
     # The per-run scratch area. Every disposable clone, every staged copy of
     # the agent policy and every per-run credential file lives under here, and

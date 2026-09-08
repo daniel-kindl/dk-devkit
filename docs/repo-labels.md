@@ -4,6 +4,27 @@
 
 It is a trusted user-side tool. It uses the existing `gh` login and does not create, copy, cache, or print another GitHub credential.
 
+## Install
+
+```bash
+./install.sh --components repo-labels
+```
+
+The component links `bin/repo-labels` into `~/.local/bin`, so a normal shell
+resolves `repo-labels`. It needs the GitHub CLI, which it declares as the `gh`
+capability: a machine without `gh` is reported before the installation, not at
+the first command.
+
+The installation is idempotent, and readiness is a fact about the installed
+command. Deleting `~/.local/bin/repo-labels` and running the installation again
+restores it.
+
+```bash
+./install.sh --state --components repo-labels    # what it owns and what it writes
+```
+
+Authentication stays a manual step: `gh auth login` where you run the command.
+
 ## Check for drift
 
 From a GitHub repository:
@@ -120,9 +141,12 @@ A `type` label is expected on every issue. A label from `impact` or `status` is 
 ```
 
 Module 8d compiles the command and checks that the shipped manifest is valid
-JSON. It runs the deterministic tests. It also reads this document for the
-sentence that states what a destructive sync costs. None of it reaches the
-network, and none of it needs a GitHub credential.
+JSON. It runs the deterministic tests. It proves that the `repo-labels` command
+is installed on the host and that a host login shell resolves it, which is the
+check the command was missing when a documented `repo-labels check` answered
+`command not found`. It also reads this document for the sentence that states
+what a destructive sync costs. None of it reaches the network, and none of it
+needs a GitHub credential.
 
 ## Exit codes
 

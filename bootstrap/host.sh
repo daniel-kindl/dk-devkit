@@ -21,6 +21,7 @@
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml
 #   * installs the agentbox CLI and prepares its credential file location
 #   * installs the agentq host shim, which delegates into the container
+#   * installs the repo-labels and repo-meta commands into ~/.local/bin
 #   * installs Pi once on the host, with its own private Node runtime
 #
 # What it never does:
@@ -127,6 +128,14 @@ if have podman; then
 else
     warn 'podman is not available; agentbox cannot run'
 fi
+
+# ------------------------------------------------------- repository tooling --
+# The two GitHub repository commands. Each one is a component of its own, and
+# both entry points call the same library function, so the host composition
+# never holds a second copy of the step.
+section 'Repository tooling (repo-labels, repo-meta)'
+install_user_command "$REPO_ROOT" repo-labels
+install_user_command "$REPO_ROOT" repo-meta
 
 # ------------------------------------------- the GitHub backlog coordinator --
 section 'GitHub backlog coordinator host entry point (agentq)'

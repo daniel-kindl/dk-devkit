@@ -7,10 +7,16 @@
   "summary": "Checks or converges a GitHub repository to the canonical description, homepage and topic manifest.",
   "requires": [],
   "capabilities": [
+    "gh",
     "python3"
   ],
   "unattended": true,
-  "install": null,
+  "commands": [
+    "repo-meta"
+  ],
+  "install": [
+    "components/repo-meta/install.sh"
+  ],
   "doctor": [
     "components/repo-meta/doctor.sh"
   ],

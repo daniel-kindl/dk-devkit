@@ -8,6 +8,7 @@
   "requires": ["agent-home"],
   "capabilities": ["linux", "host", "curl", "xz"],
   "unattended": true,
+  "commands": ["pi"],
   "install": ["components/pi/install.sh"],
   "doctor": ["components/pi/doctor.sh"],
   "verify": ["./verify.sh", "--only", "45"],

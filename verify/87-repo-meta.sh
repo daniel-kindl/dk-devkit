@@ -70,3 +70,44 @@ for key, value in settings.items():
 fi
 
 unset META_AUDIT meta_documented meta_declared
+
+# --- the installed command, not the file in this checkout -------------------
+#
+# The component exists to give a user the repo-meta command. Proving that
+# bin/repo-meta compiles proves the implementation; these checks prove the
+# interface, in the shell where the documentation says to type the name.
+
+META_COMMAND=$HOST_HOME_VIEW/.local/bin/repo-meta
+
+check 'M11 the component installs the command' -- \
+    test -x "$REPO_ROOT/components/repo-meta/install.sh"
+check 'M12 the component reports readiness through the installed command' -- \
+    grep -q '\.local/bin/repo-meta' "$REPO_ROOT/components/repo-meta/doctor.sh"
+check 'M13 the contract declares the repo-meta command' -- \
+    sh -c "grep -q '\"repo-meta\"' '$REPO_ROOT/components/repo-meta/component.json'"
+check 'M14 the contract declares the gh capability' -- \
+    sh -c "grep -q '\"gh\"' '$REPO_ROOT/components/repo-meta/component.json'"
+
+if on_host test -x "$META_COMMAND" 2>/dev/null; then
+    pass 'M15 host: ~/.local/bin/repo-meta is installed and executable'
+    meta_resolved=$(host_sh 'command -v repo-meta' 2>/dev/null || true)
+    if [ -n "$meta_resolved" ]; then
+        pass "M16 a host login shell resolves repo-meta ($meta_resolved)"
+    else
+        fail 'M16 a host login shell resolves repo-meta' \
+             'the command is installed, but ~/.local/bin is not on the host PATH'
+    fi
+    if host_sh "'$HOST_HOME/.local/bin/repo-meta' --help" >/dev/null 2>&1; then
+        pass 'M17 the installed command answers on the host'
+    else
+        fail 'M17 the installed command answers on the host' \
+             'the installed command did not print its help'
+    fi
+else
+    fail 'M15 host: ~/.local/bin/repo-meta is installed and executable' \
+         'run ./install.sh --components repo-meta on the host'
+    skip 'M16 a host login shell resolves repo-meta' 'the command is not installed'
+    skip 'M17 the installed command answers on the host' 'the command is not installed'
+fi
+
+unset META_COMMAND meta_resolved

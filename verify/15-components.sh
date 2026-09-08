@@ -141,6 +141,62 @@ else
     done
 fi
 
+# --- a promised command is installed, and a shell resolves it ---------------
+#
+# A component of kind "tool" gives the user a command. The contract declares it
+# in "commands", the installation puts it in ~/.local/bin, and the plan treats
+# an absent one as not ready. These checks prove the same invariant on this
+# machine, for every component at once, so that a future tool cannot repeat
+# "bash: repo-labels: command not found" while its component reports ready.
+
+if command -v python3 >/dev/null 2>&1; then
+    check 'C26 a tool that ships bin/<id> promises it as a command' --         python3 - "$REPO_ROOT" <<'PYEOF'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+silent = []
+for manifest in sorted(root.glob("components/*/component.json")):
+    document = json.loads(manifest.read_text())
+    if document.get("kind") != "tool":
+        continue
+    source = root / "bin" / document["id"]
+    if not (source.is_file() and source.stat().st_mode & 0o111):
+        continue
+    if document["id"] not in document.get("commands", []):
+        silent.append(f'{document["id"]}: bin/{document["id"]} is installed by nothing')
+if silent:
+    print("\n".join(silent))
+    sys.exit(1)
+PYEOF
+
+    COMPONENT_COMMANDS=$(python3 - "$REPO_ROOT" <<'PYEOF'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for manifest in sorted(root.glob("components/*/component.json")):
+    document = json.loads(manifest.read_text())
+    for command in document.get("commands", []):
+        print(document["id"], command)
+PYEOF
+)
+    while read -r component command; do
+        [ -n "${command:-}" ] || continue
+        if on_host test -x "$HOST_HOME/.local/bin/$command" 2>/dev/null; then
+            pass "C27 host: $component installed the $command command"
+        else
+            fail "C27 host: $component installed the $command command"                  "$HOST_HOME/.local/bin/$command is absent or not executable"                  "run ./install.sh --components $component"
+        fi
+        if resolved=$(host_sh "command -v $command" 2>/dev/null) && [ -n "$resolved" ]; then
+            pass "C28 a host shell resolves $command ($resolved)"
+        else
+            fail "C28 a host shell resolves $command"                  'the command is not on the PATH of a host login shell'
+        fi
+    done <<< "$COMPONENT_COMMANDS"
+    unset COMPONENT_COMMANDS component command resolved
+else
+    skip 'C26 a tool that ships bin/<id> promises it as a command' 'no python3 on this side'
+    skip 'C27 a promised command is installed on the host' 'no python3 on this side'
+    skip 'C28 a host shell resolves a promised command' 'no python3 on this side'
+fi
+
 # Every profile this repository documents must exist, so that a documented
 # --profile selection never fails on a clean machine.
 for profile in minimal developer agent-dev daniel; do

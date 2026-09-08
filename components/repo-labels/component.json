@@ -7,10 +7,16 @@
   "summary": "Checks or converges a GitHub repository to the canonical label manifest.",
   "requires": [],
   "capabilities": [
+    "gh",
     "python3"
   ],
   "unattended": true,
-  "install": null,
+  "commands": [
+    "repo-labels"
+  ],
+  "install": [
+    "components/repo-labels/install.sh"
+  ],
   "doctor": [
     "components/repo-labels/doctor.sh"
   ],

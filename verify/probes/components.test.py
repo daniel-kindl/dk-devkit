@@ -95,11 +95,20 @@ def host(commands=(), executables=(), system="Linux", in_container=False,
     )
 
 
-def plan_for(components, selection, present=frozenset(), ready=(), force=False):
+def plan_for(components, selection, present=frozenset(), ready=(), force=False,
+             installed=()):
+    """Plan against a machine the test describes completely.
+
+    "ready" is what the doctors answer, and "installed" is which user-facing
+    commands the machine can already run. The two are separate on purpose: the
+    bug this contract exists to stop is a doctor that says ready while the
+    command a reader types is absent.
+    """
     reasons, order = toolkit.closure(components, selection)
     return toolkit.build_plan(
         components, reasons, order, frozenset(present), ROOT, force=force,
         doctor=lambda component, root: component.id in ready,
+        installed=lambda command: command in installed,
     )
 
 
@@ -157,6 +166,47 @@ class ManifestCase(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- probes --
+
+
+class UserCommandContractCase(unittest.TestCase):
+    """The commands a component promises the user."""
+
+    def test_a_component_declares_the_commands_it_installs(self):
+        components = catalogue(manifest("alpha", commands=["alpha"]))
+        self.assertEqual(components["alpha"].commands, ("alpha",))
+
+    def test_a_component_promises_no_command_by_default(self):
+        self.assertEqual(catalogue(manifest("alpha"))["alpha"].commands, ())
+
+    def test_a_command_must_be_a_bare_name(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "bare command name"):
+            catalogue(manifest("alpha", commands=["bin/alpha"]))
+
+    def test_a_command_must_not_be_empty(self):
+        with self.assertRaises(toolkit.ConfigError):
+            catalogue(manifest("alpha", commands=[" "]))
+
+    def test_a_repeated_command_is_rejected(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "repeat a command"):
+            catalogue(manifest("alpha", commands=["alpha", "alpha"]))
+
+    def test_a_promised_command_needs_an_installer(self):
+        # The original failure: bin/<name> exists, the documentation says to
+        # type <name>, and no installation ever puts it on the PATH.
+        with self.assertRaisesRegex(toolkit.ConfigError, "must declare an install"):
+            catalogue(manifest("alpha", commands=["alpha"], install=None,
+                               doctor=["true"]))
+
+    def test_a_planned_component_promises_no_command(self):
+        with self.assertRaisesRegex(toolkit.ConfigError, "no command yet"):
+            catalogue(manifest("alpha", status="planned", install=None,
+                               commands=["alpha"]))
+
+    def test_the_command_path_is_the_user_bin_directory(self):
+        self.assertEqual(
+            toolkit.user_command_path("alpha", Path("/home/example")),
+            Path("/home/example/.local/bin/alpha"),
+        )
 
 
 class CapabilityCase(unittest.TestCase):
@@ -317,6 +367,48 @@ class PlanCase(unittest.TestCase):
             manifest("alpha", manual=["same step"]), manifest("beta", manual=["same step"])
         )
         self.assertEqual(plan_for(components, ["alpha", "beta"]).manual, ("same step",))
+
+    # --- the regression class: a command that is not installed ---------------
+    #
+    # "repo-labels: command not found" while the component reported ALREADY
+    # READY. A doctor that tests the file in the checkout proves the
+    # implementation, never the interface, so readiness asks the machine for
+    # the command as well.
+
+    def test_a_missing_command_is_installed_even_when_the_doctor_says_ready(self):
+        components = catalogue(
+            manifest("alpha", commands=["alpha"], doctor=["true"])
+        )
+        plan = plan_for(components, ["alpha"], ready={"alpha"}, installed=())
+        self.assertEqual(ids(plan.of(toolkit.INSTALL)), ["alpha"])
+        self.assertEqual(plan.of(toolkit.READY), ())
+
+    def test_the_plan_names_the_command_that_is_missing(self):
+        components = catalogue(
+            manifest("alpha", commands=["alpha", "beta"], doctor=["true"])
+        )
+        plan = plan_for(components, ["alpha"], ready={"alpha"}, installed=("alpha",))
+        self.assertIn("the command is not installed: beta",
+                      toolkit.render_plan(plan))
+
+    def test_an_installed_command_with_a_healthy_doctor_is_ready(self):
+        components = catalogue(
+            manifest("alpha", commands=["alpha"], doctor=["true"])
+        )
+        plan = plan_for(components, ["alpha"], ready={"alpha"}, installed=("alpha",))
+        self.assertEqual(ids(plan.of(toolkit.READY)), ["alpha"])
+
+    def test_an_installed_command_does_not_hide_a_failing_doctor(self):
+        components = catalogue(
+            manifest("alpha", commands=["alpha"], doctor=["false"])
+        )
+        plan = plan_for(components, ["alpha"], ready=(), installed=("alpha",))
+        self.assertEqual(ids(plan.of(toolkit.INSTALL)), ["alpha"])
+
+    def test_a_component_that_promises_no_command_is_unaffected(self):
+        components = catalogue(manifest("alpha", doctor=["true"]))
+        plan = plan_for(components, ["alpha"], ready={"alpha"}, installed=())
+        self.assertEqual(ids(plan.of(toolkit.READY)), ["alpha"])
 
     def test_the_plan_says_why_a_dependency_is_there(self):
         components = catalogue(manifest("alpha", requires=["beta"]), manifest("beta"))
@@ -524,6 +616,38 @@ class ShippedCatalogueCase(unittest.TestCase):
                     candidate.is_file() and candidate.stat().st_mode & 0o111,
                     f"{component.id}: {command[0]} is not executable",
                 )
+
+    def test_every_shipped_tool_promises_the_command_it_ships(self):
+        """A tool whose executable is in bin/ must install it as a command.
+
+        This is the generic form of the bug: the invariant is checked for
+        every component, so a future tool cannot pass merely because
+        bin/<id> exists in the checkout.
+        """
+        for component in self.components.values():
+            if component.kind != "tool":
+                continue
+            source = ROOT / "bin" / component.id
+            if not (source.is_file() and source.stat().st_mode & 0o111):
+                continue
+            self.assertIn(
+                component.id, component.commands,
+                f"{component.id}: bin/{component.id} is a user-facing command, "
+                "so the contract must declare it in 'commands'",
+            )
+
+    def test_every_promised_command_is_installed_by_its_component(self):
+        for component in self.components.values():
+            if not component.commands:
+                continue
+            self.assertIsNotNone(
+                component.install,
+                f"{component.id}: promises a command but installs nothing",
+            )
+            self.assertIsNotNone(
+                component.doctor,
+                f"{component.id}: promises a command but reports no readiness",
+            )
 
     def test_the_daniel_profile_composes_every_installable_component(self):
         _, order = toolkit.closure(self.components, ["daniel"])

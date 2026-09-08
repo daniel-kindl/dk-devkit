@@ -76,6 +76,12 @@ Edit it only through this repository.
     so that one step never has two copies. `verify.sh` module 1b checks that,
     and `docs/components.md` says why.
 
+    A component that gives the user a command declares it in `commands`,
+    installs it into `~/.local/bin` with `install_user_command`, and points its
+    `doctor` at the installed command. Never let a doctor prove `bin/<name>` in
+    this checkout instead: that proves the implementation, and the user types
+    the name. `verify.sh` module 1b checks the invariant for every component.
+
 11. **Keep a distribution fact in the adapter.** `manifests/platforms.json` is
     the only place that names a distribution, a package manager or a
     distribution-specific command. Component logic and the shared bootstrap
