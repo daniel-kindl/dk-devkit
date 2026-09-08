@@ -8,6 +8,7 @@
   "requires": ["agentbox", "devbox", "web-dev"],
   "capabilities": ["linux", "host"],
   "unattended": true,
+  "commands": ["agentq"],
   "install": ["components/agentq/install.sh"],
   "doctor": ["components/agentq/doctor.sh"],
   "verify": ["./verify.sh", "--only", "85"],

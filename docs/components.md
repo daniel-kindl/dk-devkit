@@ -35,6 +35,7 @@ component identifier, and `component.json` is the contract.
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
   "unattended": true,
+  "commands": [],
   "install": ["components/web-dev/install.sh"],
   "doctor": null,
   "verify": ["./verify.sh", "--only", "2"],
@@ -56,8 +57,9 @@ component identifier, and `component.json` is the contract.
 | `group` | The heading `--list` prints it under. |
 | `summary` | One sentence. |
 | `requires` | Component identifiers this component depends on. |
-| `capabilities` | Platform capabilities the **installation** needs. |
+| `capabilities` | Platform capabilities the component needs: to install, and to run the commands it installs. |
 | `unattended` | Whether unattended installation is safe. |
+| `commands` | The user-facing commands this component installs into `~/.local/bin`. |
 | `install` | The command that converges the component, or `null`. |
 | `doctor` | The command that reports readiness, or `null`. |
 | `verify` | The command that verifies the component, or `null`. |
@@ -95,12 +97,51 @@ install.sh: planned, so it cannot be installed yet: dotnet-dev
 it. The planned development environments are in
 [environments.md](environments.md).
 
+### Commands
+
+A component of kind `tool` usually gives the user a command. `commands` names
+each one, as the bare name a reader types:
+
+```json
+{ "commands": ["repo-labels"], "install": ["components/repo-labels/install.sh"] }
+```
+
+The toolkit installs every declared command into `~/.local/bin`, which is where
+a normal shell finds it. The contract therefore says **which** command a
+component gives the user, and the toolkit says **where** a command lives.
+
+Three rules follow from the declaration, and the installer enforces all three:
+
+- A component that declares a command must declare an `install`. A command that
+  nothing installs is the failure this field exists to stop: the executable is
+  in the checkout, the documentation says to type the name, and the shell
+  answers `command not found`.
+- A component whose command is absent is **never ready**, whatever its `doctor`
+  answers. Deleting an installed command and running the installation again
+  therefore restores it instead of reporting `ALREADY READY`.
+- A planned module promises no command yet.
+
+A `doctor` completes the same guarantee from the other side: it tests the
+installed command, not the file in this checkout. `components/repo-labels/doctor.sh`
+is the pattern.
+
+```console
+$ ./install.sh --dry-run --components repo-labels
+INSTALL
+  repo-labels  the command is not installed: repo-labels
+```
+
+A declared command is machine-local state by construction, because it lives at
+`~/.local/bin/<name>`. `--state` reports it as `command`, and `state.local`
+does not repeat it.
+
 ### `install`, `doctor` and `verify`
 
 - `install` must be idempotent. It checks the current state and changes only
   what does not match.
 - `doctor` decides whether the component is already ready. A component with no
-  `doctor` is always installed when it is selected.
+  `doctor` is always installed when it is selected. A `doctor` tests the
+  interface the component installs, not the implementation in this checkout.
 - `verify` runs after installation, and only for the components the run
   selected. It is the focused check that proves this component converged, so
   it names its own numbered module in `verify/`. Prefer a new module to a
@@ -251,6 +292,11 @@ web-dev  (environment)
   public  manifests/web-dev-packages.txt
   local   ~/.local/share/distrobox-homes/web-dev/
   manual  Sign in to Claude Code and Codex inside web-dev; ...
+
+repo-labels  (tool)
+  public  manifests/github-labels.json
+  command ~/.local/bin/repo-labels
+  manual  Authenticate the GitHub CLI where you run repo-labels: gh auth login.
 ```
 
 Machine-local state stays out of Git even when it holds no secret. It is state
@@ -338,10 +384,14 @@ installable on its own.
    `manifests/capabilities.json` first, and let an adapter answer for it.
 4. Add the component to a profile only where that profile genuinely composes
    it. A reusable component must not depend on a profile.
-5. Add the focused verification module and declare it as `verify`. The
+5. Declare every user-facing command in `commands`, and install each one with
+   `install_user_command` from `bootstrap/lib/common.sh`. Point the `doctor` at
+   the installed command, so readiness is a fact about what a user can run.
+6. Add the focused verification module and declare it as `verify`. The
    component then proves what it installed, and a reader who installs one
-   component gets the evidence for it.
-6. `./verify.sh --only 15` checks the contract, the resolver and the tests.
+   component gets the evidence for it. Prove the command from the shell the
+   documentation tells a reader to use.
+7. `./verify.sh --only 15` checks the contract, the resolver and the tests.
    `./verify.sh --only 16` checks the platform adapters, and
    `./verify.sh --only 17` checks the development environment modules.
 

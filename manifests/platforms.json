@@ -9,7 +9,14 @@
       "note": "The primary platform. Every component is verified here.",
       "detect": { "kind": "os-release", "ids": ["bazzite"] },
       "provides": {
-        "package-manager": { "kind": "command", "value": "rpm-ostree" }
+        "package-manager": { "kind": "command", "value": "rpm-ostree" },
+        "gh": {
+          "kind": "any",
+          "value": [
+            { "kind": "command", "value": "gh" },
+            { "kind": "executable", "value": "/home/linuxbrew/.linuxbrew/bin/gh" }
+          ]
+        }
       },
       "hints": {
         "homebrew": "Install Homebrew on Bazzite: run \"ujust install-brew\", then run the installer again.",

@@ -54,6 +54,13 @@ SUPPORT = ("verified", "supported", "experimental", "unsupported")
 LOCAL_STATE_PREFIXES = ("~/", "$")
 HOME_PREFIXES = ("/home/", "/var/home/", "/Users/", "/root/")
 
+# Where a user-facing command becomes callable. A component declares the
+# commands it gives the user in "commands", and it installs each one here, so
+# that a normal shell resolves what the documentation tells a reader to run.
+# The directory is relative to the home directory of the machine that installs,
+# which is what keeps one manifest true on every machine.
+USER_COMMAND_DIR = ".local/bin"
+
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_RESOLVE = 3
@@ -116,6 +123,7 @@ class Component:
     requires: tuple[str, ...]
     capabilities: tuple[str, ...]
     unattended: bool
+    commands: tuple[str, ...]
     install: tuple[str, ...] | None
     doctor: tuple[str, ...] | None
     verify: tuple[str, ...] | None
@@ -226,6 +234,26 @@ def _command(value: object, where: str) -> tuple[str, ...] | None:
     return command
 
 
+def _user_commands(value: object, where: str) -> tuple[str, ...]:
+    """The user-facing commands a component installs into ~/.local/bin.
+
+    Each entry is the bare name a reader types, so it never carries a path: a
+    component says WHICH command it gives the user, and the toolkit says where
+    a command lives. The two together are what makes the promise checkable.
+    """
+    names = _string_list(value, where)
+    for name in names:
+        if not name.strip():
+            raise ConfigError(f"{where} must not have an empty command name")
+        if name != name.strip() or "/" in name or len(name.split()) != 1:
+            raise ConfigError(
+                f"{where}: {name!r} must be a bare command name, without a path"
+            )
+    if len(set(names)) != len(names):
+        raise ConfigError(f"{where} must not repeat a command")
+    return names
+
+
 def _environment(value: object, kind: str, status: str, where: str) -> Mapping[str, str] | None:
     """Validate the environment block of a development-environment module."""
     if value is None:
@@ -277,6 +305,20 @@ def component_from(document: object, where: str) -> Component:
     if status == PLANNED and (document.get("install") or document.get("doctor")):
         raise ConfigError(f"{where} is planned, so it must declare no install and no doctor")
 
+    commands = _user_commands(document.get("commands"), f"{where}.commands")
+    if commands and status == PLANNED:
+        raise ConfigError(
+            f"{where} is planned, so it must promise no command yet"
+        )
+    if commands and not document.get("install"):
+        # A command nothing installs is the failure this field exists to stop:
+        # the executable is in the checkout, the documentation says to type the
+        # name, and the shell answers "command not found".
+        raise ConfigError(
+            f"{where} declares commands, so it must declare an install "
+            "that puts each one in ~/.local/bin"
+        )
+
     for field in ("name", "group", "summary"):
         if not isinstance(document.get(field), str) or not document[field].strip():
             raise ConfigError(f"{where}.{field} must be a non-empty string")
@@ -305,6 +347,7 @@ def component_from(document: object, where: str) -> Component:
         requires=requires,
         capabilities=_string_list(document.get("capabilities"), f"{where}.capabilities"),
         unattended=unattended,
+        commands=commands,
         install=_command(document.get("install"), f"{where}.install"),
         doctor=_command(document.get("doctor"), f"{where}.doctor"),
         verify=_command(document.get("verify"), f"{where}.verify"),
@@ -732,6 +775,21 @@ def _doctor_says_ready(component: Component, root: Path) -> bool:
     return _run(component.doctor, root, capture=True).returncode == 0
 
 
+def user_command_path(name: str, home: Path | None = None) -> Path:
+    """Where the toolkit installs one user-facing command."""
+    return (home or Path.home()) / USER_COMMAND_DIR / name
+
+
+def _command_is_installed(name: str, home: Path | None = None) -> bool:
+    """True when a normal shell can run the command the component promises.
+
+    It asks the file system, not the PATH of this process: the installer
+    converges ~/.local/bin, and a PATH that does not hold that directory is a
+    shell problem, which the focused verification of the component reports.
+    """
+    return os.access(user_command_path(name, home), os.X_OK)
+
+
 def build_plan(
     components: Mapping[str, Component],
     reasons: Mapping[str, str],
@@ -741,8 +799,10 @@ def build_plan(
     force: bool = False,
     doctor: Callable[[Component, Path], bool] | None = None,
     adapter: Adapter | None = None,
+    installed: Callable[[str], bool] | None = None,
 ) -> Plan:
     ask = doctor or _doctor_says_ready
+    is_installed = installed or _command_is_installed
     steps: list[Step] = []
     blocked: set[str] = set()
     hints: list[str] = []
@@ -771,7 +831,15 @@ def build_plan(
             steps.append(Step(component, COMPOSITION, reasons[name],
                               "nothing to install; it composes other components"))
             continue
-        if not force and ask(component, root):
+        # A command the component promises but the machine cannot run is never
+        # ready, whatever its doctor says. This is what makes the contract a
+        # guarantee about the installed interface, and not about a file in the
+        # checkout, for every component and not only for the ones written so
+        # far.
+        absent = tuple(
+            command for command in component.commands if not is_installed(command)
+        )
+        if not force and not absent and ask(component, root):
             steps.append(Step(component, READY, reasons[name]))
             continue
         if component.install is None:
@@ -779,7 +847,10 @@ def build_plan(
             steps.append(Step(component, BLOCKED, reasons[name],
                               "no installer; the platform must provide it"))
             continue
-        steps.append(Step(component, INSTALL, reasons[name]))
+        detail = ""
+        if absent:
+            detail = "the command is not installed: " + ", ".join(absent)
+        steps.append(Step(component, INSTALL, reasons[name], detail))
     return Plan(tuple(steps), tuple(hints))
 
 
@@ -835,6 +906,9 @@ def render_catalogue(
             else:
                 mark = "  "
             lines.append(f"  {mark}{component.id.ljust(width)}  {component.summary}")
+            if component.commands:
+                # What a reader gets to type once the component is installed.
+                lines.append(f"    {' ' * width}  command: {', '.join(component.commands)}")
             if component.requires:
                 lines.append(f"    {' ' * width}  requires: {', '.join(component.requires)}")
             if component.planned:
@@ -859,14 +933,19 @@ def render_state(components: Sequence[Component]) -> str:
         lines.append(f"{component.id}  ({component.kind})")
         for path in component.public_state:
             lines.append(f"  public  {path}")
+        # A declared command is machine-local state by construction, so it is
+        # reported here and never repeated in state.local.
+        for command in component.commands:
+            lines.append(f"  command ~/{USER_COMMAND_DIR}/{command}")
         for path in component.local_state:
             lines.append(f"  local   {path}")
-        if not component.public_state and not component.local_state:
+        if not (component.public_state or component.local_state or component.commands):
             lines.append("  none    this component owns no configuration and no state")
         for item in component.manual:
             lines.append(f"  manual  {item}")
         lines.append("")
     lines.append("  public  tracked in this checkout, and reusable on any machine")
+    lines.append("  command the user-facing command this component installs")
     lines.append("  local   machine-local or private, and never tracked here")
     lines.append("  manual  a step a human completes, such as authentication")
     return "\n".join(lines)

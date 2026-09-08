@@ -6,10 +6,11 @@
   "group": "Agent orchestration",
   "summary": "Runs an unattended coding agent against a disposable clone in an isolated container.",
   "requires": [],
-  "capabilities": ["linux", "host", "container-runtime"],
+  "capabilities": ["linux", "host", "container-runtime", "git", "python3"],
   "unattended": true,
+  "commands": ["agentbox"],
   "install": ["components/agentbox/install.sh"],
-  "doctor": ["bin/agentbox", "doctor"],
+  "doctor": ["components/agentbox/doctor.sh"],
   "verify": ["./verify.sh", "--only", "8"],
   "manual": [
     "Mint an unattended Claude token on the host with \"claude setup-token\", then put it in ~/.config/agentbox/secrets.env.",

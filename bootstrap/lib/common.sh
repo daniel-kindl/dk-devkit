@@ -94,6 +94,20 @@ link_into() {
     change "$link -> $target"
 }
 
+# install_user_command <repo-root> <name> [home] - expose bin/<name> to the user.
+#
+# This is the one place a supported command becomes callable in a normal
+# shell. A component that declares the command in its contract installs it
+# here, so the command a document tells a reader to type is the command the
+# machine resolves. The link points into this checkout, so the installed
+# command and the tracked source are always the same program.
+install_user_command() {
+    local repo_root=$1 name=$2 home=${3:-$HOME}
+    local source=$repo_root/bin/$name
+    [ -x "$source" ] || die "bin/$name is not an executable in $repo_root"
+    link_into "$source" "$home/.local/bin/$name"
+}
+
 # install_file <src> <dest> [mode] - copy only when the content differs.
 install_file() {
     local src=$1 dest=$2 mode=${3:-0644}

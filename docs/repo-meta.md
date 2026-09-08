@@ -13,6 +13,22 @@ pull request, reproducible on another repository, and checkable afterwards.
 It is a trusted user-side tool. It uses the existing `gh` login and does not
 create, copy, cache, or print another GitHub credential.
 
+## Install
+
+```bash
+./install.sh --components repo-meta
+```
+
+The component links `bin/repo-meta` into `~/.local/bin`, so a normal shell
+resolves `repo-meta`. It needs the GitHub CLI, which it declares as the `gh`
+capability: a machine without `gh` is reported before the installation, not at
+the first command.
+
+The installation is idempotent, and readiness is a fact about the installed
+command. Deleting `~/.local/bin/repo-meta` and running the installation again
+restores it. Authentication stays a manual step: `gh auth login` where you run
+the command.
+
 ## Why the metadata is tracked
 
 The description is the first thing a reader of a public repository sees. Typed
@@ -184,8 +200,9 @@ every merge method off.
 
 Module 8e compiles the command, validates the shipped manifest, runs the
 deterministic tests and compares the manifest settings against the F9 table of
-the [public-release audit](public-release-audit.md). None of it reaches the
-network.
+the [public-release audit](public-release-audit.md). It also proves that the
+`repo-meta` command is installed on the host and that a host login shell
+resolves it. None of it reaches the network.
 
 Gate G6 of `bin/publication-gate` runs `repo-meta check` against the live
 repository, so drift in a setting stops publication.

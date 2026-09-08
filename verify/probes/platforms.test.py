@@ -224,11 +224,24 @@ class PlanCase(unittest.TestCase):
         self.shipped = toolkit.load_adapters(PLATFORMS)
         self.fedora = next(a for a in self.shipped if a.id == "fedora")
 
-    def plan(self, selection, present, adapter=None, ready=()):
+    def plan(self, selection, present, adapter=None, ready=(), installed=None):
+        """Plan for a described machine, never for the machine running the test.
+
+        "installed" says which user-facing commands that machine already has.
+        A component that is "ready" has them by default, so a test about the
+        platform layer stays a test about the platform layer.
+        """
         reasons, order = toolkit.closure(self.components, selection)
+        if installed is None:
+            installed = tuple(
+                command
+                for name in ready
+                for command in self.components[name].commands
+            )
         return toolkit.build_plan(
             self.components, reasons, order, frozenset(present), ROOT,
             doctor=lambda component, root: component.id in ready, adapter=adapter,
+            installed=lambda command: command in installed,
         )
 
     def test_a_blocked_component_carries_the_platform_step(self):
@@ -246,9 +259,11 @@ class PlanCase(unittest.TestCase):
         # repo-labels needs neither Distrobox nor a container runtime, so a
         # machine without them still reports it as ready.
         plan = self.plan(
-            ["repo-labels", "web-dev"], {"linux", "host", "python3"},
+            ["repo-labels", "web-dev"], {"linux", "host", "python3", "gh"},
             self.fedora, ready=("repo-labels",),
         )
+        self.assertEqual([step.component.id for step in plan.of(toolkit.READY)],
+                         ["repo-labels"])
         blocked = [step.component.id for step in plan.blocked]
         self.assertIn("web-dev", blocked)
         self.assertNotIn("repo-labels", blocked)
@@ -259,7 +274,7 @@ class PlanCase(unittest.TestCase):
 
     def test_the_support_report_names_the_first_missing_capability(self):
         reasons = toolkit.unsupported(
-            self.components, frozenset({"linux", "host", "python3"})
+            self.components, frozenset({"linux", "host", "python3", "gh"})
         )
         self.assertIn("distrobox", reasons["web-dev"])
         self.assertEqual(reasons["repo-labels"], "")

@@ -104,10 +104,15 @@ The coordinator's public name is `agentq`. Some durable internal identifiers int
 Two GitHub repository settings are tracked here rather than typed into a web form, so that each one is reviewable in a pull request and checkable afterwards.
 
 ```bash
+./install.sh --components repo-labels,repo-meta   # both commands, once per machine
 repo-labels check                 # label drift against manifests/github-labels.json
 repo-meta check                   # About metadata and repository settings drift
 repo-meta sync --dry-run          # the exact plan, without changing anything
 ```
+
+Each command is a component of its own. The installation puts it in
+`~/.local/bin`, so a normal shell resolves the name this document tells you to
+type, and both commands need the GitHub CLI.
 
 `repo-meta` holds the description, the homepage and the topics a reader sees, and the settings that decide which surfaces exist and how a branch is merged: the default branch, issues, wiki, projects, discussions, the three merge methods, and the deletion of a merged head branch. A setting the manifest does not name stays unmanaged.
 

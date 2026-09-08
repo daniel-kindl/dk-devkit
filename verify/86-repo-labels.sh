@@ -34,3 +34,44 @@ fi
 check_contains 'R8 documentation explains destructive sync' \
     'Deleting labels removes them from issues and pull requests' \
     "$(cat "$REPO_ROOT/docs/repo-labels.md" 2>/dev/null || true)"
+
+# --- the installed command, not the file in this checkout -------------------
+#
+# The component exists to give a user the repo-labels command. Proving that
+# bin/repo-labels compiles proves the implementation; these checks prove the
+# interface, in the shell where the documentation says to type the name.
+
+LABEL_COMMAND=$HOST_HOME_VIEW/.local/bin/repo-labels
+
+check 'R9 the component installs the command' -- \
+    test -x "$REPO_ROOT/components/repo-labels/install.sh"
+check 'R10 the component reports readiness through the installed command' -- \
+    grep -q '\.local/bin/repo-labels' "$REPO_ROOT/components/repo-labels/doctor.sh"
+check 'R11 the contract declares the repo-labels command' -- \
+    sh -c "grep -q '\"repo-labels\"' '$REPO_ROOT/components/repo-labels/component.json'"
+check 'R12 the contract declares the gh capability' -- \
+    sh -c "grep -q '\"gh\"' '$REPO_ROOT/components/repo-labels/component.json'"
+
+if on_host test -x "$LABEL_COMMAND" 2>/dev/null; then
+    pass 'R13 host: ~/.local/bin/repo-labels is installed and executable'
+    label_resolved=$(host_sh 'command -v repo-labels' 2>/dev/null || true)
+    if [ -n "$label_resolved" ]; then
+        pass "R14 a host login shell resolves repo-labels ($label_resolved)"
+    else
+        fail 'R14 a host login shell resolves repo-labels' \
+             'the command is installed, but ~/.local/bin is not on the host PATH'
+    fi
+    if host_sh "'$HOST_HOME/.local/bin/repo-labels' --help" >/dev/null 2>&1; then
+        pass 'R15 the installed command answers on the host'
+    else
+        fail 'R15 the installed command answers on the host' \
+             'the installed command did not print its help'
+    fi
+else
+    fail 'R13 host: ~/.local/bin/repo-labels is installed and executable' \
+         'run ./install.sh --components repo-labels on the host'
+    skip 'R14 a host login shell resolves repo-labels' 'the command is not installed'
+    skip 'R15 the installed command answers on the host' 'the command is not installed'
+fi
+
+unset LABEL_COMMAND label_resolved

@@ -58,6 +58,21 @@ else
 fi
 
 check 'A18 clone-integrity.mjs exists'       -- test -f "$SC_DIR/clone-integrity.mjs"
+
+# The component doctor answers for the COMPONENT, and the runtime doctor in
+# bin/agentbox answers for the machine. A healthy runtime must not report the
+# component ready while the public entry point is absent, because the
+# installation would then skip the one step that restores it.
+check 'A19 the component doctor proves the host entry point first' -- \
+    sh -c "grep -q '\.local/bin/agentbox' '$REPO_ROOT/components/agentbox/doctor.sh'"
+check 'A20 the contract declares the agentbox command' -- \
+    sh -c "grep -q '\"agentbox\"' '$REPO_ROOT/components/agentbox/component.json'"
+if on_host test -x "$HOST_HOME_VIEW/.local/bin/agentbox" 2>/dev/null; then
+    pass 'A21 host: ~/.local/bin/agentbox is installed and executable'
+else
+    fail 'A21 host: ~/.local/bin/agentbox is installed and executable' \
+         'run ./install.sh --components agentbox on the host'
+fi
 check 'A19 the clone identity probe is executable' -- \
     test -x "$REPO_ROOT/verify/probes/clone-identity.sh"
 check 'A20 the clone identity probe parses' -- \
