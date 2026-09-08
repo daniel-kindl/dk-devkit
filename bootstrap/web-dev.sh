@@ -212,7 +212,7 @@ fi
 # ------------------------------------------------------------ manual steps ---
 manual 'Authenticate Claude Code:  claude  (then /login)'
 manual 'Authenticate Codex:        codex login'
-manual 'Authenticate GitHub in the box: gh auth login --git-protocol ssh'
+manual 'Authenticate GitHub in the box: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Verify the whole workstation: ./verify.sh'
 
 summary

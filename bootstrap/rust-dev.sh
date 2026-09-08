@@ -207,7 +207,7 @@ fi
 
 manual 'Authenticate Claude Code in rust-dev: claude  (then /login)'
 manual 'Authenticate Codex in rust-dev: codex login'
-manual 'Authenticate GitHub in rust-dev: gh auth login --git-protocol ssh'
+manual 'Authenticate GitHub in rust-dev: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Pin the toolchain of a project with rust-toolchain.toml'
 manual 'Verify the environment: ./verify.sh --only 26'
 

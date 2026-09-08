@@ -12,7 +12,7 @@
   "doctor": ["components/agentq/doctor.sh"],
   "verify": ["./verify.sh", "--only", "85"],
   "manual": [
-    "Authenticate GitHub inside the coordinator environment: gh auth login --git-protocol ssh.",
+    "Authenticate GitHub inside the coordinator environment: gh auth login --git-protocol ssh --skip-ssh-key.",
     "Prepare each repository separately: cd <repo> && agentq setup."
   ],
   "state": {

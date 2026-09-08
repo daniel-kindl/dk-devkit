@@ -48,12 +48,12 @@ devbox exec rust-dev --cwd ~/projects/dk-devkit -- ./bootstrap/rust-dev.sh
 Authentication is manual per isolated HOME:
 
 ```bash
-devbox exec rust-dev -- gh auth login --git-protocol ssh
+devbox exec rust-dev -- gh auth login --git-protocol ssh --skip-ssh-key
 devbox exec rust-dev -- claude
 devbox exec rust-dev -- codex login
 ```
 
-The SSH private key is not copied into the container. Distrobox exposes the host ssh-agent socket instead.
+The SSH private key is not copied into the container. Distrobox exposes the host ssh-agent socket instead, which is why `gh` needs `--skip-ssh-key`: without the flag, the login prompt generates a second key inside the isolated HOME and uploads it to GitHub.
 
 ## Toolchain ownership
 

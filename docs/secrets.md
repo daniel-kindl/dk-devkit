@@ -169,7 +169,9 @@ A restore cannot reproduce authentication, and it should not try. After a
 bootstrap, these steps are yours:
 
 1. Restore and load the SSH key (above).
-2. `gh auth login --git-protocol ssh`, on the host and inside `web-dev`.
+2. `gh auth login --git-protocol ssh` on the host, then
+   `gh auth login --git-protocol ssh --skip-ssh-key` inside `web-dev`. The
+   flag keeps the container free of a key of its own.
 3. `claude`, then `/login`.
 4. `codex login`.
 5. `pi`, then `/login`, on the host. Pi runs there, and there is one
