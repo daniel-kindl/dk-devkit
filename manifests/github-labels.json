@@ -116,6 +116,36 @@
       "group": "agent-workflow"
     },
     {
+      "name": "wayfinder:grilling",
+      "color": "d876e3",
+      "description": "A wayfinder ticket resolved by conversation with the maintainer.",
+      "group": "wayfinder"
+    },
+    {
+      "name": "wayfinder:map",
+      "color": "5319e7",
+      "description": "A wayfinder map issue. It indexes the decisions of one effort.",
+      "group": "wayfinder"
+    },
+    {
+      "name": "wayfinder:prototype",
+      "color": "a2eeef",
+      "description": "A wayfinder ticket resolved by a throwaway prototype.",
+      "group": "wayfinder"
+    },
+    {
+      "name": "wayfinder:research",
+      "color": "0075ca",
+      "description": "A wayfinder ticket resolved by reading primary sources.",
+      "group": "wayfinder"
+    },
+    {
+      "name": "wayfinder:task",
+      "color": "fbca04",
+      "description": "A wayfinder ticket resolved by manual work that unblocks a decision.",
+      "group": "wayfinder"
+    },
+    {
       "name": "breaking-change",
       "color": "d93f0b",
       "description": "Intentionally changes a public or compatibility-sensitive contract",
