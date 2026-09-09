@@ -79,7 +79,7 @@ The manifest format is versioned. Version 1 requires an array of unique label na
 
 The shipped catalog is bounded. It names the labels that are useful to the repositories and the workflows tracked here. It does not keep the GitHub default labels, and it does not add a category only for completeness.
 
-`group` divides the catalog into four parts. No two labels in the catalog share a color, because a reader identifies a badge by its color before the reader reads it.
+`group` divides the catalog into five parts. Colors may be shared where an external workflow defines the label palette.
 
 ### `type` - what kind of work an issue is
 
@@ -112,7 +112,9 @@ The shipped catalog is bounded. It names the labels that are useful to the repos
 | `agent-failed` | Unattended agent execution reached an issue-local terminal failure |
 | `wayfinder` | Issue participates in the Wayfinder discovery/specification workflow |
 
-#### Wayfinder resolution labels
+`agentq` depends on this group. `lib/agentqueue/setup.py` reads the same file and selects the labels whose group is `agent-workflow`, so the catalog stays the one source of truth.
+
+### `wayfinder` - how a Wayfinder ticket is resolved
 
 | Label | Color | Meaning |
 | --- | --- | --- |
@@ -121,8 +123,6 @@ The shipped catalog is bounded. It names the labels that are useful to the repos
 | `wayfinder:prototype` | `#a2eeef` | A wayfinder ticket resolved by a throwaway prototype. |
 | `wayfinder:research` | `#0075ca` | A wayfinder ticket resolved by reading primary sources. |
 | `wayfinder:task` | `#fbca04` | A wayfinder ticket resolved by manual work that unblocks a decision. |
-
-`agentq` depends on this group. `lib/agentqueue/setup.py` reads the same file and selects the labels whose group is `agent-workflow`, so the catalog stays the one source of truth.
 
 ### `impact` - what a change costs a consumer
 
