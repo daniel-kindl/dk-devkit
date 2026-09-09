@@ -112,6 +112,16 @@ The shipped catalog is bounded. It names the labels that are useful to the repos
 | `agent-failed` | Unattended agent execution reached an issue-local terminal failure |
 | `wayfinder` | Issue participates in the Wayfinder discovery/specification workflow |
 
+#### Wayfinder resolution labels
+
+| Label | Color | Meaning |
+| --- | --- | --- |
+| `wayfinder:grilling` | `#d876e3` | A wayfinder ticket resolved by conversation with the maintainer. |
+| `wayfinder:map` | `#5319e7` | A wayfinder map issue. It indexes the decisions of one effort. |
+| `wayfinder:prototype` | `#a2eeef` | A wayfinder ticket resolved by a throwaway prototype. |
+| `wayfinder:research` | `#0075ca` | A wayfinder ticket resolved by reading primary sources. |
+| `wayfinder:task` | `#fbca04` | A wayfinder ticket resolved by manual work that unblocks a decision. |
+
 `agentq` depends on this group. `lib/agentqueue/setup.py` reads the same file and selects the labels whose group is `agent-workflow`, so the catalog stays the one source of truth.
 
 ### `impact` - what a change costs a consumer
