@@ -4,18 +4,30 @@
   "name": "android-dev environment",
   "kind": "environment",
   "group": "Development environments",
-  "status": "planned",
-  "summary": "Planned Android environment. The module declares its router markers; the container and the toolchain do not exist yet.",
+  "status": "supported",
+  "summary": "Fedora Distrobox with JDK 25, the Android SDK and Gradle wrapper toolchain.",
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
-  "unattended": false,
-  "install": null,
+  "unattended": true,
+  "install": ["components/android-dev/install.sh"],
   "doctor": null,
-  "verify": null,
-  "manual": [],
+  "verify": ["./verify.sh", "--only", "27"],
+  "manual": [
+    "Authenticate Claude Code and Codex inside android-dev if you use them.",
+    "Create an Android emulator on the host or connect a device for connected tests."
+  ],
   "environment": {
     "container": "android-dev",
-    "inference": "components/android-dev/inference.tsv"
+    "ini": "distrobox/android-dev.ini",
+    "packages": "manifests/android-dev-packages.txt",
+    "toolchain": "manifests/android-dev.env",
+    "bootstrap": "bootstrap/android-dev.sh",
+    "router": "config/devbox-router/environments.d/android-dev.env",
+    "inference": "components/android-dev/inference.tsv",
+    "home": "~/.local/share/distrobox-homes/android-dev/"
   },
-  "state": { "public": ["components/android-dev/inference.tsv"], "local": [] }
+  "state": {
+    "public": ["distrobox/android-dev.ini", "manifests/android-dev-packages.txt", "manifests/android-dev.env"],
+    "local": ["~/.local/share/distrobox-homes/android-dev/"]
+  }
 }

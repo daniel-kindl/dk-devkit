@@ -8,7 +8,8 @@
   "requires": [
     "agent-dev",
     "host-cli-tools",
-    "desktop-apps"
+    "desktop-apps",
+    "android-dev"
   ],
   "capabilities": [],
   "unattended": false,
