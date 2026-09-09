@@ -4,7 +4,7 @@ Reusable development tools, agent workflows, environment definitions, and automa
 
 This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-> The toolkit architecture is in place: modular component installation, interactive selection, named profiles, and the platform capability layer all exist as `./install.sh`. Bazzite is the only platform with verification evidence; the other adapters carry the support tier the evidence allows, and this README does not present them as verified. `dotnet-dev` and `android-dev` are declared modules without an installation. Remaining work is tracked in #52 and #53.
+> The toolkit architecture is in place: modular component installation, interactive selection, named profiles, and the platform capability layer all exist as `./install.sh`. Bazzite is the only platform with verification evidence; the other adapters carry the support tier the evidence allows, and this README does not present them as verified. `dotnet-dev` is a declared module without an installation. Remaining work is tracked in #52 and #53.
 
 ## Current tools
 
@@ -39,7 +39,7 @@ devbox exec web-dev --cwd ~/projects/example -- pnpm check
 
 Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
 
-Each environment is an independent module: `web-dev`, `python-dev` and `rust-dev` are installable today, and `dotnet-dev` and `android-dev` are declared but not implemented. Read [docs/environments.md](docs/environments.md).
+Each environment is an independent module: `web-dev`, `python-dev`, `rust-dev` and `android-dev` are installable today, while `dotnet-dev` is declared but not implemented. Read [docs/environments.md](docs/environments.md).
 
 ### `pi`
 
@@ -133,8 +133,12 @@ Bazzite/Fedora host
 |            |                     +-- Python / uv
 |            |                     `-- Claude Code, Codex
 |            |
-|            `-------------------> rust-dev Distrobox
-|                                  +-- Rust / cargo, through rustup
+|            +-------------------> rust-dev Distrobox
+|            |                     +-- Rust / cargo, through rustup
+|            |                     `-- Claude Code, Codex
+|            |
+|            `-------------------> android-dev Distrobox
+|                                  +-- JDK 25 / Android SDK
 |                                  `-- Claude Code, Codex
 |
 +-- pi
@@ -152,8 +156,8 @@ Bazzite/Fedora host
 ```
 
 Each environment has its own isolated home, and the router picks the one that
-owns a repository. `dotnet-dev` and `android-dev` are declared modules with no
-installation yet.
+owns a repository. `android-dev` provides the Android SDK and JDK 25. `dotnet-dev`
+is a declared module with no installation yet.
 
 The trust boundary is deliberate:
 

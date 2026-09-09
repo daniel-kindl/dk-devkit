@@ -21,7 +21,7 @@ module.
 | `python-dev` | supported | Python and uv |
 | `rust-dev` | supported | Rust and cargo, through rustup |
 | `dotnet-dev` | planned | .NET |
-| `android-dev` | planned | Android and Gradle |
+| `android-dev` | supported | Android SDK, JDK 25 and Gradle wrapper |
 
 A **planned** module is a boundary without an installation. It declares the
 container name and the router markers, and nothing else. The installer refuses

@@ -33,10 +33,9 @@ private Node runtime of its own, and the section below says why that is not the
 same thing.
 
 **A Distrobox container** holds one purpose-specific development environment.
-`web-dev`, `python-dev` and `rust-dev` exist today. `dotnet-dev` and
-`android-dev` are planned modules: each declares its container name and the
-router markers it owns, and nothing else yet. `docs/environments.md` describes
-the module.
+`web-dev`, `python-dev`, `rust-dev` and `android-dev` exist today. `dotnet-dev`
+is a planned module: it declares its container name and the router markers it
+owns, and nothing else yet. `docs/environments.md` describes the module.
 
 Each container has its own isolated HOME, so its dotfiles never reach the host
 home:
