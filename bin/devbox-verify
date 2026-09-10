@@ -80,6 +80,9 @@ cat > "$CFG/environments.d/verify-missing.env" <<'EOF'
 description = points at a container that does not exist
 box = devbox-verify-absent-container
 EOF
+# Keep the inferred dotnet case deterministic even when the real environment exists.
+sed -i 's/^box = dotnet-dev$/box = devbox-verify-absent-container/' \
+    "$CFG/environments.d/dotnet-dev.env"
 
 mkrepo() {
     local dir=$1; shift
