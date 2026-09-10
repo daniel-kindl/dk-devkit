@@ -90,7 +90,6 @@ required:
 
 ```console
 $ ./install.sh --components dotnet-dev
-install.sh: planned, so it cannot be installed yet: dotnet-dev
 ```
 
 `--list` marks it `~`, the picker does not offer it, and no profile composes

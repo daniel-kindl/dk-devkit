@@ -9,6 +9,7 @@ development environment. None of them writes a credential.
 | `bootstrap/web-dev.sh` | Inside `web-dev` |
 | `bootstrap/python-dev.sh` | Inside `python-dev` |
 | `bootstrap/rust-dev.sh` | Inside `rust-dev` |
+| `bootstrap/dotnet-dev.sh` | Inside `dotnet-dev` |
 
 They install the whole machine. To install one part, use the component
 installer in [components.md](components.md):
@@ -206,7 +207,7 @@ The coordinator is installed in one environment, which
 An environment is a module under `components/`. The router, the manifests and
 the host bootstrap are already generic: they discover the modules, and they
 name no environment. `docs/environments.md` holds the full procedure, and
-`dotnet-dev` already exists as a planned module.
+`dotnet-dev` already exists as a module.
 
 To make it real:
 

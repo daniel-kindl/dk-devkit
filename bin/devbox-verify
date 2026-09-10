@@ -80,6 +80,9 @@ cat > "$CFG/environments.d/verify-missing.env" <<'EOF'
 description = points at a container that does not exist
 box = devbox-verify-absent-container
 EOF
+# Keep the inferred dotnet case deterministic even when the real environment exists.
+sed -i 's/^box = dotnet-dev$/box = devbox-verify-absent-container/' \
+    "$CFG/environments.d/dotnet-dev.env"
 
 mkrepo() {
     local dir=$1; shift
@@ -232,7 +235,7 @@ expect_contains 'H3 error suggests devbox assign' 'devbox assign' "$out"
 
 mkrepo "$SCRATCH/dotnetish" global.json
 out=$(cd "$SCRATCH/dotnetish" && dbx_cfg run -- true 2>&1); rc=$?
-expect_rc 'H4 inferred-but-unconfigured env exits 5' 5 "$rc" "$out"
+expect_rc 'H4 inferred environment with a missing container exits 6' 6 "$rc" "$out"
 expect_contains 'H5 error names the inferred environment' 'dotnet-dev' "$out"
 
 mkrepo "$SCRATCH/mixed" package.json Cargo.toml

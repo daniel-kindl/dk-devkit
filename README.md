@@ -39,7 +39,7 @@ devbox exec web-dev --cwd ~/projects/example -- pnpm check
 
 Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
 
-Each environment is an independent module: `web-dev`, `python-dev`, `rust-dev` and `android-dev` are installable today, while `dotnet-dev` is declared but not implemented. Read [docs/environments.md](docs/environments.md).
+Each environment is an independent module: `web-dev`, `python-dev`, `rust-dev`, `golang-dev`, `dotnet-dev` and `android-dev` are installable today. Read [docs/environments.md](docs/environments.md).
 
 ### `pi`
 
@@ -157,7 +157,7 @@ Bazzite/Fedora host
 
 Each environment has its own isolated home, and the router picks the one that
 owns a repository. `android-dev` provides the Android SDK and JDK 25. `dotnet-dev`
-is a declared module with no installation yet.
+provides the .NET SDK for C# development.
 
 The trust boundary is deliberate:
 

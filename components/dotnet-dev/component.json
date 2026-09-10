@@ -4,18 +4,29 @@
   "name": "dotnet-dev environment",
   "kind": "environment",
   "group": "Development environments",
-  "status": "planned",
-  "summary": "Planned .NET environment. The module declares its router markers; the container and the toolchain do not exist yet.",
+  "status": "supported",
+  "summary": "Fedora Distrobox with an isolated home and the .NET SDK for C# development.",
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
-  "unattended": false,
-  "install": null,
+  "unattended": true,
+  "install": ["components/dotnet-dev/install.sh"],
   "doctor": null,
-  "verify": null,
-  "manual": [],
+  "verify": ["./verify.sh", "--only", "29"],
+  "manual": [
+    "Authenticate Claude Code and Codex inside dotnet-dev if you use them."
+  ],
   "environment": {
     "container": "dotnet-dev",
-    "inference": "components/dotnet-dev/inference.tsv"
+    "ini": "distrobox/dotnet-dev.ini",
+    "packages": "manifests/dotnet-dev-packages.txt",
+    "toolchain": "manifests/dotnet-dev.env",
+    "bootstrap": "bootstrap/dotnet-dev.sh",
+    "router": "config/devbox-router/environments.d/dotnet-dev.env",
+    "inference": "components/dotnet-dev/inference.tsv",
+    "home": "~/.local/share/distrobox-homes/dotnet-dev/"
   },
-  "state": { "public": ["components/dotnet-dev/inference.tsv"], "local": [] }
+  "state": {
+    "public": ["distrobox/dotnet-dev.ini", "manifests/dotnet-dev-packages.txt", "manifests/dotnet-dev.env"],
+    "local": ["~/.local/share/distrobox-homes/dotnet-dev/"]
+  }
 }
