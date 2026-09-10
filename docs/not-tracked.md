@@ -34,7 +34,10 @@ key, and `verify.sh` checks that the key survived.
 
 `~/.local/share/distrobox-homes/web-dev/`,
 `~/.local/share/distrobox-homes/python-dev/`,
-`~/.local/share/distrobox-homes/rust-dev/`.
+`~/.local/share/distrobox-homes/rust-dev/`,
+`~/.local/share/distrobox-homes/golang-dev/`,
+`~/.local/share/distrobox-homes/dotnet-dev/`,
+`~/.local/share/distrobox-homes/android-dev/`.
 
 Each development environment keeps its own HOME, so its dotfiles never reach
 the host home. Every environment module declares that path as `state.local`,
@@ -52,8 +55,9 @@ it. Removing one means re-authenticating that environment, which is why
 `~/.local/share/pnpm/store`, `~/projects/.pnpm-store`,
 `~/.local/share/claude/versions/`, `~/.codex/packages/`, `~/.vscode-server/`.
 
-These are large, and every one is reproducible from
-`manifests/toolchain.env`. The repository pins the versions, not the bytes.
+These are large, and every one is reproducible from the environment
+manifests in `manifests/*-dev.env` and `manifests/toolchain.env`. The repository
+pins the versions, not the bytes.
 
 ## The host Pi installation
 

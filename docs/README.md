@@ -43,7 +43,7 @@ who installs one component does not need them.
 | --- | --- |
 | [architecture.md](architecture.md) | The current machine: the host and container layers, the router, the agent configuration, and the trust boundary |
 | [recovery.md](recovery.md) | The whole-machine path, from a fresh Bazzite installation to a verified workstation |
-| [bootstrap.md](bootstrap.md) | The two whole-machine bootstrap scripts, and the libraries they share with the component installer |
+| [bootstrap.md](bootstrap.md) | The host and environment bootstrap scripts, and the libraries they share with the component installer |
 
 ## Release
 

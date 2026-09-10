@@ -137,6 +137,14 @@ Bazzite/Fedora host
 |            |                     +-- Rust / cargo, through rustup
 |            |                     `-- Claude Code, Codex
 |            |
+|            +-------------------> golang-dev Distrobox
+|            |                     +-- Go
+|            |                     `-- Claude Code, Codex
+|            |
+|            +-------------------> dotnet-dev Distrobox
+|            |                     +-- .NET SDK / C#
+|            |                     `-- Claude Code, Codex
+|            |
 |            `-------------------> android-dev Distrobox
 |                                  +-- JDK 25 / Android SDK
 |                                  `-- Claude Code, Codex

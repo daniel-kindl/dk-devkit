@@ -101,24 +101,24 @@ This step:
 
 ## 5b. Bootstrap the other development environments
 
-The `daniel` profile composes `python-dev` and `rust-dev` as well. Step 4
-created both containers. Each one converges its own toolchain, in its own
-isolated HOME, with its own script:
+The `daniel` profile also composes `python-dev`, `golang-dev`, `rust-dev`,
+`dotnet-dev` and `android-dev`. Step 4 creates their containers. Each one
+converges its own toolchain in its isolated HOME:
 
 ```bash
-~/.local/bin/devbox exec python-dev --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh
-~/.local/bin/devbox exec rust-dev   --cwd ~/projects/dk-devkit -- ./bootstrap/rust-dev.sh
+~/.local/bin/devbox exec python-dev  --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh
+~/.local/bin/devbox exec golang-dev  --cwd ~/projects/dk-devkit -- ./bootstrap/golang-dev.sh
+~/.local/bin/devbox exec rust-dev    --cwd ~/projects/dk-devkit -- ./bootstrap/rust-dev.sh
+~/.local/bin/devbox exec dotnet-dev  --cwd ~/projects/dk-devkit -- ./bootstrap/dotnet-dev.sh
+~/.local/bin/devbox exec android-dev --cwd ~/projects/dk-devkit -- ./bootstrap/android-dev.sh
 ```
 
-Each one installs the distribution packages, the shell integration, the
-language toolchain, the agent CLIs, the shared agent wiring, the skills and the
-status line. Neither one installs the `agentq` runtime, which lives in `web-dev`
-only.
-
-Skip an environment you do not want. Each is an independent module, so the rest
-of the machine converges without it. `docs/environments.md` lists what exists,
-`docs/python-dev.md` and `docs/rust-dev.md` describe each toolchain, and
-`docs/bootstrap.md` holds the step tables.
+Each script installs its distribution packages, language toolchain, agent
+wiring and status line. None installs the `agentq` runtime, which lives in
+`web-dev` only. Skip an environment you do not want. Each is an independent
+module, so the rest of the machine converges without it. See
+`docs/environments.md` and `docs/bootstrap.md` for the current module list and
+step tables.
 
 ## 6. MANUAL: authenticate GitHub
 
@@ -294,9 +294,9 @@ run them again.
 
 ### Recreating a development environment container
 
-The steps are the same for every environment. Replace `web-dev` with
-`python-dev` or `rust-dev`, and the bootstrap script with the one that
-environment owns. Only do it deliberately.
+The steps are the same for every environment. Replace `web-dev` with any
+supported environment, and use the bootstrap script that environment owns.
+Only do it deliberately.
 
 ```bash
 devbox exec web-dev -- true                    # confirm it is really unusable

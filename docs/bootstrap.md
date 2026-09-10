@@ -1,6 +1,6 @@
 # Bootstrap reference
 
-Four scripts. One runs on the Bazzite host. One runs inside each supported
+Seven scripts. One runs on the Bazzite host. One runs inside each supported
 development environment. None of them writes a credential.
 
 | Script | Where it runs |
@@ -9,17 +9,19 @@ development environment. None of them writes a credential.
 | `bootstrap/web-dev.sh` | Inside `web-dev` |
 | `bootstrap/python-dev.sh` | Inside `python-dev` |
 | `bootstrap/rust-dev.sh` | Inside `rust-dev` |
+| `bootstrap/golang-dev.sh` | Inside `golang-dev` |
 | `bootstrap/dotnet-dev.sh` | Inside `dotnet-dev` |
+| `bootstrap/android-dev.sh` | Inside `android-dev` |
 
-They install the whole machine. To install one part, use the component
-installer in [components.md](components.md):
+Together, these scripts converge the whole machine. To install one part, use
+the component installer in [components.md](components.md):
 
 ```bash
 ./install.sh --components devbox
 ```
 
-Both entry points converge the same state, because each step is one function in
-`bootstrap/lib/`, and both callers use it:
+The host bootstrap and the environment bootstraps converge the same state,
+because each step is one function in `bootstrap/lib/`, and the callers use it:
 
 | Library | Step |
 | --- | --- |
@@ -196,10 +198,25 @@ It refuses to run on the host.
 ceiling. It is what a repository gets when it pins nothing, and a repository
 that carries `rust-toolchain.toml` overrides it. `docs/rust-dev.md` says why.
 
+## `bootstrap/golang-dev.sh`, `bootstrap/dotnet-dev.sh` and `bootstrap/android-dev.sh`
+
+Each script runs inside its matching container and accepts `--dry-run` and
+`--skip-skills` where the component supports skill installation.
+
+| Script | Toolchain state | Verification |
+| --- | --- | --- |
+| `golang-dev.sh` | Go from the distribution package; dependencies stay in `go.mod` and `go.sum` | `./verify.sh --only 28` |
+| `dotnet-dev.sh` | .NET SDK; target frameworks stay in project files and `global.json` | `./verify.sh --only 29` |
+| `android-dev.sh` | JDK 25, Android command-line tools and the SDK packages in `android-dev.env` | `./verify.sh --only 27` |
+
+All three also install the agent CLIs, shared agent configuration and status
+line. `android-dev.sh` uses `--dry-run` but does not expose `--skip-skills`.
+The environment-specific manifests remain the source of truth.
+
 ### Only `web-dev` carries the coordinator
 
-`bootstrap/web-dev.sh` installs the `agentq` runtime, and the other two do not.
-The coordinator is installed in one environment, which
+`bootstrap/web-dev.sh` installs the `agentq` runtime. The other environment
+bootstraps do not. The coordinator is installed in one environment, which
 `manifests/agentqueue.env` names. `docs/agentq.md` says why.
 
 ## Adding a new environment
