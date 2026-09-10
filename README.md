@@ -194,7 +194,7 @@ personal development toolkit
 
 Each profile contains the smaller one. The `daniel` profile composes the complete personal workstation. No profile is a dependency of a reusable tool, and `./install.sh --dry-run --profile daniel` shows what it resolves to.
 
-Current roadmap priorities are tracked in [#52](https://github.com/daniel-kindl/dk-devkit/issues/52) and [#53](https://github.com/daniel-kindl/dk-devkit/issues/53). The architectural epics [#8](https://github.com/daniel-kindl/dk-devkit/issues/8) and [#24](https://github.com/daniel-kindl/dk-devkit/issues/24) are complete.
+The remaining environment roadmap priority is [#53](https://github.com/daniel-kindl/dk-devkit/issues/53), which covers `android-dev`. The architectural epics [#8](https://github.com/daniel-kindl/dk-devkit/issues/8) and [#24](https://github.com/daniel-kindl/dk-devkit/issues/24) are complete.
 
 The repository was renamed from `workstation` to `dk-devkit` to name the product rather than one machine. [docs/naming.md](docs/naming.md) records that evaluation. GitHub redirects the old URL. A checkout made before the rename keeps working after `git remote set-url origin`, and the checkout directory is `~/projects/dk-devkit`.
 
