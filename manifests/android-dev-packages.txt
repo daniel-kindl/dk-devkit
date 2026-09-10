@@ -1,0 +1,13 @@
+# Distribution packages required inside the android-dev container.
+# The INI definition repeats this list because it cannot read a manifest.
+
+git
+jq
+gh
+curl
+unzip
+java-25-openjdk-devel
+gcc
+gcc-c++
+make
+pkgconf-pkg-config
