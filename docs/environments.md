@@ -19,6 +19,7 @@ module.
 | --- | --- | --- |
 | `web-dev` | supported | Node and pnpm, through nvm, plus the agent CLIs |
 | `python-dev` | supported | Python and uv |
+| `golang-dev` | supported | Go and the Go module toolchain |
 | `rust-dev` | supported | Rust and cargo, through rustup |
 | `dotnet-dev` | planned | .NET |
 | `android-dev` | planned | Android and Gradle |

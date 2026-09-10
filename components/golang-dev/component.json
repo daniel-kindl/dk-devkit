@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "golang-dev",
+  "name": "golang-dev environment",
+  "kind": "environment",
+  "group": "Development environments",
+  "status": "supported",
+  "summary": "Fedora Distrobox with an isolated home and the Go toolchain.",
+  "requires": ["distrobox", "devbox"],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": true,
+  "install": ["components/golang-dev/install.sh"],
+  "doctor": null,
+  "verify": ["./verify.sh", "--only", "28"],
+  "manual": [],
+  "environment": {
+    "container": "golang-dev",
+    "ini": "distrobox/golang-dev.ini",
+    "packages": "manifests/golang-dev-packages.txt",
+    "toolchain": "manifests/golang-dev.env",
+    "bootstrap": "bootstrap/golang-dev.sh",
+    "router": "config/devbox-router/environments.d/golang-dev.env",
+    "inference": "components/golang-dev/inference.tsv",
+    "home": "~/.local/share/distrobox-homes/golang-dev/"
+  },
+  "state": {
+    "public": ["distrobox/golang-dev.ini", "manifests/golang-dev-packages.txt", "manifests/golang-dev.env"],
+    "local": ["~/.local/share/distrobox-homes/golang-dev/"]
+  }
+}

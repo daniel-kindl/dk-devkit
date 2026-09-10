@@ -45,7 +45,7 @@ if [ -n "$environments" ]; then
     done
 
     # The five environments the router can resolve each have a module.
-    for expected in android-dev dotnet-dev python-dev rust-dev web-dev; do
+    for expected in android-dev dotnet-dev golang-dev python-dev rust-dev web-dev; do
         if printf '%s\n' "$environments" | awk -F'\t' -v want="$expected" \
             '$1 == want { found = 1 } END { exit !found }'; then
             pass "E5 $expected is an environment module"

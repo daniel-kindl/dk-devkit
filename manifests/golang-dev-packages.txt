@@ -1,0 +1,17 @@
+# Distribution packages required inside the golang-dev container.
+#
+# This file is the source of truth. distrobox/golang-dev.ini repeats the list,
+# and bootstrap/golang-dev.sh converges an existing container from this file.
+
+# Repository and GitHub tooling.
+git
+jq
+gh
+curl
+
+# Go and the native-build baseline used by cgo packages.
+golang
+gcc
+gcc-c++
+make
+pkgconf-pkg-config

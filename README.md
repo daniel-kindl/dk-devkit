@@ -39,7 +39,7 @@ devbox exec web-dev --cwd ~/projects/example -- pnpm check
 
 Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
 
-Each environment is an independent module: `web-dev`, `python-dev` and `rust-dev` are installable today, and `dotnet-dev` and `android-dev` are declared but not implemented. Read [docs/environments.md](docs/environments.md).
+Each environment is an independent module: `web-dev`, `python-dev`, `golang-dev` and `rust-dev` are installable today, and `dotnet-dev` and `android-dev` are declared but not implemented. Read [docs/environments.md](docs/environments.md).
 
 ### `pi`
 
@@ -133,6 +133,10 @@ Bazzite/Fedora host
 |            |                     +-- Python / uv
 |            |                     `-- Claude Code, Codex
 |            |
+|            +-------------------> golang-dev Distrobox
+|            |                     +-- Go
+|            |                     `-- Claude Code, Codex
+|            |
 |            `-------------------> rust-dev Distrobox
 |                                  +-- Rust / cargo, through rustup
 |                                  `-- Claude Code, Codex
@@ -153,7 +157,7 @@ Bazzite/Fedora host
 
 Each environment has its own isolated home, and the router picks the one that
 owns a repository. `dotnet-dev` and `android-dev` are declared modules with no
-installation yet.
+installation yet. `golang-dev` provides the Go toolchain.
 
 The trust boundary is deliberate:
 
