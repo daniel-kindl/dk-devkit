@@ -1,0 +1,15 @@
+# Distribution packages required inside the dotnet-dev container.
+#
+# This file is the source of truth. distrobox/dotnet-dev.ini repeats the list
+# because the INI format cannot read a file. bootstrap/dotnet-dev.sh converges
+# an existing container from this manifest, and verify/29-dotnet-dev.sh checks it.
+
+git
+jq
+gh
+curl
+dotnet-sdk-10.0
+gcc
+gcc-c++
+make
+pkgconf-pkg-config

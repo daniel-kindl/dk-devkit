@@ -21,21 +21,13 @@ module.
 | `python-dev` | supported | Python and uv |
 | `golang-dev` | supported | Go and the Go module toolchain |
 | `rust-dev` | supported | Rust and cargo, through rustup |
-| `dotnet-dev` | planned | .NET |
+| `dotnet-dev` | supported | .NET SDK for C# |
 | `android-dev` | supported | Android SDK, JDK 25 and Gradle wrapper |
 
 A **planned** module is a boundary without an installation. It declares the
 container name and the router markers, and nothing else. The installer refuses
-to install one, and no profile composes one:
-
-```console
-$ ./install.sh --components dotnet-dev
-install.sh: planned, so it cannot be installed yet: dotnet-dev
-```
-
-The router still resolves a planned environment from its markers. A .NET
-repository therefore gets `dotnet-dev is not configured` rather than
-`no environment could be resolved`, which is the more useful answer.
+to install one. `dotnet-dev` is now a supported module with a container
+definition and an in-container bootstrap.
 
 ## The environment block
 
