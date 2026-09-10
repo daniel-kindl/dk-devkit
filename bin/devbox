@@ -272,6 +272,10 @@ dotnet-dev	*.slnx
 dotnet-dev	*.csproj
 dotnet-dev	*.fsproj
 dotnet-dev	global.json
+golang-dev	go.mod
+golang-dev	go.sum
+golang-dev	go.work
+golang-dev	go.work.sum
 python-dev	pyproject.toml
 python-dev	uv.lock
 python-dev	.python-version

@@ -1,0 +1,5 @@
+# golang-dev router markers: <environment><TAB><file or glob at the repository root>
+golang-dev	go.mod
+golang-dev	go.sum
+golang-dev	go.work
+golang-dev	go.work.sum
