@@ -13,10 +13,14 @@
 # UV_VERSION has no default. manifests/sandcastle.env pins it in
 # SANDBOX_PYTHON_BUILD_ARGS, and a build without it stops at the FROM line.
 
+#
+# Both ARGs stand before the first FROM. Only an ARG in that position can name
+# the image of a later FROM line.
+
 ARG UV_VERSION
+ARG SANDBOX_BASE=docker.io/library/debian:bookworm-slim
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-ARG SANDBOX_BASE=docker.io/library/debian:bookworm-slim
 FROM ${SANDBOX_BASE}
 
 ARG AGENT_UID=1000

@@ -166,6 +166,28 @@ check_contains 'B11 the Python sandbox copies the shared shim' 'COPY --from=shim
 check_not_contains 'B12 the uv version has one pin, in the manifest' 'ARG UV_VERSION=' \
     "$(code_of "$REPO_ROOT/containers/sandbox-python/Containerfile")"
 
+# A FROM line can use only an ARG that stands before the first FROM. A later
+# ARG belongs to a stage, so the FROM line sees an empty value and the build
+# stops with "no FROM statement found".
+from_problems=''
+for cf in "$REPO_ROOT"/containers/*/Containerfile; do
+    from_problems=$from_problems$(awk -v file="${cf#"$REPO_ROOT"/}" '
+        /^[[:space:]]*ARG[[:space:]]/ && !seen { split($2, a, "="); global[a[1]] = 1 }
+        /^[[:space:]]*FROM[[:space:]]/ {
+            seen = 1
+            line = $0
+            while (match(line, /[$][{]?[A-Za-z_][A-Za-z0-9_]*/)) {
+                name = substr(line, RSTART, RLENGTH)
+                gsub(/[${]/, "", name)
+                if (!(name in global)) printf "%s: %s; ", file, name
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+    ' "$cf")
+done
+check_eq 'B13 every FROM line uses only an ARG from before the first FROM' '' \
+    "$from_problems"
+
 # --- the boundaries hold ----------------------------------------------------
 
 AB_CODE=$(code_of "$AB")
