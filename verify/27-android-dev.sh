@@ -62,5 +62,9 @@ for agent in claude codex; do
 done
 check 'android-dev shared agent policy is wired' -- \
     android_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
+check 'android-dev skill store holds the third-party skills' -- \
+    android_box_sh 'ls "$HOME"/.agents/skills/*/SKILL.md >/dev/null 2>&1'
+check 'android-dev Claude skills link reaches the store' -- \
+    android_box_sh 'test "$HOME/.claude/skills" -ef "$HOME/.agents/skills"'
 check 'no private SSH key inside android-dev HOME' -- \
     android_box_sh '! ls "$HOME"/.ssh/id_* >/dev/null 2>&1'
