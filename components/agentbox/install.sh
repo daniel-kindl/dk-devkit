@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install the agentbox CLI and prepare its credential file location.
+# Install the agentbox CLIs and prepare the credential file location.
 #
 #   components/agentbox/install.sh [--dry-run]
 #
@@ -19,4 +19,5 @@ component_args "$@"
 
 section 'Agent orchestration (agentbox)'
 install_agentbox "$REPO_ROOT"
+install_user_command "$REPO_ROOT" agent-sandbox "$HOME"
 summary

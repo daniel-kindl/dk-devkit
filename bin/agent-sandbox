@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# Build a named disposable sandbox profile for agentbox/agentq.
+#
+#   agent-sandbox list
+#   agent-sandbox build web [--force]
+#   agent-sandbox build python [--force]
+
+set -euo pipefail
+
+PROGRAM=agent-sandbox
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+MANIFEST=$REPO_ROOT/manifests/sandcastle.env
+
+fail() { printf '%s: %s\n' "$PROGRAM" "$1" >&2; exit 2; }
+[ -f "$MANIFEST" ] || fail "manifest not found: $MANIFEST"
+# shellcheck source=/dev/null
+. "$MANIFEST"
+
+IN_CONTAINER=0
+if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then IN_CONTAINER=1; fi
+PODMAN_SOCKET=${PODMAN_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
+PODMAN_BIN=''
+
+resolve_podman() {
+    if [ "$IN_CONTAINER" = 0 ] && command -v podman >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman)
+    elif command -v podman-remote >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman-remote)
+        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
+    elif command -v podman >/dev/null 2>&1; then
+        PODMAN_BIN=$(command -v podman)
+        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
+    else
+        fail 'no Podman client found'
+    fi
+}
+
+profile_values() {
+    case $1 in
+        web)
+            PROFILE_REF=$SANDBOX_IMAGE:$SANDBOX_TAG
+            PROFILE_FILE=$REPO_ROOT/containers/sandbox-web/Containerfile
+            PROFILE_CONTEXT=$REPO_ROOT/containers/sandbox-web
+            PROFILE_BASE=$SANDBOX_BASE
+            PROFILE_UV=''
+            ;;
+        python)
+            PROFILE_REF=$SANDBOX_PYTHON_IMAGE:$SANDBOX_PYTHON_TAG
+            PROFILE_FILE=$REPO_ROOT/containers/sandbox-python/Containerfile
+            PROFILE_CONTEXT=$REPO_ROOT/containers/sandbox-python
+            PROFILE_BASE=$SANDBOX_PYTHON_BASE
+            PROFILE_UV=$SANDBOX_PYTHON_UV_VERIFIED
+            ;;
+        *) fail "unknown sandbox profile: $1" ;;
+    esac
+}
+
+case ${1:-list} in
+    list)
+        printf 'web\npython\n'
+        ;;
+    build)
+        [ $# -ge 2 ] || fail 'build needs a profile name'
+        profile=$2
+        force=0
+        shift 2
+        while [ $# -gt 0 ]; do
+            case $1 in
+                --force) force=1; shift ;;
+                *) fail "build: unknown option: $1" ;;
+            esac
+        done
+        profile_values "$profile"
+        resolve_podman
+        if [ "$force" = 0 ] && "$PODMAN_BIN" image exists "$PROFILE_REF" 2>/dev/null; then
+            printf '%s: image already present: %s\n' "$PROGRAM" "$PROFILE_REF"
+            exit 0
+        fi
+        printf '%s: building %s\n' "$PROGRAM" "$PROFILE_REF"
+        args=(
+            build -t "$PROFILE_REF" -f "$PROFILE_FILE"
+            --build-arg "SANDBOX_BASE=$PROFILE_BASE"
+            --build-arg "AGENT_UID=$(id -u)"
+            --build-arg "AGENT_GID=$(id -g)"
+        )
+        if [ -n "$PROFILE_UV" ]; then
+            args+=(--build-arg "UV_VERSION=$PROFILE_UV")
+        fi
+        "$PODMAN_BIN" "${args[@]}" "$PROFILE_CONTEXT"
+        ;;
+    *) fail "unknown command: ${1:-}" ;;
+esac

@@ -8,16 +8,16 @@
   "requires": [],
   "capabilities": ["linux", "host", "container-runtime", "git", "python3"],
   "unattended": true,
-  "commands": ["agentbox"],
+  "commands": ["agentbox", "agent-sandbox"],
   "install": ["components/agentbox/install.sh"],
   "doctor": ["components/agentbox/doctor.sh"],
   "verify": ["./verify.sh", "--only", "8"],
   "manual": [
     "Mint an unattended Claude token on the host with \"claude setup-token\", then put it in ~/.config/agentbox/secrets.env.",
-    "Build the agent sandbox images: agentbox build."
+    "Build the default runner/web images with agentbox build, and build other profiles with agent-sandbox build <profile>."
   ],
   "state": {
-    "public": ["manifests/sandcastle.env", "config/sandcastle/"],
+    "public": ["manifests/sandcastle.env", "config/sandcastle/", "containers/sandbox-python/"],
     "local": ["~/.config/agentbox/secrets.env", "~/.local/share/agentbox/"]
   }
 }
