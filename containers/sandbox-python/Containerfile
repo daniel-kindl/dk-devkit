@@ -1,0 +1,98 @@
+# sandbox-python - the disposable sandbox for Python repositories.
+#
+# The coordinator stays in web-dev. Sandcastle creates this container only for
+# the untrusted implementation run, bind-mounts the disposable git worktree,
+# and destroys the container afterwards.
+#
+# The image does not pin a Python interpreter. Each repository owns that choice
+# through pyproject.toml and/or .python-version. uv installs the requested
+# interpreter into this disposable HOME.
+#
+# Build with:  agent-sandbox build python
+#
+# UV_VERSION has no default. manifests/sandcastle.env pins it in
+# SANDBOX_PYTHON_BUILD_ARGS, and a build without it stops at the FROM line.
+
+#
+# Both ARGs stand before the first FROM. Only an ARG in that position can name
+# the image of a later FROM line.
+
+ARG UV_VERSION
+ARG SANDBOX_BASE=docker.io/library/debian:bookworm-slim
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+FROM ${SANDBOX_BASE}
+
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+RUN set -eux; \
+    groupadd --gid "${AGENT_GID}" agent; \
+    useradd --uid "${AGENT_UID}" --gid "${AGENT_GID}" --create-home \
+        --shell /bin/bash agent
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        build-essential ca-certificates curl git jq less pkg-config ripgrep unzip; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+RUN install -d -o agent -g agent \
+        /opt/agents/policy /opt/agents/skills /opt/agents/credential /opt/agents/bin
+
+USER agent
+WORKDIR /home/agent
+ENV HOME=/home/agent
+ENV PATH=/home/agent/.local/bin:$PATH
+ENV UV_CACHE_DIR=/home/agent/.cache/uv
+ENV UV_PYTHON_INSTALL_DIR=/home/agent/.local/share/uv/python
+
+RUN set -eux; \
+    mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR"; \
+    uv --version
+
+# Install the same agent clients as the web sandbox. They are installed before
+# the credential shim reaches PATH, so an installer cannot resolve the shim as
+# the real client.
+ARG CLAUDE_CODE_INSTALLER=https://claude.ai/install.sh
+ARG CODEX_INSTALLER=https://chatgpt.com/codex/install.sh
+RUN set -eux; \
+    curl -fsSL "${CLAUDE_CODE_INSTALLER}" | bash; \
+    curl -fsSL "${CODEX_INSTALLER}" | bash; \
+    "$HOME/.local/bin/claude" --version; \
+    "$HOME/.local/bin/codex" --version
+
+# The credential shim is the one in containers/sandbox-web/bin. agent-sandbox
+# passes that directory as the build context "shim", so the web and Python
+# images cannot run different shims. The web Containerfile explains the shim.
+COPY --from=shim --chown=agent:agent --chmod=0755 agent-cli-shim /opt/agents/bin/agent-cli-shim
+RUN set -eux; \
+    test -x /opt/agents/bin/agent-cli-shim; \
+    ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/claude; \
+    ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/codex
+ENV PATH=/opt/agents/bin:/home/agent/.local/bin:$PATH
+
+RUN set -eux; \
+    test "$(command -v claude)" = /opt/agents/bin/claude; \
+    test "$(command -v codex)" = /opt/agents/bin/codex; \
+    claude --version; \
+    codex --version; \
+    uv --version
+
+# The shared agent policy and skill store are mounted read-only at run time.
+RUN set -eux; \
+    mkdir -p /home/agent/.claude /home/agent/.codex; \
+    ln -sfn /opt/agents/policy/AGENTS.md /home/agent/.claude/CLAUDE.md; \
+    ln -sfn /opt/agents/policy/AGENTS.md /home/agent/.codex/AGENTS.md; \
+    ln -sfn /opt/agents/skills /home/agent/.claude/skills
+
+CMD ["sleep", "infinity"]

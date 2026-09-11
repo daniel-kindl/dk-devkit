@@ -56,6 +56,7 @@ from typing import List, Optional
 
 from . import VERSION, effort as effort_mod, policy as policy_mod
 from . import report as report_mod, setup as setup_mod, ui as ui_mod
+from . import sandbox as sandbox_mod
 from .coordinator import Coordinator
 from .ghapi import GitHub, GhTransport
 from .gitops import Git, GitError, discover_root
@@ -366,6 +367,13 @@ def cmd_doctor(args, install_root: str) -> int:
     if not os.access(agentbox, os.X_OK):
         rc = EXIT_NOT_READY
 
+    try:
+        profile, image = sandbox_mod.resolve(repo_root, install_root)
+        print(f"  sandbox profile    {profile}  ({image})")
+    except sandbox_mod.SandboxProfileError as exc:
+        print(f"  sandbox profile    UNUSABLE ({exc})")
+        rc = EXIT_NOT_READY
+
     sock = os.environ.get("SSH_AUTH_SOCK", "")
     print(f"  ssh-agent          {sock or 'NOT FORWARDED (git push will fail)'}")
     if not sock:
@@ -596,6 +604,11 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
     github = GitHub(owner, name, dry_run=dry_run)
     git.dry_run = dry_run
 
+    # The repository selects its sandbox image here, before the queue starts.
+    # An unusable .agentbox-profile is then a policy error that "agentq plan"
+    # also reports, and never the failure of one issue.
+    profile, image = sandbox_mod.resolve(repo_root, install_root)
+
     runner = AgentboxRunner(
         os.path.join(install_root, "bin", "agentbox"),
         pol,
@@ -605,6 +618,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
         # --debug wants the child exactly as it is, terminal UI included.
         # Every other level wants the structured progress channel.
         agent_output="terminal" if _output_level(args) == "debug" else "progress",
+        image=image,
     )
     catalog = _catalog(install_root, repo_root, pol)
     coordinator = Coordinator(
@@ -621,6 +635,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
         f"agentq {VERSION}",
         f"  repository   {owner}/{name}  ({repo_root})",
         f"  base         {pol.baseBranch}",
+        f"  sandbox      {profile}  ({image})",
         f"  label        {pol.issueLabel}",
         f"  autoMerge    {pol.autoMerge}   mergeMethod {pol.mergeMethod}",
         f"  effort       {pol.effortMode}"

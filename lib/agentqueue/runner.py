@@ -130,12 +130,16 @@ class AgentboxRunner:
         dry_run: bool = False,
         emit: Optional[Callable[[str], None]] = None,
         agent_output: str = "progress",
+        image: str = "",
     ):
         self.agentbox = agentbox
         self.policy = policy
         self.log_dir = log_dir
         self.dry_run = dry_run
         self.emit = emit or (lambda line: None)
+        # The sandbox image that agentq resolved for this repository before
+        # the queue started, or "" for the agentbox default.
+        self.image = image
         # "progress" asks the orchestrator for structured lifecycle events and
         # a line-oriented agent stream. "terminal" leaves agentbox in its own
         # default, which renders Sandcastle's interactive terminal UI. The
@@ -171,6 +175,11 @@ class AgentboxRunner:
             "--hard-tool-calls", str(self.policy.hardToolCalls),
             "--agent-output", self.agent_output,
         ]
+        # The repository selects only a named, locally pinned sandbox profile.
+        # agentq still owns the trusted control plane in web-dev; this only
+        # changes the disposable image that receives model output.
+        if self.image:
+            args += ["--image", self.image]
         # The resolved tier reaches agentbox as pinned model IDs, never as a
         # tier name. agentbox runs what it is told to run, and the choice
         # stays in the trusted layer that can explain it.

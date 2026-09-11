@@ -265,31 +265,31 @@ unset _key
 
 # ------------------------------------------------------------ Podman client --
 #
-# On the host this is plain "podman". Inside a container there is no local
-# engine, so it is podman-remote pointed at the rootless host API socket. Both
-# reach the same daemon, and a container created either way is a host-level
-# sibling of the caller.
+# lib/podman-client.sh defines PODMAN_SOCKET, PODMAN_BIN and resolve_podman,
+# and bin/agent-sandbox uses the same file.
 
-PODMAN_SOCKET=${PODMAN_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
-PODMAN_BIN=''
+# shellcheck source=../lib/podman-client.sh
+. "$REPO_ROOT/lib/podman-client.sh"
 
-resolve_podman() {
-    [ -n "$PODMAN_BIN" ] && return 0
-    if [ "$IN_CONTAINER" = 0 ] && command -v podman >/dev/null 2>&1; then
-        PODMAN_BIN=$(command -v podman)
+# sandbox_build_hint <image> - print the command that builds one sandbox image.
+#
+# manifests/sandcastle.env lists the sandbox profiles. The web profile is part
+# of "agentbox build", and every other profile has its own build command.
+sandbox_build_hint() {
+    local entry prefix image_var tag_var
+    for entry in ${SANDBOX_PROFILES:-}; do
+        prefix=${entry#*:}
+        image_var=${prefix}_IMAGE
+        tag_var=${prefix}_TAG
+        [ "$1" = "${!image_var:-}:${!tag_var:-}" ] || continue
+        if [ "$prefix" = SANDBOX ]; then
+            printf 'Build it with: agentbox build\n'
+        else
+            printf 'Build it with: agent-sandbox build %s\n' "${entry%%:*}"
+        fi
         return 0
-    fi
-    if command -v podman-remote >/dev/null 2>&1; then
-        PODMAN_BIN=$(command -v podman-remote)
-        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
-        return 0
-    fi
-    if command -v podman >/dev/null 2>&1; then
-        PODMAN_BIN=$(command -v podman)
-        export CONTAINER_HOST="unix://$PODMAN_SOCKET"
-        return 0
-    fi
-    return 1
+    done
+    printf 'Build it with: agentbox build, or agent-sandbox build <profile>\n'
 }
 
 # require_podman - resolve the client, or stop with a usable message.
@@ -1169,6 +1169,26 @@ cmd_doctor() {
         fi
     done
 
+    # The other sandbox profiles. Only a repository that selects a profile needs
+    # its image, so a missing one is reported and the machine stays ready.
+    local entry prefix image_var tag_var name
+    for entry in ${SANDBOX_PROFILES:-}; do
+        prefix=${entry#*:}
+        [ "$prefix" = SANDBOX ] && continue
+        name=${entry%%:*}
+        image_var=${prefix}_IMAGE
+        tag_var=${prefix}_TAG
+        ref=${!image_var:-}:${!tag_var:-}
+        if [ -z "$PODMAN_BIN" ]; then
+            printf '  image              %s unknown (no Podman client)\n' "$ref"
+        elif "$PODMAN_BIN" image exists "$ref" 2>/dev/null; then
+            printf '  image              %s present (profile %s)\n' "$ref" "$name"
+        else
+            printf '  image              %s not built (profile %s; run: agent-sandbox build %s)\n' \
+                "$ref" "$name" "$name"
+        fi
+    done
+
     local stale_runs=0 stale_locks=0
     if [ -d "$STATE_VIEW/runs" ]; then
         stale_runs=$(find "$STATE_VIEW/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
@@ -1548,7 +1568,7 @@ print(json.dumps(plan, indent=2))' | sed -e 's/^/  /'
     podman_ image exists "$RUNNER_REF" 2>/dev/null ||
         fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
     podman_ image exists "$image" 2>/dev/null ||
-        fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
+        fail 4 "sandbox image missing: $image" "$(sandbox_build_hint "$image")"
 
     if [ "$ambient" = 1 ]; then load_secrets --ambient; else load_secrets; fi
     if [ -z "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ]; then
@@ -1816,7 +1836,7 @@ cmd_selftest() {
     podman_ image exists "$RUNNER_REF" 2>/dev/null ||
         fail 4 "runner image missing: $RUNNER_REF" 'Build it with: agentbox build'
     podman_ image exists "$image" 2>/dev/null ||
-        fail 4 "sandbox image missing: $image" 'Build it with: agentbox build'
+        fail 4 "sandbox image missing: $image" "$(sandbox_build_hint "$image")"
 
     local run_id
     run_id=$(new_run_id)

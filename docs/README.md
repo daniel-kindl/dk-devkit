@@ -23,6 +23,7 @@ policy and the trust boundaries.
 | --- | --- |
 | [agentq.md](agentq.md) | `agentq`, the GitHub backlog coordinator |
 | [sandcastle.md](sandcastle.md) | `agentbox`, the unattended agent sandbox and its import boundary |
+| [agent-sandbox-profiles.md](agent-sandbox-profiles.md) | `agent-sandbox`, the sandbox profiles, and how a repository selects one |
 | [repo-labels.md](repo-labels.md) | `repo-labels`, the exact-sync GitHub label tool |
 | [repo-meta.md](repo-meta.md) | `repo-meta`, the exact-sync GitHub About metadata and repository settings tool |
 | [python-dev.md](python-dev.md) | The `python-dev` environment and its toolchain |

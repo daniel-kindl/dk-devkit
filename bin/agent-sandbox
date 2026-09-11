@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# Build a named disposable sandbox profile for agentbox and agentq.
+#
+#   agent-sandbox list                        print each profile and its image
+#   agent-sandbox build <profile> [--force]   build the image of one profile
+#
+# SANDBOX_PROFILES in manifests/sandcastle.env lists the profiles. Profile
+# <name> builds containers/sandbox-<name>/Containerfile. The build context
+# "shim" is containers/sandbox-web/bin, so every profile copies the same
+# credential shim. docs/agent-sandbox-profiles.md says more.
+#
+# Exit codes: 2 a usage or manifest error, 5 no Podman client.
+
+set -euo pipefail
+
+PROGRAM=agent-sandbox
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+MANIFEST=$REPO_ROOT/manifests/sandcastle.env
+
+fail() { printf '%s: %s\n' "$PROGRAM" "$2" >&2; exit "$1"; }
+
+[ -f "$MANIFEST" ] || fail 2 "manifest not found: $MANIFEST"
+# shellcheck source=/dev/null
+. "$MANIFEST"
+[ -n "${SANDBOX_PROFILES:-}" ] || fail 2 "SANDBOX_PROFILES is not set in $MANIFEST"
+
+IN_CONTAINER=0
+if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then IN_CONTAINER=1; fi
+# shellcheck source=../lib/podman-client.sh
+. "$REPO_ROOT/lib/podman-client.sh"
+
+# profile_prefix <name> - print the manifest variable prefix of one profile.
+profile_prefix() {
+    local entry
+    for entry in $SANDBOX_PROFILES; do
+        if [ "${entry%%:*}" = "$1" ]; then
+            printf '%s\n' "${entry#*:}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# pinned <variable> - print one manifest value, or stop when it is not set.
+pinned() {
+    [ -n "${!1:-}" ] || fail 2 "$1 is not set in $MANIFEST"
+    printf '%s\n' "${!1}"
+}
+
+cmd_list() {
+    local entry prefix image tag
+    for entry in $SANDBOX_PROFILES; do
+        prefix=${entry#*:}
+        image=$(pinned "${prefix}_IMAGE")
+        tag=$(pinned "${prefix}_TAG")
+        printf '%-8s %s:%s\n' "${entry%%:*}" "$image" "$tag"
+    done
+}
+
+cmd_build() {
+    [ $# -ge 1 ] || fail 2 'build needs a profile name. Run "agent-sandbox list" to see the profiles.'
+    local profile=$1 force=0
+    shift
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --force) force=1; shift ;;
+            *) fail 2 "build: unknown option: $1" ;;
+        esac
+    done
+
+    local prefix image tag base dir ref args_var arg
+    prefix=$(profile_prefix "$profile") || fail 2 "unknown sandbox profile: $profile"
+    image=$(pinned "${prefix}_IMAGE")
+    tag=$(pinned "${prefix}_TAG")
+    base=$(pinned "${prefix}_BASE")
+    ref=$image:$tag
+    dir=$REPO_ROOT/containers/sandbox-$profile
+    [ -f "$dir/Containerfile" ] || fail 2 "profile $profile has no Containerfile: $dir/Containerfile"
+
+    resolve_podman || fail 5 'no Podman client found. Inside web-dev, converge the container with bootstrap/web-dev.sh.'
+    if [ "$force" = 0 ] && "$PODMAN_BIN" image exists "$ref" 2>/dev/null; then
+        printf '%s: image already present: %s\n' "$PROGRAM" "$ref"
+        return 0
+    fi
+
+    printf '%s: building %s\n' "$PROGRAM" "$ref"
+    local -a args=(
+        build -t "$ref" -f "$dir/Containerfile"
+        --build-context "shim=$REPO_ROOT/containers/sandbox-web/bin"
+        --build-arg "SANDBOX_BASE=$base"
+        --build-arg "AGENT_UID=$(id -u)"
+        --build-arg "AGENT_GID=$(id -g)"
+    )
+    args_var=${prefix}_BUILD_ARGS
+    for arg in ${!args_var:-}; do
+        args+=(--build-arg "$arg")
+    done
+    "$PODMAN_BIN" "${args[@]}" "$dir"
+}
+
+case ${1:-list} in
+    list) cmd_list ;;
+    build) shift; cmd_build "$@" ;;
+    -h|--help) sed -n '2,13p' "$0" ;;
+    *) fail 2 "unknown command: $1" ;;
+esac

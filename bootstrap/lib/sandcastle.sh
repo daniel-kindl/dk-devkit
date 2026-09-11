@@ -6,14 +6,16 @@
 
 # install_agentbox <repo-root> [home]
 #
-# Wires agentbox into ~/.local/bin and prepares the credential file location.
-# It never writes a credential, and it never builds an image: an image build
-# needs the network and takes minutes, so it stays an explicit command.
+# Wires agentbox and agent-sandbox into ~/.local/bin and prepares the
+# credential file location. It never writes a credential, and it never builds
+# an image: an image build needs the network and takes minutes, so it stays an
+# explicit command.
 install_agentbox() {
     local repo_root=$1
     local home=${2:-$HOME}
 
     install_user_command "$repo_root" agentbox "$home"
+    install_user_command "$repo_root" agent-sandbox "$home"
 
     # The per-run scratch area. Every disposable clone, every staged copy of
     # the agent policy and every per-run credential file lives under here, and

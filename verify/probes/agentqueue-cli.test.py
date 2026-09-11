@@ -151,7 +151,7 @@ class CliCase(unittest.TestCase):
         if wire:
             outer = self
             cli_mod.GitHub = lambda owner, name, dry_run=False: outer._github(dry_run)
-            cli_mod.AgentboxRunner = lambda *a, **k: outer.runner
+            cli_mod.AgentboxRunner = lambda *a, **k: outer._runner(k)
         out, err = io.StringIO(), io.StringIO()
         os.chdir(cwd or self.repo.work)
         os.environ["AGENTQUEUE_STATE_DIR"] = self.state
@@ -169,6 +169,10 @@ class CliCase(unittest.TestCase):
     def _github(self, dry_run):
         self.github.dry_run = dry_run
         return self.github
+
+    def _runner(self, options):
+        self.runner_options = options
+        return self.runner
 
     def refs_on_the_remote(self):
         return git(["for-each-ref", "--format=%(refname:short)"], self.repo.remote)
@@ -511,6 +515,36 @@ class TestRunDoesWhatDrainDid(CliCase):
         code, _, err = self.invoke(["run"])
         self.assertEqual(code, cli_mod.EXIT_POLICY)
         self.assertTrue(err.startswith("agentq:"))
+
+
+class TestTheSandboxProfile(CliCase):
+    """The repository selects the sandbox before the queue starts."""
+
+    def test_an_unknown_profile_stops_run_and_plan_with_exit_three(self):
+        self.github.add_issue(85, "Implement the module", labels=(READY,))
+        self.repo.write(".agentbox-profile", "not-a-profile\n")
+        for command in ("run", "plan"):
+            with self.subTest(command=command):
+                code, _, err = self.invoke([command])
+                self.assertEqual(code, cli_mod.EXIT_POLICY)
+                self.assertTrue(err.startswith("agentq:"))
+                self.assertIn(".agentbox-profile", err)
+                self.assertNotIn("not-a-profile", err)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_run_hands_the_resolved_image_to_the_runner(self):
+        self.repo.write(".agentbox-profile", "python\n")
+        code, _, _ = self.invoke(["run"])
+        self.assertEqual(code, cli_mod.EXIT_OK)
+        self.assertEqual(
+            self.runner_options.get("image"),
+            cli_mod.sandbox_mod.load_profiles(_ROOT)["python"],
+        )
+
+    def test_doctor_names_the_sandbox_profile(self):
+        self.repo.write(".agentbox-profile", "python\n")
+        _, out, _ = self.invoke(["doctor"])
+        self.assertIn("sandbox profile    python", out)
 
 
 class TestTheOutputModesStillWork(CliCase):
