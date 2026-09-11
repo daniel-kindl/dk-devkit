@@ -27,6 +27,7 @@ from agentqueue import claims as claims_mod  # noqa: E402
 from agentqueue import ci as ci_mod  # noqa: E402
 from agentqueue import policy as policy_mod  # noqa: E402
 from agentqueue import prompts  # noqa: E402
+from agentqueue import sandbox as sandbox_mod  # noqa: E402
 from agentqueue.coordinator import Coordinator, SecurityStop  # noqa: E402
 from agentqueue.gitops import BranchAudit  # noqa: E402
 from agentqueue.model import (  # noqa: E402
@@ -1119,6 +1120,152 @@ class TestExecutionBudget(unittest.TestCase):
         pol.hardToolCalls = -1
         with self.assertRaises(policy_mod.PolicyError):
             pol.validate()
+
+
+class TestSandboxProfiles(unittest.TestCase):
+    """A repository selects a named, locally pinned sandbox, never an image."""
+
+    def setUp(self):
+        self.known = tuple(sandbox_mod.load_profiles(_ROOT))
+
+    def repo_with(self, *paths, **contents):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for path in paths:
+            self.write(tmp.name, path, "")
+        for path, content in contents.items():
+            self.write(tmp.name, path, content)
+        return tmp.name
+
+    @staticmethod
+    def write(root, path, content):
+        full = os.path.join(root, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+    def detect(self, repo):
+        return sandbox_mod.detect_profile(repo, self.known)
+
+    def explicit(self, content):
+        return self.repo_with(**{"package.json": "", ".agentbox-profile": content})
+
+    # --- the manifest ------------------------------------------------------
+
+    def test_the_manifest_pins_every_profile_to_a_local_image(self):
+        profiles = sandbox_mod.load_profiles(_ROOT)
+        self.assertEqual(list(profiles)[:2], ["web", "python"])
+        for image in profiles.values():
+            self.assertTrue(image.startswith("localhost/"), image)
+
+    def manifest_with(self, text):
+        root = self.repo_with(**{"manifests/sandcastle.env": text})
+        return root
+
+    def test_a_quoted_manifest_value_means_the_value_without_quotes(self):
+        root = self.manifest_with(
+            'SANDBOX_PROFILES="web:SANDBOX"\n'
+            "SANDBOX_IMAGE='localhost/w'\nSANDBOX_TAG=1\n"
+        )
+        self.assertEqual(sandbox_mod.load_profiles(root), {"web": "localhost/w:1"})
+
+    def test_a_manifest_that_names_a_remote_image_is_refused(self):
+        root = self.manifest_with(
+            'SANDBOX_PROFILES="web:SANDBOX"\n'
+            "SANDBOX_IMAGE=docker.io/library/w\nSANDBOX_TAG=1\n"
+        )
+        with self.assertRaises(sandbox_mod.SandboxProfileError):
+            sandbox_mod.load_profiles(root)
+
+    def test_a_manifest_without_the_web_profile_is_refused(self):
+        root = self.manifest_with(
+            'SANDBOX_PROFILES="python:P"\nP_IMAGE=localhost/p\nP_TAG=1\n'
+        )
+        with self.assertRaises(sandbox_mod.SandboxProfileError):
+            sandbox_mod.load_profiles(root)
+
+    # --- detection ---------------------------------------------------------
+
+    def test_a_python_only_repository_resolves_to_python(self):
+        for marker in ("pyproject.toml", ".python-version", "uv.lock"):
+            with self.subTest(marker=marker):
+                repo = self.repo_with(marker, "src/pkg/__init__.py")
+                self.assertEqual(self.detect(repo), "python")
+
+    def test_a_repository_without_a_python_marker_stays_on_web(self):
+        self.assertEqual(self.detect(self.repo_with()), "web")
+        self.assertEqual(self.detect(self.repo_with("package.json")), "web")
+        self.assertEqual(self.detect(self.repo_with("app/pyproject.toml")), "web")
+
+    def test_a_polyglot_repository_stays_on_web(self):
+        for other in ("package.json", "web/package.json", "bun.lockb",
+                      "deno.json", "tsconfig.json", "Cargo.toml",
+                      "tools/go.mod", "src/App/App.csproj"):
+            with self.subTest(other=other):
+                repo = self.repo_with("pyproject.toml", other)
+                self.assertEqual(self.detect(repo), "web")
+
+    def test_installed_and_hidden_directories_do_not_count(self):
+        repo = self.repo_with(
+            "pyproject.toml",
+            "node_modules/left-pad/package.json",
+            ".venv/lib/package.json",
+            "venv/lib/package.json",
+        )
+        self.assertEqual(self.detect(repo), "python")
+
+    # --- the explicit profile file -----------------------------------------
+
+    def test_an_explicit_profile_wins_over_detection(self):
+        repo = self.explicit("# the sandbox\n\npython\n")
+        self.assertEqual(self.detect(repo), "python")
+
+    def test_an_unknown_profile_is_refused_and_not_repeated(self):
+        repo = self.explicit("docker.io/evil:1\n")
+        with self.assertRaises(sandbox_mod.SandboxProfileError) as caught:
+            self.detect(repo)
+        self.assertNotIn("evil", str(caught.exception))
+        self.assertIsInstance(caught.exception, policy_mod.PolicyError)
+
+    def test_more_than_one_profile_name_is_refused(self):
+        with self.assertRaises(sandbox_mod.SandboxProfileError):
+            self.detect(self.explicit("web\npython\n"))
+
+    def test_a_profile_file_that_is_a_link_is_refused_and_not_read(self):
+        outside = self.repo_with(**{"token": "python\n"})
+        repo = self.repo_with("package.json")
+        os.symlink(os.path.join(outside, "token"),
+                   os.path.join(repo, ".agentbox-profile"))
+        with self.assertRaises(sandbox_mod.SandboxProfileError) as caught:
+            self.detect(repo)
+        self.assertIn("symbolic link", str(caught.exception))
+
+    def test_a_profile_file_that_is_a_directory_is_refused(self):
+        repo = self.repo_with(".agentbox-profile/python")
+        with self.assertRaises(sandbox_mod.SandboxProfileError):
+            self.detect(repo)
+
+    def test_a_large_profile_file_is_refused(self):
+        with self.assertRaises(sandbox_mod.SandboxProfileError):
+            self.detect(self.explicit("# " + "x" * 400 + "\npython\n"))
+
+    # --- the handoff to agentbox -------------------------------------------
+
+    def test_resolve_returns_the_pinned_image_of_the_profile(self):
+        repo = self.repo_with("pyproject.toml")
+        profile, image = sandbox_mod.resolve(repo, _ROOT)
+        self.assertEqual(profile, "python")
+        self.assertEqual(image, sandbox_mod.load_profiles(_ROOT)["python"])
+
+    def test_the_runner_passes_only_the_image_it_was_given(self):
+        policy = fakes.make_policy()
+        args = ("/repo", "agent/x", "/p.md", "origin/main")
+        command = AgentboxRunner(
+            "agentbox", policy, "/logs", image="localhost/x:1"
+        ).command(*args)
+        self.assertEqual(command[command.index("--image") + 1], "localhost/x:1")
+        plain = AgentboxRunner("/opt/kit/bin/agentbox", policy, "/logs").command(*args)
+        self.assertNotIn("--image", plain)
 
 
 if __name__ == "__main__":

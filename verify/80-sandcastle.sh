@@ -73,6 +73,20 @@ else
     fail 'A21 host: ~/.local/bin/agentbox is installed and executable' \
          'run ./install.sh --components agentbox on the host'
 fi
+
+# agent-sandbox builds the images of the other sandbox profiles. It shares the
+# Podman client resolution with agentbox, and the component doctor proves its
+# entry point like the one for agentbox.
+AS=$REPO_ROOT/bin/agent-sandbox
+check 'A22 agent-sandbox is executable'      -- test -x "$AS"
+check 'A23 agent-sandbox parses'             -- bash -n "$AS"
+check 'A24 the Podman client helper parses'  -- bash -n "$REPO_ROOT/lib/podman-client.sh"
+check 'A25 the component doctor proves the agent-sandbox entry point' -- \
+    sh -c "grep -q 'agentbox agent-sandbox' '$REPO_ROOT/components/agentbox/doctor.sh'"
+check 'A26 the contract declares the agent-sandbox command' -- \
+    sh -c "grep -q '\"agent-sandbox\"' '$REPO_ROOT/components/agentbox/component.json'"
+check 'A27 the shared installer installs agent-sandbox' -- \
+    sh -c "grep -q 'install_user_command \"\$repo_root\" agent-sandbox' '$REPO_ROOT/bootstrap/lib/sandcastle.sh'"
 check 'A19 the clone identity probe is executable' -- \
     test -x "$REPO_ROOT/verify/probes/clone-identity.sh"
 check 'A20 the clone identity probe parses' -- \
@@ -115,7 +129,42 @@ if [ -f "$MANIFEST" ]; then
         [0-9]*) pass "B6 the import commit bound is configured ($manifest_commits)" ;;
         *) fail 'B6 the import commit bound is configured' "got: [$manifest_commits]" ;;
     esac
+
+    # A repository selects a profile name, never an image. Each profile must
+    # therefore map to a pinned local image and to a Containerfile of its own.
+    # docs/agent-sandbox-profiles.md says why.
+    profile_problems=$(
+        # shellcheck source=/dev/null
+        . "$MANIFEST"
+        for entry in ${SANDBOX_PROFILES:-}; do
+            name=${entry%%:*} prefix=${entry#*:}
+            image_var=${prefix}_IMAGE tag_var=${prefix}_TAG base_var=${prefix}_BASE
+            case ${!image_var:-} in
+                localhost/*) ;;
+                *) printf '%s: image is not a localhost/ image; ' "$name" ;;
+            esac
+            [ -n "${!tag_var:-}" ] || printf '%s: no tag; ' "$name"
+            [ -n "${!base_var:-}" ] || printf '%s: no base image; ' "$name"
+            [ -f "$REPO_ROOT/containers/sandbox-$name/Containerfile" ] ||
+                printf '%s: no Containerfile; ' "$name"
+        done
+        [ -n "${SANDBOX_PROFILES:-}" ] || printf 'SANDBOX_PROFILES is not set'
+    )
+    check_eq 'B8 every sandbox profile is pinned locally and has a Containerfile' '' \
+        "$profile_problems"
+    check_eq 'B9 agent-sandbox lists the profiles of the manifest' \
+        "$( . "$MANIFEST"; for entry in $SANDBOX_PROFILES; do printf '%s\n' "${entry%%:*}"; done )" \
+        "$("$REPO_ROOT/bin/agent-sandbox" list 2>&1 | awk '{print $1}')"
 fi
+
+# Every sandbox profile runs the same credential shim. A second copy is a
+# second credential boundary that can drift from the first.
+check_eq 'B10 the credential shim has exactly one copy' '1' \
+    "$(find "$REPO_ROOT/containers" -name agent-cli-shim -type f | wc -l | tr -d ' ')"
+check_contains 'B11 the Python sandbox copies the shared shim' 'COPY --from=shim' \
+    "$(code_of "$REPO_ROOT/containers/sandbox-python/Containerfile")"
+check_not_contains 'B12 the uv version has one pin, in the manifest' 'ARG UV_VERSION=' \
+    "$(code_of "$REPO_ROOT/containers/sandbox-python/Containerfile")"
 
 # --- the boundaries hold ----------------------------------------------------
 

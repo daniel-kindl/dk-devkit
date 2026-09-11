@@ -38,7 +38,6 @@ from .model import (
     extract_agentbox_summary,
     parse_agentbox_event,
 )
-from . import sandbox as sandbox_mod
 
 
 @dataclasses.dataclass
@@ -131,20 +130,16 @@ class AgentboxRunner:
         dry_run: bool = False,
         emit: Optional[Callable[[str], None]] = None,
         agent_output: str = "progress",
+        image: str = "",
     ):
         self.agentbox = agentbox
         self.policy = policy
         self.log_dir = log_dir
         self.dry_run = dry_run
         self.emit = emit or (lambda line: None)
-        # The real coordinator passes an absolute command from its install
-        # root. Unit tests may pass a plain command name, which intentionally
-        # leaves profile resolution off because no manifest can be located.
-        self.install_root = (
-            os.path.dirname(os.path.dirname(os.path.abspath(agentbox)))
-            if os.path.isabs(agentbox)
-            else ""
-        )
+        # The sandbox image that agentq resolved for this repository before
+        # the queue started, or "" for the agentbox default.
+        self.image = image
         # "progress" asks the orchestrator for structured lifecycle events and
         # a line-oriented agent stream. "terminal" leaves agentbox in its own
         # default, which renders Sandcastle's interactive terminal UI. The
@@ -183,9 +178,8 @@ class AgentboxRunner:
         # The repository selects only a named, locally pinned sandbox profile.
         # agentq still owns the trusted control plane in web-dev; this only
         # changes the disposable image that receives model output.
-        if self.install_root:
-            _profile, image = sandbox_mod.resolve(repo, self.install_root)
-            args += ["--image", image]
+        if self.image:
+            args += ["--image", self.image]
         # The resolved tier reaches agentbox as pinned model IDs, never as a
         # tier name. agentbox runs what it is told to run, and the choice
         # stays in the trusted layer that can explain it.

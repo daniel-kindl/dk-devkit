@@ -37,8 +37,10 @@ A sandbox receives no GitHub token, no SSH key, no ssh-agent socket and no
 Podman socket. It cannot push, cannot open a pull request and cannot merge,
 because it holds nothing that authenticates to GitHub. `agentq` adds
 nothing to a sandbox: it hands `agentbox` a repository path, a branch name, a
-prompt **file** and a set of limits, and `agentbox` decides what reaches the
-container.
+prompt **file**, a set of limits and the name of a locally pinned sandbox
+image, and `agentbox` decides what reaches the container.
+[agent-sandbox-profiles.md](agent-sandbox-profiles.md) explains how the
+repository selects that image.
 
 `verify.sh` module 8b proves the separation statically. It fails if
 `agentq` ever names `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`, the

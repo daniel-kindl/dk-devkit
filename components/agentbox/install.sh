@@ -19,5 +19,4 @@ component_args "$@"
 
 section 'Agent orchestration (agentbox)'
 install_agentbox "$REPO_ROOT"
-install_user_command "$REPO_ROOT" agent-sandbox "$HOME"
 summary

@@ -7,8 +7,13 @@
 # The image does not pin a Python interpreter. Each repository owns that choice
 # through pyproject.toml and/or .python-version. uv installs the requested
 # interpreter into this disposable HOME.
+#
+# Build with:  agent-sandbox build python
+#
+# UV_VERSION has no default. manifests/sandcastle.env pins it in
+# SANDBOX_PYTHON_BUILD_ARGS, and a build without it stops at the FROM line.
 
-ARG UV_VERSION=0.12.10
+ARG UV_VERSION
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 ARG SANDBOX_BASE=docker.io/library/debian:bookworm-slim
@@ -62,8 +67,12 @@ RUN set -eux; \
     "$HOME/.local/bin/claude" --version; \
     "$HOME/.local/bin/codex" --version
 
-COPY --chown=agent:agent --chmod=0755 bin/agent-cli-shim /opt/agents/bin/agent-cli-shim
+# The credential shim is the one in containers/sandbox-web/bin. agent-sandbox
+# passes that directory as the build context "shim", so the web and Python
+# images cannot run different shims. The web Containerfile explains the shim.
+COPY --from=shim --chown=agent:agent --chmod=0755 agent-cli-shim /opt/agents/bin/agent-cli-shim
 RUN set -eux; \
+    test -x /opt/agents/bin/agent-cli-shim; \
     ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/claude; \
     ln -sfn /opt/agents/bin/agent-cli-shim /opt/agents/bin/codex
 ENV PATH=/opt/agents/bin:/home/agent/.local/bin:$PATH

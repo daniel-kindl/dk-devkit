@@ -790,7 +790,8 @@ them.
 ## Commands
 
 ```bash
-agentbox build                      # build the runner and sandbox images
+agentbox build                      # build the runner and the web sandbox images
+agent-sandbox build python          # build another sandbox profile (see agent-sandbox-profiles.md)
 agentbox doctor                     # what is ready, what is missing
 agentbox selftest                   # prove the lifecycle on a throw-away repository
 agentbox selftest --adversarial     # attack the git directory and prove it reached nothing
