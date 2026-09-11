@@ -15,6 +15,8 @@ from __future__ import annotations
 import os
 from typing import Dict, Tuple
 
+from .policy import PolicyError
+
 PROFILE_FILE = ".agentbox-profile"
 DEFAULT_PROFILE = "web"
 
@@ -27,7 +29,7 @@ _PYTHON_MARKERS = ("pyproject.toml", ".python-version", "uv.lock")
 _WEB_MARKERS = ("package.json", "pnpm-lock.yaml", "package-lock.json", "yarn.lock")
 
 
-class SandboxProfileError(Exception):
+class SandboxProfileError(PolicyError):
     """The repository names a sandbox profile that cannot be resolved."""
 
 
