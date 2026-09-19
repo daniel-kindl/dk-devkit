@@ -147,8 +147,22 @@ engine() {
     "$PODMAN_BIN" "$@"
 }
 
+# engine_available - is there a client on THIS side? It never fails the run.
+#
+# The answer differs per side by design. The host has podman. A development
+# environment has one only when its package list asks for podman-remote, and
+# most do not. That is not a problem to report: creating the machine belongs
+# to the host, and using it does not need an engine at all.
+engine_available() { resolve_podman 2>/dev/null; }
+
+# container_state - the state of the container, or nothing.
+#
+# "nothing" covers both "there is no such container" and "this side cannot
+# ask". Only the commands that must reach the engine say so, and they say it
+# through "engine".
 container_state() {
-    engine inspect --type container --format '{{.State.Status}}' \
+    engine_available || return 0
+    "$PODMAN_BIN" inspect --type container --format '{{.State.Status}}' \
         "$WINDOWS_VM_CONTAINER" 2>/dev/null
 }
 
@@ -319,6 +333,11 @@ cmd_doctor() {
         else
             report note 'image' "$IMAGE_REF is not pulled yet; winbox up pulls it"
         fi
+    elif [ "$IN_CONTAINER" = 1 ]; then
+        # Creating the machine belongs to the host. This side only needs ssh,
+        # so an absent engine costs it "up", "logs", "start", "stop" and
+        # "destroy", and costs it nothing else.
+        report note 'container engine' 'none on this side; exec, shell, wait and status still work'
     else
         report FAIL 'container engine' 'no podman or podman-remote'
     fi
@@ -364,6 +383,28 @@ cmd_doctor() {
     fi
     printf 'this machine can run the Windows virtual machine\n'
     return 0
+}
+
+# explain_unreachable - one line that says WHY nothing answered.
+#
+# ssh reports 255 for every connection failure, and an agent needs to know
+# which one this is. The engine is consulted only when this side has one, so
+# the explanation gets better on the host and the command still works without.
+explain_unreachable() {
+    local state
+    state=$(container_state)
+    case $state in
+        running)
+            warn 'the machine runs, but Windows does not answer SSH yet. Run: winbox logs' ;;
+        '')
+            if engine_available; then
+                warn 'the machine does not exist. Run: winbox up'
+            else
+                warn "nothing answers $WINDOWS_VM_BIND:$WINDOWS_VM_SSH_PORT. Check it on the host: winbox status"
+            fi ;;
+        *)
+            warn "the machine is $state. Run: winbox start" ;;
+    esac
 }
 
 ssh_answers() {
@@ -466,8 +507,10 @@ cmd_wait() {
             *) fail 2 "unknown option for wait: $1" ;;
         esac
     done
-    container_exists || fail 3 'the machine does not exist. Run: winbox up'
-    container_running || fail 3 'the machine is not running. Run: winbox start'
+    if engine_available; then
+        container_exists || fail 3 'the machine does not exist. Run: winbox up'
+        container_running || fail 3 'the machine is not running. Run: winbox start'
+    fi
 
     local waited=0 interval=15
     info "waiting up to ${timeout}s for Windows to answer SSH"
@@ -476,7 +519,7 @@ cmd_wait() {
             info "Windows answers SSH after ${waited}s"
             return 0
         fi
-        if ! container_running; then
+        if engine_available && ! container_running; then
             fail 3 'the container stopped while waiting. Run: winbox logs'
         fi
         sleep "$interval"
@@ -486,45 +529,62 @@ cmd_wait() {
 }
 
 cmd_status() {
-    local state
+    local state engine_note=''
     state=$(container_state)
-    printf 'container   %-12s %s\n' "${state:-absent}" "$WINDOWS_VM_CONTAINER"
+    if ! engine_available; then
+        # No engine on this side. The container line would otherwise read
+        # "absent", which is a different thing and a misleading one.
+        engine_note=' (this side cannot ask; the host can)'
+        state=''
+    fi
+    printf 'container   %-12s %s%s\n' "${state:-unknown}" "$WINDOWS_VM_CONTAINER" "$engine_note"
     printf 'image       %s\n' "$IMAGE_REF"
     printf 'windows     %s\n' "$WINDOWS_VM_VERSION"
     printf 'ssh         %s@%s:%s\n' "$WINDOWS_VM_USERNAME" "$WINDOWS_VM_BIND" "$WINDOWS_VM_SSH_PORT"
     printf 'viewer      http://%s:%s\n' "$WINDOWS_VM_BIND" "$WINDOWS_VM_VIEWER_PORT"
     printf 'disk        %s\n' "$STORAGE_HOST"
-    if [ -z "$state" ]; then
-        printf 'windows     not installed yet. Run: winbox up --wait\n'
-        return 3
-    fi
-    if [ "$state" != running ]; then
-        printf 'windows     the container is %s. Run: winbox start\n' "$state"
-        return 3
-    fi
+    # The command channel is the question that matters, and it is one this
+    # side can always answer: the port is either open or it is not.
     if ssh_answers; then
         printf 'windows     answers the command channel\n'
         return 0
+    fi
+    if [ -z "$state" ] && engine_available; then
+        printf 'windows     not installed yet. Run: winbox up --wait\n'
+        return 3
+    fi
+    if [ -n "$state" ] && [ "$state" != running ]; then
+        printf 'windows     the container is %s. Run: winbox start\n' "$state"
+        return 3
     fi
     printf 'windows     does not answer SSH yet. Run: winbox logs --follow\n'
     return 3
 }
 
+# The command channel needs the key and ssh. It deliberately does NOT need a
+# container engine: an agent runs inside a development environment, most of
+# which have no engine client, and the machine is reached over a port that is
+# already open. A container engine only makes the FAILURE message better.
 cmd_exec() {
     [ $# -gt 0 ] || fail 2 'exec needs a command. Example: winbox exec ver'
-    container_running || fail 3 'the machine is not running. Run: winbox up'
-    [ -f "$KEY_VIEW" ] || fail 2 "no SSH key in $STATE_HOST/ssh. Run: winbox up"
+    [ -f "$KEY_VIEW" ] || fail 2 "no SSH key in $STATE_HOST/ssh. Run: winbox up on the host"
     build_ssh_base
     # One command line, sent as one argument. cmd.exe is the shell on the other
     # side, because the first boot set DefaultShell, so this returns what the
     # Windows command returned.
-    "${ssh_base[@]}" -- "$*"
+    local rc=0
+    "${ssh_base[@]}" -- "$*" || rc=$?
+    [ "$rc" = 255 ] && explain_unreachable
+    return "$rc"
 }
 
 cmd_shell() {
-    container_running || fail 3 'the machine is not running. Run: winbox up'
+    [ -f "$KEY_VIEW" ] || fail 2 "no SSH key in $STATE_HOST/ssh. Run: winbox up on the host"
     build_ssh_base
-    "${ssh_base[@]}" -t
+    local rc=0
+    "${ssh_base[@]}" -t || rc=$?
+    [ "$rc" = 255 ] && explain_unreachable
+    return "$rc"
 }
 
 cmd_logs() {

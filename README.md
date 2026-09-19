@@ -111,6 +111,8 @@ winbox exec ver
 winbox exec "dir C:\ && echo %COMPUTERNAME%"
 ```
 
+The command is installed on the host and in every development environment, so an agent types the same name wherever it works. That is one command name per environment and one machine for all of them: `winbox` resolves the disk, the key and the account from the host home whichever side it runs on, so `python-dev` and `web-dev` open the same Windows. Creating the machine needs the host; using it needs only `ssh` and the key.
+
 The machine is QEMU in a rootless Podman container, with `/dev/kvm`, running the Windows Server 2025 evaluation edition, which needs no product key. The first start downloads about 5G from Microsoft and installs Windows without a human, which takes tens of minutes; every later start is a normal boot.
 
 The definition is tracked here and the machine is not: `manifests/windows-vm.env` pins the image, the edition and the sizes, `config/windows-vm/oem/install.bat` is what the machine runs at its first boot, and the disk, the SSH key pair and the generated Windows password stay in `~/.local/share/windows-vm`. No credential is tracked, no credential is ever a command-line argument, and the virtual machine receives the public half of the key only. Both ports are bound to the loopback address. Read [docs/windows-vm.md](docs/windows-vm.md).

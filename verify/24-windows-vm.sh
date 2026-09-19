@@ -170,6 +170,48 @@ else
     done
 fi
 
+# --- ONE machine, however many environments reach it ------------------------
+#
+# The command is installed in the host home and in the isolated home of every
+# development environment, so an agent types the same name wherever it works.
+# That is one NAME per environment and one MACHINE for all of them: the state
+# always resolves from the HOST home, and the container name is fixed.
+#
+# The failure this checks for is a second Windows per environment, which would
+# cost a disk and an installation each, and would not hold the other's files.
+
+check 'W35 the container name is fixed, not derived' -- \
+    sh -c "! grep -Eq '^WINDOWS_VM_CONTAINER=.*[\$\`]' '$WV_MANIFEST'"
+
+WV_DISK=$("$WV" status 2>/dev/null | sed -n 's/^disk *//p')
+if [ -n "$WV_DISK" ]; then
+    check_not_contains 'W36 the disk is the host one, not this environment one' \
+        'distrobox-homes' "$WV_DISK"
+else
+    skip 'W36 the disk is the host one, not this environment one' 'status printed no disk'
+fi
+
+# The command inside each environment. Only an environment that EXISTS is
+# checked: an environment that was never created is not a missing command.
+WV_BOXES=0
+WV_MISSING=''
+for WV_BOX_HOME in "$HOST_HOME_VIEW"/.local/share/distrobox-homes/*/; do
+    [ -d "$WV_BOX_HOME" ] || continue
+    WV_BOXES=$(( WV_BOXES + 1 ))
+    [ -L "$WV_BOX_HOME.local/bin/winbox" ] ||
+        WV_MISSING="$WV_MISSING $(basename "$WV_BOX_HOME")"
+done
+if [ "$WV_BOXES" = 0 ]; then
+    skip 'W37 every development environment can type winbox' 'no environment on this machine'
+elif [ -z "$WV_MISSING" ]; then
+    pass "W37 every development environment can type winbox ($WV_BOXES environments)"
+else
+    fail 'W37 every development environment can type winbox' \
+         "no winbox in:$WV_MISSING" \
+         'run ./install.sh --components windows-vm'
+fi
+unset WV_DISK WV_BOXES WV_MISSING WV_BOX_HOME
+
 # --- the machine itself, only if it is already there ------------------------
 #
 # Verification creates nothing. It only reports what an existing machine is

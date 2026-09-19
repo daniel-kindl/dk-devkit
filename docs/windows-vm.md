@@ -68,7 +68,7 @@ failure instead of asking for a password that an unattended caller cannot give.
 
 ```
   agent
-    -> winbox exec            on the host, or inside a development container
+    -> winbox exec            on the host, or in ANY development environment
     -> ssh 127.0.0.1:2222     key authentication only
     -> a container            dockurr/windows, which is QEMU plus an installer
     -> QEMU, with /dev/kvm
@@ -97,6 +97,52 @@ Without that line everything looks correct and nothing works: the container
 runs, Windows installs, `podman ps` shows the published port, and every
 connection is refused. `./verify.sh --only 24` checks the line, because the
 failure gives no other signal.
+
+## One machine, every environment
+
+`winbox` is installed in the host home **and** in the isolated home of every
+development environment, so an agent types the same name wherever it works:
+
+```console
+python-dev $ winbox exec ver
+Microsoft Windows [Version 10.0.26100.32230]
+```
+
+That is one command **name** per environment and one **machine** for all of
+them. There is no Windows per environment. The container name is fixed in the
+manifest, and `winbox` resolves the disk, the key pair and the account from the
+HOST home whichever side it runs on, so every environment opens the same
+Windows:
+
+```console
+python-dev $ winbox exec "echo hello > C:\proof.txt"
+rust-dev   $ winbox exec type C:\proof.txt
+hello
+```
+
+`./verify.sh --only 24` checks both halves: that every existing environment can
+type the name, and that the disk it resolves is the host one and not one inside
+`distrobox-homes`.
+
+Creating the machine belongs to the host, and using it does not. A development
+environment normally has no container engine client, which costs it `up`,
+`logs`, `start`, `stop` and `destroy`, and costs it nothing else: `exec`,
+`shell`, `wait` and `status` need only `ssh` and the key. `winbox status` says
+so plainly rather than reporting the machine as absent:
+
+```console
+python-dev $ winbox status
+container   unknown      windows-vm (this side cannot ask; the host can)
+...
+windows     answers the command channel
+```
+
+An environment that is created later does not have the command until the
+component is installed again:
+
+```bash
+./install.sh --components windows-vm
+```
 
 ## The first start
 
