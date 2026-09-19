@@ -54,7 +54,7 @@ def adapters(*documents):
 
 
 def host(commands=(), executables=(), system="Linux", in_container=False,
-         os_release=None, wsl=False):
+         os_release=None, wsl=False, writables=()):
     return toolkit.Host(
         which=lambda name: f"/usr/bin/{name}" if name in commands else None,
         is_executable=lambda path: path in executables,
@@ -63,6 +63,7 @@ def host(commands=(), executables=(), system="Linux", in_container=False,
         in_container=in_container,
         os_release=os_release or {},
         wsl=wsl,
+        is_writable=lambda path: path in writables,
     )
 
 
@@ -206,6 +207,27 @@ class AdapterCapabilityCase(unittest.TestCase):
 
     def test_an_unknown_platform_offers_no_hint(self):
         self.assertEqual(toolkit.capability_hint(None, "distrobox"), "")
+
+    # A device is the one fact "executable" cannot answer. /dev/kvm is never
+    # executable, and a machine with the firmware switch off has no node at
+    # all, so only read and write access says whether this machine can run a
+    # virtual machine at all.
+    def test_the_virtualisation_device_is_read_as_a_device(self):
+        self.assertIn(
+            "kvm",
+            toolkit.detect_capabilities(self.capabilities,
+                                        host(writables={"/dev/kvm"})),
+        )
+        self.assertNotIn(
+            "kvm",
+            toolkit.detect_capabilities(self.capabilities,
+                                        host(executables={"/dev/kvm"})),
+        )
+
+    def test_a_machine_without_the_device_is_told_what_to_do(self):
+        bazzite = next(a for a in self.shipped if a.id == "bazzite")
+        self.assertNotIn("kvm", self.present("bazzite"))
+        self.assertIn("firmware", toolkit.capability_hint(bazzite, "kvm"))
 
     def test_every_shipped_adapter_is_consistent(self):
         toolkit.check_adapter_references(self.shipped, self.capabilities)

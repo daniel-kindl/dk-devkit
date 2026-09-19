@@ -43,7 +43,8 @@ ENVIRONMENT_KEYS = ("container", "ini", "packages", "toolchain", "bootstrap",
 ENVIRONMENT_REQUIRED = ("container", "inference")
 ENVIRONMENT_SUPPORTED_REQUIRED = ("ini", "packages", "toolchain", "bootstrap",
                                   "router", "home")
-PROBE_KINDS = ("command", "executable", "uname", "not-container", "any", "platform")
+PROBE_KINDS = ("command", "executable", "writable", "uname", "not-container",
+                "any", "platform")
 SUPPORT = ("verified", "supported", "experimental", "unsupported")
 
 # The public/local state boundary. state.public names tracked configuration
@@ -575,12 +576,19 @@ class Host:
     in_container: bool = False
     os_release: Mapping[str, str] = dataclasses.field(default_factory=dict)
     wsl: bool = False
+    # A device node this user can read and write. It is separate from
+    # is_executable because a device is never executable: /dev/kvm answers
+    # "this machine can run a virtual machine", and only the access mode says
+    # so. A machine with the firmware switch off has no node at all, and a
+    # machine that has one but keeps it for another group has no access.
+    is_writable: Callable[[str], bool] = lambda path: False
 
     @classmethod
     def detect(cls) -> "Host":
         return cls(
             which=lambda name: shutil.which(name),
             is_executable=lambda path: os.access(path, os.X_OK),
+            is_writable=lambda path: os.access(path, os.R_OK | os.W_OK),
             system=platform.system(),
             machine=platform.machine(),
             in_container=Path("/run/.containerenv").exists() or Path("/.dockerenv").exists(),
@@ -618,6 +626,8 @@ def probe_matches(probe: Mapping[str, object], host: Host) -> bool:
         return host.which(str(probe["value"])) is not None
     if kind == "executable":
         return host.is_executable(str(probe["value"]))
+    if kind == "writable":
+        return host.is_writable(str(probe["value"]))
     if kind == "uname":
         return host.system == probe["value"]
     if kind == "not-container":
