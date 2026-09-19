@@ -86,6 +86,18 @@ component, because without it there is no virtual machine at all.
 `/dev/net/tun` is what the image builds the machine's network on; without it
 the machine starts and answers no port. `winbox doctor` reports both.
 
+### Why the guest port has to be named
+
+Under rootless Podman the image cannot build a bridge, and it falls back to
+user-mode networking. A published port then reaches the **container** and stops
+there. Only a port named in `USER_PORTS` is carried the last step into Windows,
+which is why `WINDOWS_VM_USER_PORTS=22` is in the manifest.
+
+Without that line everything looks correct and nothing works: the container
+runs, Windows installs, `podman ps` shows the published port, and every
+connection is refused. `./verify.sh --only 24` checks the line, because the
+failure gives no other signal.
+
 ## The first start
 
 `winbox up` downloads about 5G of Microsoft installation media, and then
@@ -151,7 +163,9 @@ nothing else.
 holds no password. The first `winbox up` makes a 24-character password, writes
 it to `~/.local/share/windows-vm/vm.env` with mode 0600, and gives that file to
 Podman with `--env-file`. The value is never an argument, so it never appears
-in this computer's process list.
+in this computer's process list. It is still in the container configuration,
+where `podman inspect` shows it to the user who owns the container, which is
+the user who made it.
 
 **The private key never leaves the host.** The machine is given the public half
 only, staged next to the first-boot script. `./verify.sh --only 24` runs the

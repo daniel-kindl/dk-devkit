@@ -45,12 +45,19 @@ if [ "$WV_MANIFEST_OK" = 1 ]; then
     check_eq 'W12 the ports are bound to loopback' '127.0.0.1' "$WINDOWS_VM_BIND"
     check 'W13 no password is written in the manifest' -- \
         sh -c "! grep -Eq '^[A-Z_]*PASSWORD=' '$WV_MANIFEST'"
+    # The line that makes SSH reach Windows at all. Under rootless Podman the
+    # image falls back to user-mode networking, where a published port reaches
+    # the container and stops there. Only a port named here is carried the
+    # last step into Windows, and the failure without it is silent.
+    check_contains 'W13b the guest SSH port is forwarded in user-mode networking' \
+        '22' "$WINDOWS_VM_USER_PORTS"
 else
     for name in 'W9 the image tag is pinned, not "latest"' \
                 'W10 the image tag is a version' \
                 'W11 the pinned edition is Windows Server 2025' \
                 'W12 the ports are bound to loopback' \
-                'W13 no password is written in the manifest'; do
+                'W13 no password is written in the manifest' \
+                'W13b the guest SSH port is forwarded in user-mode networking'; do
         skip "$name" 'the manifest did not parse'
     done
 fi
@@ -61,6 +68,8 @@ fi
 # Passing it as "-e PASSWORD=..." instead would publish it in the process list
 # of this machine, where any other user can read it.
 
+check 'W13c winbox passes USER_PORTS to the container' -- \
+    grep -q -- '-e "USER_PORTS=\$WINDOWS_VM_USER_PORTS"' "$WV"
 check 'W14 the password reaches Podman through --env-file' -- \
     grep -q -- '--env-file "\$ENV_FILE_HOST"' "$WV"
 check 'W15 no password is ever a Podman argument' -- \

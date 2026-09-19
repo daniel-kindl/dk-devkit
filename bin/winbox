@@ -120,7 +120,8 @@ MANIFEST=$REPO_ROOT/manifests/windows-vm.env
 for _key in WINDOWS_VM_IMAGE WINDOWS_VM_TAG WINDOWS_VM_VERSION WINDOWS_VM_RAM \
             WINDOWS_VM_CPU_CORES WINDOWS_VM_DISK WINDOWS_VM_USERNAME \
             WINDOWS_VM_CONTAINER WINDOWS_VM_SSH_PORT WINDOWS_VM_VIEWER_PORT \
-            WINDOWS_VM_BIND WINDOWS_VM_STOP_TIMEOUT WINDOWS_VM_READY_TIMEOUT \
+            WINDOWS_VM_BIND WINDOWS_VM_USER_PORTS WINDOWS_VM_STOP_TIMEOUT \
+            WINDOWS_VM_READY_TIMEOUT \
             WINDOWS_VM_CONNECT_TIMEOUT; do
     [ -n "${!_key:-}" ] || fail 2 "$_key must be set in $MANIFEST"
 done
@@ -384,6 +385,7 @@ create_container() {
         -e "RAM_SIZE=$WINDOWS_VM_RAM" \
         -e "CPU_CORES=$WINDOWS_VM_CPU_CORES" \
         -e "DISK_SIZE=$WINDOWS_VM_DISK" \
+        -e "USER_PORTS=$WINDOWS_VM_USER_PORTS" \
         --device /dev/kvm \
         --device /dev/net/tun \
         --cap-add NET_ADMIN \
