@@ -86,3 +86,93 @@ create_development_environments() {
         manual "Bootstrap $id: devbox exec $id --cwd $repo_root -- ./$bootstrap"
     done < <(environment_modules "$repo_root" supported)
 }
+
+# environment_path <repo-root> <ini> <host-path>
+#
+# The way ONE container spells a host path, read from the volume mappings its
+# INI declares. Prints nothing when no mapping covers the path, which means
+# that container cannot see the path at all.
+#
+# The INI is the source of truth, so a mount that moves does not leave a
+# second copy of the mapping here.
+environment_path() {
+    local repo_root=$1 ini=$2 target=$3
+    local line spec source dest rest
+    [ -f "$repo_root/$ini" ] || return 0
+    target=$(readlink -m -- "$target")
+    while IFS= read -r line; do
+        case $line in volume=*) ;; *) continue ;; esac
+        spec=${line#volume=}
+        spec=${spec%\"}
+        spec=${spec#\"}
+        source=${spec%%:*}
+        rest=${spec#*:}
+        dest=${rest%%:*}
+        [ -n "$source" ] && [ -n "$dest" ] && [ "$source" != "$spec" ] || continue
+        # distrobox-assemble sources the parsed values, so the INI writes
+        # $HOME. Expanding it here is the same substitution, without an eval.
+        source=${source//\$\{HOME\}/$HOME}
+        source=${source//\$HOME/$HOME}
+        source=$(readlink -m -- "$source")
+        case $target in
+            "$source")   printf '%s' "$dest"; return 0 ;;
+            "$source"/*) printf '%s%s' "$dest" "${target#"$source"}"; return 0 ;;
+        esac
+    done < "$repo_root/$ini"
+}
+
+# install_environment_command <repo-root> <name>
+#
+# Makes bin/<name> a command inside every development environment that exists
+# on this machine, so that an agent working in one types the same name a
+# reader is told to type on the host.
+#
+# The link points at the checkout as THAT container spells it, so it is a
+# dangling link when the host looks at it and a correct one inside. Each
+# environment has an isolated HOME, which is why one link per environment is
+# needed and why none of them is the host link.
+#
+# This installs a NAME, and nothing else. Every environment reaches the same
+# runtime through it, because the command resolves its state from the host
+# home and not from the home it was started in.
+install_environment_command() {
+    local repo_root=$1 name=$2
+    local id status container ini packages toolchain bootstrap router inference home
+    local box_home target link current
+
+    [ -x "$repo_root/bin/$name" ] || die "bin/$name is not an executable in $repo_root"
+    if ! have python3; then
+        warn 'python3 is not installed; the environment modules cannot be read'
+        return 0
+    fi
+
+    while IFS=$'\t' read -r id status container ini packages toolchain \
+        bootstrap router inference home; do
+        [ -n "$id" ] && [ "$home" != - ] && [ "$ini" != - ] || continue
+        box_home=${home/#\~\//$HOME/}
+        box_home=${box_home%/}
+        # An environment that was never created has no home. Skip it rather
+        # than make one: the next installation reaches it after it exists.
+        [ -d "$box_home" ] || continue
+
+        target=$(environment_path "$repo_root" "$ini" "$repo_root/bin/$name")
+        if [ -z "$target" ]; then
+            warn "$id cannot see $repo_root; $name stays a host command there"
+            continue
+        fi
+
+        link=$box_home/.local/bin/$name
+        current=$(readlink -- "$link" 2>/dev/null || true)
+        if [ "$current" = "$target" ]; then
+            ok "$id: $name"
+            continue
+        fi
+        if [ -e "$link" ] || [ -L "$link" ]; then
+            save_copy "$link"
+        fi
+        ensure_dir "$(dirname -- "$link")"
+        run rm -f -- "$link"
+        run ln -s -- "$target" "$link"
+        change "$id: $name -> $target"
+    done < <(environment_modules "$repo_root" supported)
+}

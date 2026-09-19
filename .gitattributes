@@ -4,3 +4,6 @@
 *.tsv   text eol=lf
 *.json  text eol=lf
 *.toml  text eol=lf
+
+# A Windows batch file is read by cmd.exe, which expects CRLF.
+*.bat	text eol=crlf

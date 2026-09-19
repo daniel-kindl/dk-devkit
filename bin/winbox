@@ -1,0 +1,936 @@
+#!/usr/bin/env bash
+#
+# winbox - a Windows virtual machine that an agent drives over SSH.
+#
+#   winbox doctor               can this machine run the virtual machine?
+#   winbox up [--wait]          create it and start it
+#   winbox prepare              make the key and the first-boot files only
+#   winbox status               what the container and the machine are doing
+#   winbox wait [--timeout N]   block until the machine answers SSH
+#   winbox exec <command...>    run ONE cmd.exe command line in the machine
+#   winbox shell                an interactive cmd.exe session
+#   winbox logs [--follow]      the container log, which is the install progress
+#   winbox ssh-config           the ssh command, and a block for ~/.ssh/config
+#   winbox start                start a machine that exists
+#   winbox stop                 shut Windows down and stop the container
+#   winbox restart              stop, then start
+#   winbox destroy [--disk]     remove the container; --disk also takes the disk
+#   winbox help
+#
+# Restore points
+#
+#   winbox snapshot [NAME]      copy the machine to a restore point
+#   winbox snapshots            list the restore points
+#   winbox restore NAME         put the machine back to a restore point
+#   winbox snapshot-rm NAME     remove a restore point
+#
+#   A snapshot is the DISK, taken while Windows is shut down. snapshot stops
+#   the machine when it runs, and starts it again afterwards.
+#
+#   On a filesystem that can clone a file (btrfs, XFS) the copy is instant and
+#   costs almost nothing until one side is written. That makes it a restore
+#   point on THIS disk, and not a backup: a filesystem that fails takes the
+#   machine and every snapshot of it together.
+#
+# The agent channel
+#
+#   winbox exec sends ONE command line to cmd.exe and gives back what cmd.exe
+#   printed and the exit code it reported. Nothing is interpreted on the way:
+#
+#       $ winbox exec ver
+#       $ winbox exec "dir C:\ && echo %COMPUTERNAME%"
+#
+#   The arguments are joined with one space and sent as one command line, so a
+#   command line with a quoted argument is written as one argument here.
+#
+# Exit codes
+#
+#   0    the command worked
+#   2    usage, or the machine is not configured
+#   3    the virtual machine is not there, or does not answer
+#   255  ssh could not connect (ssh reports this; so can cmd.exe)
+#   *    any other code is what the Windows command returned
+#
+# Where things live
+#
+#   This repository holds the definition: manifests/windows-vm.env pins the
+#   image and the sizes, and config/windows-vm/oem/install.bat is what the
+#   machine runs at its first boot.
+#
+#   The machine itself is machine-local state under ~/.local/share/windows-vm:
+#   the disk, the SSH key pair and the generated Windows password. None of it
+#   is tracked, and the private key never leaves the host.
+#
+# See docs/windows-vm.md.
+
+set -uo pipefail
+
+PROGRAM=winbox
+
+fail() { local code=$1; shift; printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit "$code"; }
+info() { printf '%s: %s\n' "$PROGRAM" "$1"; }
+warn() { printf '%s: warning: %s\n' "$PROGRAM" "$1" >&2; }
+
+# usage - the comment header of this file, which is the only help text.
+# It stops at the first line that is not a comment, so the header can grow
+# without a line number here having to follow it.
+usage() { awk 'NR > 2 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; }
+
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# --------------------------------------------------------------- host paths --
+#
+# Every path that reaches Podman must be spelled the way the HOST spells it:
+# the host engine resolves a bind mount in its own namespace, and the container
+# spelling of a host directory does not exist for it. Two spellings are tracked:
+#
+#   *_HOST  what Podman is told
+#   *_VIEW  what THIS side opens with cat, ssh and mkdir
+
+IN_CONTAINER=0
+if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then IN_CONTAINER=1; fi
+
+if [ "$IN_CONTAINER" = 1 ]; then
+    HOST_HOME=${DISTROBOX_HOST_HOME:-/home/${USER:-$(id -un)}}
+else
+    HOST_HOME=$HOME
+fi
+
+# canon <path> - the path with every symlink resolved. An ostree system spells
+# the home directory both /home/<user> and /var/home/<user>, and a bind mount
+# source must be the same spelling on both sides.
+canon() { readlink -m -- "$1" 2>/dev/null || printf '%s' "$1"; }
+
+HOST_HOME=$(canon "$HOST_HOME")
+
+# Distrobox mounts the whole host root at /run/host. That is how this side
+# reaches a host path which has no container spelling of its own.
+HOST_VIEW_PREFIX=''
+if [ "$IN_CONTAINER" = 1 ] && [ -d /run/host/etc ]; then
+    HOST_VIEW_PREFIX=/run/host
+fi
+
+# view_path <host-path> - the same file, spelled the way THIS side opens it.
+view_path() { printf '%s%s' "$HOST_VIEW_PREFIX" "$1"; }
+
+# The machine-local state. WINBOX_STATE_DIR moves it, which is what the tests
+# use; a real machine needs a path the HOST engine can resolve.
+STATE_HOST=$(canon "${WINBOX_STATE_DIR:-$HOST_HOME/.local/share/windows-vm}")
+STATE_VIEW=$(view_path "$STATE_HOST")
+[ -n "${WINBOX_STATE_DIR:-}" ] && STATE_VIEW=$STATE_HOST
+
+STORAGE_HOST=$STATE_HOST/storage
+STORAGE_VIEW=$STATE_VIEW/storage
+OEM_HOST=$STATE_HOST/oem
+OEM_VIEW=$STATE_VIEW/oem
+KEY_VIEW=$STATE_VIEW/ssh/id_ed25519
+KNOWN_HOSTS_VIEW=$STATE_VIEW/ssh/known_hosts
+ENV_FILE_HOST=$STATE_HOST/vm.env
+ENV_FILE_VIEW=$STATE_VIEW/vm.env
+SNAPSHOTS_HOST=$STATE_HOST/snapshots
+SNAPSHOTS_VIEW=$STATE_VIEW/snapshots
+
+# ------------------------------------------------------------------ manifest --
+
+MANIFEST=$REPO_ROOT/manifests/windows-vm.env
+[ -f "$MANIFEST" ] || fail 2 "manifest not found: $MANIFEST"
+# shellcheck source=/dev/null
+. "$MANIFEST"
+
+for _key in WINDOWS_VM_IMAGE WINDOWS_VM_TAG WINDOWS_VM_VERSION WINDOWS_VM_RAM \
+            WINDOWS_VM_CPU_CORES WINDOWS_VM_DISK WINDOWS_VM_USERNAME \
+            WINDOWS_VM_CONTAINER WINDOWS_VM_SSH_PORT WINDOWS_VM_VIEWER_PORT \
+            WINDOWS_VM_BIND WINDOWS_VM_USER_PORTS WINDOWS_VM_STOP_TIMEOUT \
+            WINDOWS_VM_READY_TIMEOUT \
+            WINDOWS_VM_CONNECT_TIMEOUT; do
+    [ -n "${!_key:-}" ] || fail 2 "$_key must be set in $MANIFEST"
+done
+unset _key
+
+IMAGE_REF=$WINDOWS_VM_IMAGE:$WINDOWS_VM_TAG
+OEM_TEMPLATE=$REPO_ROOT/config/windows-vm/oem/install.bat
+
+# -------------------------------------------------------------- the engine --
+
+# shellcheck source=../lib/podman-client.sh
+. "$REPO_ROOT/lib/podman-client.sh"
+
+# engine - run one command against the container engine.
+#
+# The function is NOT called "podman". resolve_podman finds the client with
+# "command -v podman", and "command -v" answers with the NAME of a shell
+# function when one exists. A wrapper of that name therefore resolves to
+# itself, and every engine call becomes an endless recursion that produces no
+# output and no error at all.
+engine() {
+    resolve_podman || fail 2 'no Podman client. Install podman, or podman-remote inside a container.'
+    "$PODMAN_BIN" "$@"
+}
+
+# engine_available - is there a client on THIS side? It never fails the run.
+#
+# The answer differs per side by design. The host has podman. A development
+# environment has one only when its package list asks for podman-remote, and
+# most do not. That is not a problem to report: creating the machine belongs
+# to the host, and using it does not need an engine at all.
+engine_available() { resolve_podman 2>/dev/null; }
+
+# container_state - the state of the container, or nothing.
+#
+# "nothing" covers both "there is no such container" and "this side cannot
+# ask". Only the commands that must reach the engine say so, and they say it
+# through "engine".
+container_state() {
+    engine_available || return 0
+    "$PODMAN_BIN" inspect --type container --format '{{.State.Status}}' \
+        "$WINDOWS_VM_CONTAINER" 2>/dev/null
+}
+
+container_exists() { [ -n "$(container_state)" ]; }
+container_running() { [ "$(container_state)" = running ]; }
+
+# ----------------------------------------------------------------- the keys --
+
+ssh_base=()
+
+build_ssh_base() {
+    # BatchMode=yes is the rule that makes this usable without a human: ssh
+    # reports a failure instead of asking for a password and waiting for an
+    # answer that an unattended caller cannot give.
+    ssh_base=(
+        ssh
+        -p "$WINDOWS_VM_SSH_PORT"
+        -i "$KEY_VIEW"
+        -o IdentitiesOnly=yes
+        -o BatchMode=yes
+        -o StrictHostKeyChecking=accept-new
+        -o UserKnownHostsFile="$KNOWN_HOSTS_VIEW"
+        -o ConnectTimeout="$WINDOWS_VM_CONNECT_TIMEOUT"
+        -o LogLevel=ERROR
+        "$WINDOWS_VM_USERNAME@$WINDOWS_VM_BIND"
+    )
+}
+
+ensure_keypair() {
+    mkdir -p -- "$STATE_VIEW/ssh"
+    chmod 700 -- "$STATE_VIEW/ssh"
+    if [ -f "$KEY_VIEW" ]; then
+        return 0
+    fi
+    command -v ssh-keygen >/dev/null 2>&1 || fail 2 'ssh-keygen is not installed'
+    info "making the SSH key pair in $STATE_HOST/ssh"
+    ssh-keygen -q -t ed25519 -N '' -C "winbox@$(uname -n)" -f "$KEY_VIEW" ||
+        fail 2 'ssh-keygen failed'
+    chmod 600 -- "$KEY_VIEW"
+}
+
+# ensure_env_file - the Windows account, in a file only this user can read.
+#
+# The password is made here and never written into this repository, and it is
+# never an argument either: Podman reads it from the file with --env-file, so
+# it does not appear in the process list of this machine.
+ensure_env_file() {
+    if [ -f "$ENV_FILE_VIEW" ]; then
+        return 0
+    fi
+    local password='' attempt=0
+    # 24 letters and digits, from the kernel random source. Windows can refuse
+    # a local administrator password that has no upper case letter, no lower
+    # case letter or no digit, so a draw without all three is drawn again
+    # rather than discovered at the end of an unattended installation.
+    while [ "$attempt" -lt 20 ]; do
+        attempt=$(( attempt + 1 ))
+        password=$(head -c 96 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-24)
+        [ ${#password} -eq 24 ] || continue
+        case $password in
+            *[A-Z]*) ;; *) continue ;;
+        esac
+        case $password in
+            *[a-z]*) ;; *) continue ;;
+        esac
+        case $password in
+            *[0-9]*) break ;; *) continue ;;
+        esac
+    done
+    [ ${#password} -eq 24 ] || fail 2 'could not make a password'
+    mkdir -p -- "$STATE_VIEW"
+    ( umask 077; printf 'USERNAME=%s\nPASSWORD=%s\n' "$WINDOWS_VM_USERNAME" "$password" \
+        > "$ENV_FILE_VIEW" )
+    chmod 600 -- "$ENV_FILE_VIEW"
+    info "made the Windows account \"$WINDOWS_VM_USERNAME\"; the password is in $ENV_FILE_HOST"
+}
+
+# ensure_storage - the directory the virtual machine disk lives in.
+#
+# A copy-on-write filesystem and a virtual machine disk are a bad pair. Windows
+# rewrites its disk constantly, every rewrite allocates new extents, and the
+# image fragments until it is slow. The image itself warns about it.
+#
+# btrfs can turn copy-on-write off for a directory, and a file inherits the
+# setting at the moment it is CREATED. This therefore runs before the disk
+# exists, and it changes nothing about a disk that is already there.
+ensure_storage() {
+    mkdir -p -- "$STORAGE_VIEW" || fail 2 "cannot make $STORAGE_HOST"
+    command -v chattr >/dev/null 2>&1 || return 0
+    [ "$(stat -f -c %T -- "$STORAGE_VIEW" 2>/dev/null)" = btrfs ] || return 0
+    # The first field only. The path that follows it can hold a "C" of its own.
+    case $(lsattr -d -- "$STORAGE_VIEW" 2>/dev/null | awk '{print $1}') in
+        *C*) return 0 ;;
+    esac
+    if chattr +C -- "$STORAGE_VIEW" 2>/dev/null; then
+        info "copy-on-write is off for $STORAGE_HOST (btrfs)"
+    else
+        warn "copy-on-write stays on for $STORAGE_HOST; the disk will fragment"
+    fi
+}
+
+# stage_oem - the first-boot directory the machine reads.
+#
+# The tracked template is copied, never mounted, and the PUBLIC key is written
+# next to it. The line endings are made CRLF here rather than trusted to the
+# checkout, because cmd.exe reads the file and a checkout can normalise.
+stage_oem() {
+    [ -f "$OEM_TEMPLATE" ] || fail 2 "the first-boot template is missing: $OEM_TEMPLATE"
+    mkdir -p -- "$OEM_VIEW"
+    sed -e 's/\r$//' -e 's/$/\r/' "$OEM_TEMPLATE" > "$OEM_VIEW/install.bat"
+    sed -e 's/\r$//' -e 's/$/\r/' "$KEY_VIEW.pub" > "$OEM_VIEW/authorized_keys"
+    chmod 644 -- "$OEM_VIEW/install.bat" "$OEM_VIEW/authorized_keys"
+}
+
+# --------------------------------------------------------------- the checks --
+
+port_is_free() {
+    local port=$1
+    if command -v ss >/dev/null 2>&1; then
+        ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ":$port\$"
+        return
+    fi
+    return 0
+}
+
+cmd_doctor() {
+    local problems=0
+    printf 'winbox doctor\n'
+    printf '  checkout          %s\n' "$REPO_ROOT"
+    printf '  running on        %s\n' \
+        "$( [ "$IN_CONTAINER" = 1 ] && printf 'inside a container' || printf 'the host' )"
+    printf '  state             %s\n' "$STATE_HOST"
+    printf '  image             %s\n' "$IMAGE_REF"
+    printf '  windows           %s\n' "$WINDOWS_VM_VERSION"
+    printf '  machine           %s RAM, %s cores, %s disk\n' \
+        "$WINDOWS_VM_RAM" "$WINDOWS_VM_CPU_CORES" "$WINDOWS_VM_DISK"
+    printf '  ssh               %s:%s\n' "$WINDOWS_VM_BIND" "$WINDOWS_VM_SSH_PORT"
+    printf '  viewer            http://%s:%s\n' "$WINDOWS_VM_BIND" "$WINDOWS_VM_VIEWER_PORT"
+    printf '\n'
+
+    report() {
+        local verdict=$1 name=$2 detail=${3:-}
+        printf '  %-4s %-22s %s\n' "$verdict" "$name" "$detail"
+        [ "$verdict" = FAIL ] && problems=$(( problems + 1 ))
+        return 0
+    }
+
+    # The two host devices QEMU needs. /dev/kvm is the declared capability of
+    # this component; /dev/net/tun is what the image builds its network on, and
+    # without it the machine starts with no network and answers no port.
+    if [ -w /dev/kvm ] && [ -r /dev/kvm ]; then
+        report ok '/dev/kvm' 'hardware virtualisation is available'
+    else
+        report FAIL '/dev/kvm' 'absent or not writable; turn on SVM or VT-x, or join the kvm group'
+    fi
+    if [ -w /dev/net/tun ] && [ -r /dev/net/tun ]; then
+        report ok '/dev/net/tun' 'the machine can have a network'
+    else
+        report FAIL '/dev/net/tun' 'absent or not writable; the machine would answer no port'
+    fi
+
+    if resolve_podman; then
+        local engine_version
+        engine_version=$("$PODMAN_BIN" --version 2>/dev/null | head -1)
+        report ok 'container engine' "${engine_version:-$PODMAN_BIN}${CONTAINER_HOST:+ (remote)}"
+        if "$PODMAN_BIN" image exists "$IMAGE_REF" 2>/dev/null; then
+            report ok 'image' "$IMAGE_REF is pulled"
+        else
+            report note 'image' "$IMAGE_REF is not pulled yet; winbox up pulls it"
+        fi
+    elif [ "$IN_CONTAINER" = 1 ]; then
+        # Creating the machine belongs to the host. This side only needs ssh,
+        # so an absent engine costs it "up", "logs", "start", "stop" and
+        # "destroy", and costs it nothing else.
+        report note 'container engine' 'none on this side; exec, shell, wait and status still work'
+    else
+        report FAIL 'container engine' 'no podman or podman-remote'
+    fi
+
+    for tool in ssh ssh-keygen; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            report ok "$tool" "$(command -v "$tool")"
+        else
+            report FAIL "$tool" 'not installed on this side'
+        fi
+    done
+
+    if [ -f "$OEM_TEMPLATE" ]; then
+        report ok 'first-boot script' "${OEM_TEMPLATE#"$REPO_ROOT"/}"
+    else
+        report FAIL 'first-boot script' "missing: $OEM_TEMPLATE"
+    fi
+
+    if [ -f "$KEY_VIEW" ]; then
+        report ok 'ssh key' "$STATE_HOST/ssh/id_ed25519"
+    else
+        report note 'ssh key' 'not made yet; winbox up makes it'
+    fi
+
+    local state
+    state=$(container_state)
+    if [ -z "$state" ]; then
+        report note 'the machine' 'does not exist yet; run: winbox up --wait'
+    elif [ "$state" = running ]; then
+        if ssh_answers; then
+            report ok 'the machine' 'running, and Windows answers SSH'
+        else
+            report note 'the machine' 'running, but Windows does not answer SSH yet'
+        fi
+    else
+        report note 'the machine' "exists, and is $state; run: winbox start"
+    fi
+
+    printf '\n'
+    if [ "$problems" -gt 0 ]; then
+        printf '%s: %d requirement(s) are missing\n' "$PROGRAM" "$problems" >&2
+        return 1
+    fi
+    printf 'this machine can run the Windows virtual machine\n'
+    return 0
+}
+
+# explain_unreachable - one line that says WHY nothing answered.
+#
+# ssh reports 255 for every connection failure, and an agent needs to know
+# which one this is. The engine is consulted only when this side has one, so
+# the explanation gets better on the host and the command still works without.
+explain_unreachable() {
+    local state
+    state=$(container_state)
+    case $state in
+        running)
+            warn 'the machine runs, but Windows does not answer SSH yet. Run: winbox logs' ;;
+        '')
+            if engine_available; then
+                warn 'the machine does not exist. Run: winbox up'
+            else
+                warn "nothing answers $WINDOWS_VM_BIND:$WINDOWS_VM_SSH_PORT. Check it on the host: winbox status"
+            fi ;;
+        *)
+            warn "the machine is $state. Run: winbox start" ;;
+    esac
+}
+
+ssh_answers() {
+    build_ssh_base
+    "${ssh_base[@]}" -o ConnectTimeout=5 -- "exit 0" >/dev/null 2>&1
+}
+
+# ------------------------------------------------------------------ the VM --
+
+create_container() {
+    local storage_host=$STORAGE_HOST oem_host=$OEM_HOST
+
+    # SELinux gives a bind mount a private container label with ":Z". Only the
+    # paths this command owns are ever relabelled.
+    engine run -d \
+        --name "$WINDOWS_VM_CONTAINER" \
+        --env-file "$ENV_FILE_HOST" \
+        -e "VERSION=$WINDOWS_VM_VERSION" \
+        -e "RAM_SIZE=$WINDOWS_VM_RAM" \
+        -e "CPU_CORES=$WINDOWS_VM_CPU_CORES" \
+        -e "DISK_SIZE=$WINDOWS_VM_DISK" \
+        -e "USER_PORTS=$WINDOWS_VM_USER_PORTS" \
+        --device /dev/kvm \
+        --device /dev/net/tun \
+        --cap-add NET_ADMIN \
+        --stop-timeout "$WINDOWS_VM_STOP_TIMEOUT" \
+        -p "$WINDOWS_VM_BIND:$WINDOWS_VM_SSH_PORT:22" \
+        -p "$WINDOWS_VM_BIND:$WINDOWS_VM_VIEWER_PORT:8006" \
+        -v "$storage_host:/storage:Z" \
+        -v "$oem_host:/oem:ro,Z" \
+        "$IMAGE_REF" >/dev/null || fail 3 'the container could not be created'
+}
+
+cmd_up() {
+    local wait=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --wait) wait=1; shift ;;
+            *) fail 2 "unknown option for up: $1" ;;
+        esac
+    done
+
+    [ -w /dev/kvm ] || fail 2 '/dev/kvm is absent or not writable. Run: winbox doctor'
+    [ -w /dev/net/tun ] || fail 2 '/dev/net/tun is absent or not writable. Run: winbox doctor'
+
+    cmd_prepare
+
+    local state
+    state=$(container_state)
+    if [ "$state" = running ]; then
+        info "the machine is already running"
+    elif [ -n "$state" ]; then
+        info "starting the machine that exists ($state)"
+        engine start "$WINDOWS_VM_CONTAINER" >/dev/null || fail 3 'the machine did not start'
+    else
+        port_is_free "$WINDOWS_VM_SSH_PORT" ||
+            warn "something already listens on port $WINDOWS_VM_SSH_PORT"
+        info "creating the machine from $IMAGE_REF"
+        info 'the first start downloads the Windows media and installs it without a human'
+        create_container
+    fi
+
+    printf '\n'
+    printf '  watch the installation   winbox logs --follow\n'
+    printf '  or in a browser          http://%s:%s\n' "$WINDOWS_VM_BIND" "$WINDOWS_VM_VIEWER_PORT"
+    printf '  wait for the command channel  winbox wait\n'
+    printf '  then                     winbox exec ver\n'
+    printf '\n'
+
+    if [ "$wait" = 1 ]; then
+        cmd_wait
+        return
+    fi
+    return 0
+}
+
+# cmd_prepare - everything "up" does before Podman is asked for anything.
+#
+# It is separate so that the setup can be proven with no container, no image
+# and no network: WINBOX_STATE_DIR points it at a scratch directory, and the
+# result is the exact set of files a real machine would be given.
+cmd_prepare() {
+    [ $# -eq 0 ] || fail 2 "prepare takes no option: $1"
+    ensure_storage
+    ensure_keypair
+    ensure_env_file
+    stage_oem
+    info "ready in $STATE_HOST"
+    printf '  disk        %s\n' "$STORAGE_HOST"
+    printf '  key pair    %s\n' "$STATE_HOST/ssh/id_ed25519"
+    printf '  account     %s\n' "$ENV_FILE_HOST"
+    printf '  first boot  %s\n' "$OEM_HOST"
+}
+
+cmd_wait() {
+    local timeout=$WINDOWS_VM_READY_TIMEOUT
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --timeout) timeout=${2:?--timeout needs a number of seconds}; shift 2 ;;
+            *) fail 2 "unknown option for wait: $1" ;;
+        esac
+    done
+    if engine_available; then
+        container_exists || fail 3 'the machine does not exist. Run: winbox up'
+        container_running || fail 3 'the machine is not running. Run: winbox start'
+    fi
+
+    local waited=0 interval=15
+    info "waiting up to ${timeout}s for Windows to answer SSH"
+    while [ "$waited" -lt "$timeout" ]; do
+        if ssh_answers; then
+            info "Windows answers SSH after ${waited}s"
+            return 0
+        fi
+        if engine_available && ! container_running; then
+            fail 3 'the container stopped while waiting. Run: winbox logs'
+        fi
+        sleep "$interval"
+        waited=$(( waited + interval ))
+    done
+    fail 3 "Windows did not answer SSH within ${timeout}s. Run: winbox logs"
+}
+
+cmd_status() {
+    local state engine_note=''
+    state=$(container_state)
+    if ! engine_available; then
+        # No engine on this side. The container line would otherwise read
+        # "absent", which is a different thing and a misleading one.
+        engine_note=' (this side cannot ask; the host can)'
+        state=''
+    fi
+    printf 'container   %-12s %s%s\n' "${state:-unknown}" "$WINDOWS_VM_CONTAINER" "$engine_note"
+    printf 'image       %s\n' "$IMAGE_REF"
+    printf 'windows     %s\n' "$WINDOWS_VM_VERSION"
+    printf 'ssh         %s@%s:%s\n' "$WINDOWS_VM_USERNAME" "$WINDOWS_VM_BIND" "$WINDOWS_VM_SSH_PORT"
+    printf 'viewer      http://%s:%s\n' "$WINDOWS_VM_BIND" "$WINDOWS_VM_VIEWER_PORT"
+    printf 'disk        %s\n' "$STORAGE_HOST"
+    # The command channel is the question that matters, and it is one this
+    # side can always answer: the port is either open or it is not.
+    if ssh_answers; then
+        printf 'windows     answers the command channel\n'
+        return 0
+    fi
+    if [ -z "$state" ] && engine_available; then
+        printf 'windows     not installed yet. Run: winbox up --wait\n'
+        return 3
+    fi
+    if [ -n "$state" ] && [ "$state" != running ]; then
+        printf 'windows     the container is %s. Run: winbox start\n' "$state"
+        return 3
+    fi
+    printf 'windows     does not answer SSH yet. Run: winbox logs --follow\n'
+    return 3
+}
+
+# The command channel needs the key and ssh. It deliberately does NOT need a
+# container engine: an agent runs inside a development environment, most of
+# which have no engine client, and the machine is reached over a port that is
+# already open. A container engine only makes the FAILURE message better.
+cmd_exec() {
+    [ $# -gt 0 ] || fail 2 'exec needs a command. Example: winbox exec ver'
+    [ -f "$KEY_VIEW" ] || fail 2 "no SSH key in $STATE_HOST/ssh. Run: winbox up on the host"
+    build_ssh_base
+    # One command line, sent as one argument. cmd.exe is the shell on the other
+    # side, because the first boot set DefaultShell, so this returns what the
+    # Windows command returned.
+    local rc=0
+    "${ssh_base[@]}" -- "$*" || rc=$?
+    [ "$rc" = 255 ] && explain_unreachable
+    return "$rc"
+}
+
+cmd_shell() {
+    [ -f "$KEY_VIEW" ] || fail 2 "no SSH key in $STATE_HOST/ssh. Run: winbox up on the host"
+    build_ssh_base
+    local rc=0
+    "${ssh_base[@]}" -t || rc=$?
+    [ "$rc" = 255 ] && explain_unreachable
+    return "$rc"
+}
+
+cmd_logs() {
+    local follow=()
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -f|--follow) follow=(--follow); shift ;;
+            *) fail 2 "unknown option for logs: $1" ;;
+        esac
+    done
+    container_exists || fail 3 'the machine does not exist. Run: winbox up'
+    engine logs "${follow[@]}" "$WINDOWS_VM_CONTAINER"
+}
+
+cmd_ssh_config() {
+    printf '# one command\n'
+    printf 'ssh -p %s -i %s %s@%s\n\n' \
+        "$WINDOWS_VM_SSH_PORT" "$STATE_HOST/ssh/id_ed25519" \
+        "$WINDOWS_VM_USERNAME" "$WINDOWS_VM_BIND"
+    printf '# or a block for ~/.ssh/config, which also gives scp and rsync the machine\n'
+    printf 'Host windows-vm\n'
+    printf '    HostName %s\n' "$WINDOWS_VM_BIND"
+    printf '    Port %s\n' "$WINDOWS_VM_SSH_PORT"
+    printf '    User %s\n' "$WINDOWS_VM_USERNAME"
+    printf '    IdentityFile %s\n' "$STATE_HOST/ssh/id_ed25519"
+    printf '    IdentitiesOnly yes\n'
+    printf '    StrictHostKeyChecking accept-new\n'
+}
+
+cmd_start() {
+    container_exists || fail 3 'the machine does not exist. Run: winbox up'
+    container_running && { info 'the machine is already running'; return 0; }
+    engine start "$WINDOWS_VM_CONTAINER" >/dev/null || fail 3 'the machine did not start'
+    info 'started. Windows needs a minute before it answers SSH'
+}
+
+cmd_stop() {
+    container_exists || fail 3 'the machine does not exist'
+    info "shutting Windows down, up to ${WINDOWS_VM_STOP_TIMEOUT}s"
+    engine stop --time "$WINDOWS_VM_STOP_TIMEOUT" "$WINDOWS_VM_CONTAINER" >/dev/null ||
+        fail 3 'the machine did not stop'
+    info 'stopped'
+}
+
+cmd_restart() { cmd_stop && cmd_start; }
+
+cmd_destroy() {
+    local disk=0 yes=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --disk) disk=1; shift ;;
+            --yes|-y) yes=1; shift ;;
+            *) fail 2 "unknown option for destroy: $1" ;;
+        esac
+    done
+
+    printf 'this removes the container %s\n' "$WINDOWS_VM_CONTAINER"
+    if [ "$disk" = 1 ]; then
+        printf 'and the disk in %s, which is the installed Windows\n' "$STORAGE_HOST"
+    else
+        printf 'and keeps the disk in %s, so the next "winbox up" is fast\n' "$STORAGE_HOST"
+    fi
+
+    if [ "$yes" != 1 ]; then
+        [ -t 0 ] || fail 2 'no terminal to ask on. Repeat the command with --yes'
+        local answer
+        read -r -p 'type "yes" to go on: ' answer
+        [ "$answer" = yes ] || fail 2 'nothing was removed'
+    fi
+
+    if container_exists; then
+        engine rm --force --time "$WINDOWS_VM_STOP_TIMEOUT" "$WINDOWS_VM_CONTAINER" >/dev/null ||
+            fail 3 'the container could not be removed'
+        info 'the container is removed'
+    else
+        info 'there was no container'
+    fi
+
+    if [ "$disk" = 1 ] && [ -d "$STORAGE_VIEW" ]; then
+        rm -rf -- "$STORAGE_VIEW"
+        info "the disk in $STORAGE_HOST is removed"
+        info "the SSH key and the password in $STATE_HOST are kept"
+    fi
+}
+
+# ------------------------------------------------------------- restore points --
+#
+# A snapshot is a copy of the storage directory: the disk, the firmware
+# variables and the installation media. It is NOT a copy of the SSH key or of
+# the Windows account, which live beside it and are not credentials to hand
+# around in a copy. Both keep working across a restore because neither changes.
+
+# snapshot_name_ok <name> - a plain name, and nothing that walks the tree.
+#
+# The name becomes a directory under the snapshot directory, so a name with a
+# slash or a leading dot could reach outside it. A restore removes what it
+# replaces, which is why the check is here and not in the documentation.
+snapshot_name_ok() {
+    case $1 in
+        ''|.|..)          return 1 ;;
+        -*|*/*)           return 1 ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 64 ]
+}
+
+# clone_dir <source> <destination> - copy a directory, sharing extents if it can.
+#
+# btrfs and XFS can clone a file: the copy is instant, and it costs nothing
+# until one of the two sides is written. btrfs refuses to clone between files
+# whose copy-on-write settings differ, so the destination directory is marked
+# the same way the storage directory is before anything is copied into it.
+clone_dir() {
+    local source=$1 dest=$2 file base cloned=0 copied=0
+    mkdir -p -- "$dest" || return 1
+    if command -v chattr >/dev/null 2>&1 &&
+       [ "$(stat -f -c %T -- "$dest" 2>/dev/null)" = btrfs ]; then
+        chattr +C -- "$dest" 2>/dev/null || true
+    fi
+    for file in "$source"/*; do
+        [ -f "$file" ] || continue
+        base=$(basename -- "$file")
+        if cp --reflink=always -- "$file" "$dest/$base" 2>/dev/null; then
+            cloned=$(( cloned + 1 ))
+        elif cp --sparse=always -- "$file" "$dest/$base"; then
+            copied=$(( copied + 1 ))
+        else
+            return 1
+        fi
+    done
+    if [ "$copied" -gt 0 ]; then
+        info "copied $copied file(s) in full; this filesystem cannot clone them"
+    fi
+    [ "$cloned" -gt 0 ] || [ "$copied" -gt 0 ]
+}
+
+cmd_snapshot() {
+    # "no name given" and "an empty name given" are different. Only the first
+    # one gets the default, so an empty argument is refused instead of quietly
+    # starting work the caller did not ask for.
+    local name='' given=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -*) fail 2 "unknown option for snapshot: $1" ;;
+            *)  [ "$given" = 0 ] || fail 2 'snapshot takes one name'
+                given=1; name=$1; shift ;;
+        esac
+    done
+    [ "$given" = 1 ] || name=$(date +%Y-%m-%d-%H%M)
+    snapshot_name_ok "$name" ||
+        fail 2 "not a usable snapshot name: $name (letters, digits, dot, dash, underscore)"
+
+    [ -d "$STORAGE_VIEW" ] || fail 3 'there is no machine to snapshot. Run: winbox up'
+    [ -f "$STORAGE_VIEW/data.img" ] ||
+        fail 3 'there is no disk in the storage directory yet'
+    local dest=$SNAPSHOTS_VIEW/$name
+    [ -e "$dest" ] && fail 2 "a snapshot called $name already exists"
+
+    engine_available ||
+        fail 2 'a snapshot needs the container engine, to shut Windows down first. Run it on the host.'
+
+    # A restore point of a machine that is running is a restore point of a
+    # machine that was interrupted. Windows is shut down first, and started
+    # again afterwards only when it was running to begin with.
+    local was_running=0
+    if container_running; then
+        was_running=1
+        info 'shutting Windows down so that the snapshot is a clean one'
+        cmd_stop
+    fi
+
+    info "taking the snapshot $name"
+    if ! clone_dir "$STORAGE_VIEW" "$dest"; then
+        rm -rf -- "$dest"
+        [ "$was_running" = 1 ] && cmd_start
+        fail 3 'the snapshot could not be taken'
+    fi
+
+    ( umask 022; cat > "$dest/snapshot.env" <<SNAP
+# What this restore point holds. winbox snapshots reads it.
+WINBOX_SNAPSHOT_NAME=$name
+WINBOX_SNAPSHOT_TAKEN=$(date -Is)
+WINBOX_SNAPSHOT_WINDOWS=$WINDOWS_VM_VERSION
+WINBOX_SNAPSHOT_IMAGE=$IMAGE_REF
+SNAP
+    )
+
+    info "the snapshot is in $SNAPSHOTS_HOST/$name"
+    if [ "$was_running" = 1 ]; then
+        cmd_start
+    fi
+    return 0
+}
+
+cmd_snapshots() {
+    [ $# -eq 0 ] || fail 2 "snapshots takes no option: $1"
+    if [ ! -d "$SNAPSHOTS_VIEW" ]; then
+        printf 'no snapshot yet. Take one with: winbox snapshot\n'
+        return 0
+    fi
+    local dir name taken windows size found=0
+    printf '%-24s %-26s %-9s %s\n' NAME TAKEN WINDOWS SIZE
+    for dir in "$SNAPSHOTS_VIEW"/*/; do
+        [ -d "$dir" ] || continue
+        found=1
+        name=$(basename -- "$dir")
+        taken=''; windows=''
+        if [ -f "$dir/snapshot.env" ]; then
+            taken=$(sed -n 's/^WINBOX_SNAPSHOT_TAKEN=//p' "$dir/snapshot.env")
+            windows=$(sed -n 's/^WINBOX_SNAPSHOT_WINDOWS=//p' "$dir/snapshot.env")
+        fi
+        size=$(du -sh -- "$dir" 2>/dev/null | cut -f1)
+        printf '%-24s %-26s %-9s %s\n' "$name" "${taken:-unknown}" "${windows:-?}" "${size:-?}"
+    done
+    if [ "$found" = 0 ]; then
+        printf 'no snapshot yet. Take one with: winbox snapshot\n'
+        return 0
+    fi
+    printf '\nA size counts shared extents, so a clone reads as its full size while\n'
+    printf 'costing almost nothing. These are restore points on this disk, not backups.\n'
+}
+
+cmd_restore() {
+    local name='' yes=0 given=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --yes|-y) yes=1; shift ;;
+            -*) fail 2 "unknown option for restore: $1" ;;
+            *)  [ "$given" = 0 ] || fail 2 'restore takes one name'
+                given=1; name=$1; shift ;;
+        esac
+    done
+    [ "$given" = 1 ] || fail 2 'restore needs the name of a snapshot. See: winbox snapshots'
+    snapshot_name_ok "$name" || fail 2 "not a usable snapshot name: $name"
+    local source=$SNAPSHOTS_VIEW/$name
+    [ -d "$source" ] || fail 3 "there is no snapshot called $name. See: winbox snapshots"
+    [ -f "$source/data.img" ] || fail 3 "the snapshot $name holds no disk"
+
+    engine_available ||
+        fail 2 'a restore needs the container engine, to stop the machine first. Run it on the host.'
+
+    printf 'this replaces the machine in %s\n' "$STORAGE_HOST"
+    printf 'with the snapshot %s, and everything Windows has written since is lost\n' "$name"
+    if [ "$yes" != 1 ]; then
+        [ -t 0 ] || fail 2 'no terminal to ask on. Repeat the command with --yes'
+        local answer
+        read -r -p 'type "yes" to go on: ' answer
+        [ "$answer" = yes ] || fail 2 'nothing was restored'
+    fi
+
+    local was_running=0
+    if container_running; then
+        was_running=1
+        cmd_stop
+    fi
+
+    # The live directory is moved aside first, and removed only after the
+    # restore worked. A restore that fails half way would otherwise leave no
+    # machine at all.
+    local aside=$STATE_VIEW/storage.replacing.$$
+    mv -- "$STORAGE_VIEW" "$aside" || fail 3 'the current disk could not be moved aside'
+    if ! clone_dir "$source" "$STORAGE_VIEW"; then
+        rm -rf -- "$STORAGE_VIEW"
+        mv -- "$aside" "$STORAGE_VIEW"
+        fail 3 "the restore failed; the machine is unchanged"
+    fi
+    rm -f -- "$STORAGE_VIEW/snapshot.env"
+    rm -rf -- "$aside"
+    info "the machine is back at the snapshot $name"
+
+    if [ "$was_running" = 1 ]; then
+        cmd_start
+    else
+        info 'start it with: winbox start'
+    fi
+}
+
+cmd_snapshot_rm() {
+    local name='' yes=0 given=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --yes|-y) yes=1; shift ;;
+            -*) fail 2 "unknown option for snapshot-rm: $1" ;;
+            *)  [ "$given" = 0 ] || fail 2 'snapshot-rm takes one name'
+                given=1; name=$1; shift ;;
+        esac
+    done
+    [ "$given" = 1 ] || fail 2 'snapshot-rm needs the name of a snapshot'
+    snapshot_name_ok "$name" || fail 2 "not a usable snapshot name: $name"
+    local dir=$SNAPSHOTS_VIEW/$name
+    [ -d "$dir" ] || fail 3 "there is no snapshot called $name"
+
+    printf 'this removes the snapshot %s, and it cannot be undone\n' "$name"
+    if [ "$yes" != 1 ]; then
+        [ -t 0 ] || fail 2 'no terminal to ask on. Repeat the command with --yes'
+        local answer
+        read -r -p 'type "yes" to go on: ' answer
+        [ "$answer" = yes ] || fail 2 'nothing was removed'
+    fi
+    rm -rf -- "$dir"
+    info "the snapshot $name is removed"
+}
+
+# -------------------------------------------------------------------- main --
+
+[ $# -gt 0 ] || { usage; exit 2; }
+
+command=$1; shift
+case $command in
+    doctor)      cmd_doctor "$@" ;;
+    up)          cmd_up "$@" ;;
+    prepare)     cmd_prepare "$@" ;;
+    wait)        cmd_wait "$@" ;;
+    status)      cmd_status "$@" ;;
+    exec)        cmd_exec "$@" ;;
+    shell)       cmd_shell "$@" ;;
+    logs)        cmd_logs "$@" ;;
+    ssh-config)  cmd_ssh_config "$@" ;;
+    start)       cmd_start "$@" ;;
+    stop)        cmd_stop "$@" ;;
+    restart)     cmd_restart "$@" ;;
+    destroy)     cmd_destroy "$@" ;;
+    snapshot)    cmd_snapshot "$@" ;;
+    snapshots)   cmd_snapshots "$@" ;;
+    restore)     cmd_restore "$@" ;;
+    snapshot-rm) cmd_snapshot_rm "$@" ;;
+    help|-h|--help) usage ;;
+    *)           fail 2 "unknown command: $command (try: winbox help)" ;;
+esac

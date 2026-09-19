@@ -53,6 +53,11 @@
       }
     },
     {
+      "id": "kvm",
+      "summary": "hardware virtualisation through /dev/kvm, which a virtual machine needs",
+      "probe": { "kind": "writable", "value": "/dev/kvm" }
+    },
+    {
       "id": "distrobox",
       "summary": "the distrobox command",
       "probe": { "kind": "command", "value": "distrobox" }

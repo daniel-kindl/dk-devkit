@@ -99,6 +99,26 @@ The host command is a router shim; the real coordinator currently runs inside `w
 
 The coordinator's public name is `agentq`. Some durable internal identifiers intentionally keep the older `agentqueue` name, including `.agentqueue.json`, existing run-state paths, internal configuration variables, and historical claim markers.
 
+### `winbox`
+
+One Windows computer that an agent can drive. `winbox exec` sends a single `cmd.exe` command line over SSH and returns what the command printed and the exit code it reported, which is what an agent needs and what a desktop cannot give.
+
+```bash
+./install.sh --components windows-vm   # the command, once per machine
+winbox doctor                          # can this machine run it?
+winbox up --wait                       # create it; the first start installs Windows
+winbox exec ver
+winbox exec "dir C:\ && echo %COMPUTERNAME%"
+```
+
+The command is installed on the host and in every development environment, so an agent types the same name wherever it works. That is one command name per environment and one machine for all of them: `winbox` resolves the disk, the key and the account from the host home whichever side it runs on, so `python-dev` and `web-dev` open the same Windows. Creating the machine needs the host; using it needs only `ssh` and the key.
+
+The machine is QEMU in a rootless Podman container, with `/dev/kvm`, running the Windows Server 2025 evaluation edition, which needs no product key. The first start downloads about 5G from Microsoft and installs Windows without a human, which takes tens of minutes; every later start is a normal boot.
+
+`winbox snapshot` takes a restore point: it shuts Windows down, copies the disk, and starts it again. On btrfs or XFS the copy shares its extents, so it is instant and costs almost nothing until one side is written. It is a restore point on the same disk, not a backup. `winbox restore <name>` puts the machine back.
+
+The definition is tracked here and the machine is not: `manifests/windows-vm.env` pins the image, the edition and the sizes, `config/windows-vm/oem/install.bat` is what the machine runs at its first boot, and the disk, the SSH key pair and the generated Windows password stay in `~/.local/share/windows-vm`. No credential is tracked, no credential is ever a command-line argument, and the virtual machine receives the public half of the key only. Both ports are bound to the loopback address. Read [docs/windows-vm.md](docs/windows-vm.md).
+
 ### `repo-labels` and `repo-meta`
 
 Two GitHub repository settings are tracked here rather than typed into a web form, so that each one is reviewable in a pull request and checkable afterwards.

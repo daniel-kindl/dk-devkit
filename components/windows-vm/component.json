@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "id": "windows-vm",
+  "name": "windows-vm machine",
+  "kind": "runtime",
+  "group": "Development environments",
+  "status": "supported",
+  "summary": "A Windows virtual machine in a container, which an agent drives over SSH with the winbox command.",
+  "requires": [],
+  "capabilities": ["linux", "host", "container-runtime", "kvm"],
+  "unattended": true,
+  "commands": ["winbox"],
+  "install": ["components/windows-vm/install.sh"],
+  "doctor": ["components/windows-vm/doctor.sh"],
+  "verify": ["./verify.sh", "--only", "24"],
+  "manual": [
+    "Create the machine once: winbox up --wait. The first start downloads about 5G of Microsoft installation media and installs Windows without a human, which takes between 20 minutes and an hour.",
+    "The pinned edition is the Windows Server 2025 evaluation, which needs no product key and runs for 180 days. Another edition, or a longer life, needs a licence of your own."
+  ],
+  "state": {
+    "public": ["manifests/windows-vm.env", "config/windows-vm/"],
+    "local": ["~/.local/share/windows-vm/"]
+  }
+}

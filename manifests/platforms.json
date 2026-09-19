@@ -22,6 +22,7 @@
         "homebrew": "Install Homebrew on Bazzite: run \"ujust install-brew\", then run the installer again.",
         "distrobox": "Bazzite ships Distrobox. If it is absent, layer it: rpm-ostree install distrobox.",
         "container-runtime": "Bazzite ships Podman. If it is absent, layer it: rpm-ostree install podman.",
+        "kvm": "Bazzite ships KVM. If /dev/kvm is absent, turn on SVM or VT-x in the firmware setup. If it is present but refuses access, add your user to the kvm group: sudo usermod -aG kvm \"$USER\", then log in again.",
         "flatpak": "Bazzite ships Flatpak. Add the Flathub remote: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo.",
         "gh": "Install the GitHub CLI with Homebrew: brew install gh.",
         "git": "Bazzite ships git.",
@@ -48,6 +49,7 @@
         "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
         "distrobox": "sudo dnf install distrobox",
         "container-runtime": "sudo dnf install podman",
+        "kvm": "sudo dnf install qemu-kvm, turn on SVM or VT-x in the firmware setup, then add your user to the kvm group: sudo usermod -aG kvm \"$USER\".",
         "flatpak": "sudo dnf install flatpak",
         "gh": "sudo dnf install gh",
         "git": "sudo dnf install git",
@@ -74,6 +76,7 @@
         "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
         "distrobox": "sudo apt-get install distrobox",
         "container-runtime": "sudo apt-get install podman",
+        "kvm": "sudo apt-get install qemu-kvm, turn on SVM or VT-x in the firmware setup, then add your user to the kvm group: sudo adduser \"$USER\" kvm.",
         "flatpak": "sudo apt-get install flatpak",
         "gh": "Follow https://github.com/cli/cli/blob/trunk/docs/install_linux.md, then: sudo apt-get install gh",
         "git": "sudo apt-get install git",
@@ -100,6 +103,7 @@
         "homebrew": "Install Homebrew from https://brew.sh, then run the installer again.",
         "distrobox": "sudo pacman -S distrobox",
         "container-runtime": "sudo pacman -S podman",
+        "kvm": "sudo pacman -S qemu-base, turn on SVM or VT-x in the firmware setup, then add your user to the kvm group: sudo usermod -aG kvm \"$USER\".",
         "flatpak": "sudo pacman -S flatpak",
         "gh": "sudo pacman -S github-cli",
         "git": "sudo pacman -S git",
@@ -134,7 +138,8 @@
         "xz": "brew install xz",
         "python3": "brew install python",
         "linux": "This component needs a Linux kernel. Run it in a Linux virtual machine.",
-        "distrobox": "Distrobox needs a Linux kernel. Run it in a Linux virtual machine."
+        "distrobox": "Distrobox needs a Linux kernel. Run it in a Linux virtual machine.",
+        "kvm": "macOS has no /dev/kvm. Run the virtual machine on a Linux machine."
       }
     }
   ]
