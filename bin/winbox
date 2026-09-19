@@ -17,6 +17,21 @@
 #   winbox destroy [--disk]     remove the container; --disk also takes the disk
 #   winbox help
 #
+# Restore points
+#
+#   winbox snapshot [NAME]      copy the machine to a restore point
+#   winbox snapshots            list the restore points
+#   winbox restore NAME         put the machine back to a restore point
+#   winbox snapshot-rm NAME     remove a restore point
+#
+#   A snapshot is the DISK, taken while Windows is shut down. snapshot stops
+#   the machine when it runs, and starts it again afterwards.
+#
+#   On a filesystem that can clone a file (btrfs, XFS) the copy is instant and
+#   costs almost nothing until one side is written. That makes it a restore
+#   point on THIS disk, and not a backup: a filesystem that fails takes the
+#   machine and every snapshot of it together.
+#
 # The agent channel
 #
 #   winbox exec sends ONE command line to cmd.exe and gives back what cmd.exe
@@ -56,7 +71,10 @@ fail() { local code=$1; shift; printf '%s: %s\n' "$PROGRAM" "$*" >&2; exit "$cod
 info() { printf '%s: %s\n' "$PROGRAM" "$1"; }
 warn() { printf '%s: warning: %s\n' "$PROGRAM" "$1" >&2; }
 
-usage() { sed -n '3,49p' "$0" | sed 's/^#\{1,2\} \{0,1\}//;s/^#$//'; }
+# usage - the comment header of this file, which is the only help text.
+# It stops at the first line that is not a comment, so the header can grow
+# without a line number here having to follow it.
+usage() { awk 'NR > 2 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; }
 
 REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
 
@@ -109,6 +127,8 @@ KEY_VIEW=$STATE_VIEW/ssh/id_ed25519
 KNOWN_HOSTS_VIEW=$STATE_VIEW/ssh/known_hosts
 ENV_FILE_HOST=$STATE_HOST/vm.env
 ENV_FILE_VIEW=$STATE_VIEW/vm.env
+SNAPSHOTS_HOST=$STATE_HOST/snapshots
+SNAPSHOTS_VIEW=$STATE_VIEW/snapshots
 
 # ------------------------------------------------------------------ manifest --
 
@@ -670,6 +690,224 @@ cmd_destroy() {
     fi
 }
 
+# ------------------------------------------------------------- restore points --
+#
+# A snapshot is a copy of the storage directory: the disk, the firmware
+# variables and the installation media. It is NOT a copy of the SSH key or of
+# the Windows account, which live beside it and are not credentials to hand
+# around in a copy. Both keep working across a restore because neither changes.
+
+# snapshot_name_ok <name> - a plain name, and nothing that walks the tree.
+#
+# The name becomes a directory under the snapshot directory, so a name with a
+# slash or a leading dot could reach outside it. A restore removes what it
+# replaces, which is why the check is here and not in the documentation.
+snapshot_name_ok() {
+    case $1 in
+        ''|.|..)          return 1 ;;
+        -*|*/*)           return 1 ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 64 ]
+}
+
+# clone_dir <source> <destination> - copy a directory, sharing extents if it can.
+#
+# btrfs and XFS can clone a file: the copy is instant, and it costs nothing
+# until one of the two sides is written. btrfs refuses to clone between files
+# whose copy-on-write settings differ, so the destination directory is marked
+# the same way the storage directory is before anything is copied into it.
+clone_dir() {
+    local source=$1 dest=$2 file base cloned=0 copied=0
+    mkdir -p -- "$dest" || return 1
+    if command -v chattr >/dev/null 2>&1 &&
+       [ "$(stat -f -c %T -- "$dest" 2>/dev/null)" = btrfs ]; then
+        chattr +C -- "$dest" 2>/dev/null || true
+    fi
+    for file in "$source"/*; do
+        [ -f "$file" ] || continue
+        base=$(basename -- "$file")
+        if cp --reflink=always -- "$file" "$dest/$base" 2>/dev/null; then
+            cloned=$(( cloned + 1 ))
+        elif cp --sparse=always -- "$file" "$dest/$base"; then
+            copied=$(( copied + 1 ))
+        else
+            return 1
+        fi
+    done
+    if [ "$copied" -gt 0 ]; then
+        info "copied $copied file(s) in full; this filesystem cannot clone them"
+    fi
+    [ "$cloned" -gt 0 ] || [ "$copied" -gt 0 ]
+}
+
+cmd_snapshot() {
+    # "no name given" and "an empty name given" are different. Only the first
+    # one gets the default, so an empty argument is refused instead of quietly
+    # starting work the caller did not ask for.
+    local name='' given=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -*) fail 2 "unknown option for snapshot: $1" ;;
+            *)  [ "$given" = 0 ] || fail 2 'snapshot takes one name'
+                given=1; name=$1; shift ;;
+        esac
+    done
+    [ "$given" = 1 ] || name=$(date +%Y-%m-%d-%H%M)
+    snapshot_name_ok "$name" ||
+        fail 2 "not a usable snapshot name: $name (letters, digits, dot, dash, underscore)"
+
+    [ -d "$STORAGE_VIEW" ] || fail 3 'there is no machine to snapshot. Run: winbox up'
+    [ -f "$STORAGE_VIEW/data.img" ] ||
+        fail 3 'there is no disk in the storage directory yet'
+    local dest=$SNAPSHOTS_VIEW/$name
+    [ -e "$dest" ] && fail 2 "a snapshot called $name already exists"
+
+    engine_available ||
+        fail 2 'a snapshot needs the container engine, to shut Windows down first. Run it on the host.'
+
+    # A restore point of a machine that is running is a restore point of a
+    # machine that was interrupted. Windows is shut down first, and started
+    # again afterwards only when it was running to begin with.
+    local was_running=0
+    if container_running; then
+        was_running=1
+        info 'shutting Windows down so that the snapshot is a clean one'
+        cmd_stop
+    fi
+
+    info "taking the snapshot $name"
+    if ! clone_dir "$STORAGE_VIEW" "$dest"; then
+        rm -rf -- "$dest"
+        [ "$was_running" = 1 ] && cmd_start
+        fail 3 'the snapshot could not be taken'
+    fi
+
+    ( umask 022; cat > "$dest/snapshot.env" <<SNAP
+# What this restore point holds. winbox snapshots reads it.
+WINBOX_SNAPSHOT_NAME=$name
+WINBOX_SNAPSHOT_TAKEN=$(date -Is)
+WINBOX_SNAPSHOT_WINDOWS=$WINDOWS_VM_VERSION
+WINBOX_SNAPSHOT_IMAGE=$IMAGE_REF
+SNAP
+    )
+
+    info "the snapshot is in $SNAPSHOTS_HOST/$name"
+    if [ "$was_running" = 1 ]; then
+        cmd_start
+    fi
+    return 0
+}
+
+cmd_snapshots() {
+    [ $# -eq 0 ] || fail 2 "snapshots takes no option: $1"
+    if [ ! -d "$SNAPSHOTS_VIEW" ]; then
+        printf 'no snapshot yet. Take one with: winbox snapshot\n'
+        return 0
+    fi
+    local dir name taken windows size found=0
+    printf '%-24s %-26s %-9s %s\n' NAME TAKEN WINDOWS SIZE
+    for dir in "$SNAPSHOTS_VIEW"/*/; do
+        [ -d "$dir" ] || continue
+        found=1
+        name=$(basename -- "$dir")
+        taken=''; windows=''
+        if [ -f "$dir/snapshot.env" ]; then
+            taken=$(sed -n 's/^WINBOX_SNAPSHOT_TAKEN=//p' "$dir/snapshot.env")
+            windows=$(sed -n 's/^WINBOX_SNAPSHOT_WINDOWS=//p' "$dir/snapshot.env")
+        fi
+        size=$(du -sh -- "$dir" 2>/dev/null | cut -f1)
+        printf '%-24s %-26s %-9s %s\n' "$name" "${taken:-unknown}" "${windows:-?}" "${size:-?}"
+    done
+    if [ "$found" = 0 ]; then
+        printf 'no snapshot yet. Take one with: winbox snapshot\n'
+        return 0
+    fi
+    printf '\nA size counts shared extents, so a clone reads as its full size while\n'
+    printf 'costing almost nothing. These are restore points on this disk, not backups.\n'
+}
+
+cmd_restore() {
+    local name='' yes=0 given=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --yes|-y) yes=1; shift ;;
+            -*) fail 2 "unknown option for restore: $1" ;;
+            *)  [ "$given" = 0 ] || fail 2 'restore takes one name'
+                given=1; name=$1; shift ;;
+        esac
+    done
+    [ "$given" = 1 ] || fail 2 'restore needs the name of a snapshot. See: winbox snapshots'
+    snapshot_name_ok "$name" || fail 2 "not a usable snapshot name: $name"
+    local source=$SNAPSHOTS_VIEW/$name
+    [ -d "$source" ] || fail 3 "there is no snapshot called $name. See: winbox snapshots"
+    [ -f "$source/data.img" ] || fail 3 "the snapshot $name holds no disk"
+
+    engine_available ||
+        fail 2 'a restore needs the container engine, to stop the machine first. Run it on the host.'
+
+    printf 'this replaces the machine in %s\n' "$STORAGE_HOST"
+    printf 'with the snapshot %s, and everything Windows has written since is lost\n' "$name"
+    if [ "$yes" != 1 ]; then
+        [ -t 0 ] || fail 2 'no terminal to ask on. Repeat the command with --yes'
+        local answer
+        read -r -p 'type "yes" to go on: ' answer
+        [ "$answer" = yes ] || fail 2 'nothing was restored'
+    fi
+
+    local was_running=0
+    if container_running; then
+        was_running=1
+        cmd_stop
+    fi
+
+    # The live directory is moved aside first, and removed only after the
+    # restore worked. A restore that fails half way would otherwise leave no
+    # machine at all.
+    local aside=$STATE_VIEW/storage.replacing.$$
+    mv -- "$STORAGE_VIEW" "$aside" || fail 3 'the current disk could not be moved aside'
+    if ! clone_dir "$source" "$STORAGE_VIEW"; then
+        rm -rf -- "$STORAGE_VIEW"
+        mv -- "$aside" "$STORAGE_VIEW"
+        fail 3 "the restore failed; the machine is unchanged"
+    fi
+    rm -f -- "$STORAGE_VIEW/snapshot.env"
+    rm -rf -- "$aside"
+    info "the machine is back at the snapshot $name"
+
+    if [ "$was_running" = 1 ]; then
+        cmd_start
+    else
+        info 'start it with: winbox start'
+    fi
+}
+
+cmd_snapshot_rm() {
+    local name='' yes=0 given=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --yes|-y) yes=1; shift ;;
+            -*) fail 2 "unknown option for snapshot-rm: $1" ;;
+            *)  [ "$given" = 0 ] || fail 2 'snapshot-rm takes one name'
+                given=1; name=$1; shift ;;
+        esac
+    done
+    [ "$given" = 1 ] || fail 2 'snapshot-rm needs the name of a snapshot'
+    snapshot_name_ok "$name" || fail 2 "not a usable snapshot name: $name"
+    local dir=$SNAPSHOTS_VIEW/$name
+    [ -d "$dir" ] || fail 3 "there is no snapshot called $name"
+
+    printf 'this removes the snapshot %s, and it cannot be undone\n' "$name"
+    if [ "$yes" != 1 ]; then
+        [ -t 0 ] || fail 2 'no terminal to ask on. Repeat the command with --yes'
+        local answer
+        read -r -p 'type "yes" to go on: ' answer
+        [ "$answer" = yes ] || fail 2 'nothing was removed'
+    fi
+    rm -rf -- "$dir"
+    info "the snapshot $name is removed"
+}
+
 # -------------------------------------------------------------------- main --
 
 [ $# -gt 0 ] || { usage; exit 2; }
@@ -689,6 +927,10 @@ case $command in
     stop)        cmd_stop "$@" ;;
     restart)     cmd_restart "$@" ;;
     destroy)     cmd_destroy "$@" ;;
+    snapshot)    cmd_snapshot "$@" ;;
+    snapshots)   cmd_snapshots "$@" ;;
+    restore)     cmd_restore "$@" ;;
+    snapshot-rm) cmd_snapshot_rm "$@" ;;
     help|-h|--help) usage ;;
     *)           fail 2 "unknown command: $command (try: winbox help)" ;;
 esac

@@ -212,6 +212,38 @@ else
 fi
 unset WV_DISK WV_BOXES WV_MISSING WV_BOX_HOME
 
+# --- restore points ---------------------------------------------------------
+#
+# A snapshot name becomes a directory, and a restore REMOVES what it replaces.
+# A name that walks the tree would therefore reach outside the snapshot
+# directory and delete something else, so the refusal is checked and not left
+# to the documentation. Each of these exits before it touches anything.
+
+for WV_BAD in '../escape' 'a/b' '..' '' 'has space'; do
+    check "W38 a snapshot name that walks the tree is refused [$WV_BAD]" -- \
+        sh -c "'$WV' snapshot '$WV_BAD' >/dev/null 2>&1; test \$? = 2"
+    check "W39 the same name is refused by restore [$WV_BAD]" -- \
+        sh -c "'$WV' restore '$WV_BAD' >/dev/null 2>&1; test \$? = 2"
+done
+unset WV_BAD
+
+check 'W40 winbox snapshots answers without a machine' -- "$WV" snapshots
+
+# A snapshot is the DISK. The SSH key and the Windows account live beside the
+# storage directory, not inside it, and a copy of the machine must not turn
+# into a copy of them.
+WV_SNAPSHOT_ROOT=$HOST_HOME_VIEW/.local/share/windows-vm/snapshots
+if [ -d "$WV_SNAPSHOT_ROOT" ]; then
+    check 'W41 no snapshot holds the account file' -- \
+        sh -c "! find '$WV_SNAPSHOT_ROOT' -name 'vm.env' | grep ."
+    check 'W42 no snapshot holds a private key' -- \
+        sh -c "! find '$WV_SNAPSHOT_ROOT' -name 'id_ed25519*' | grep ."
+else
+    skip 'W41 no snapshot holds the account file' 'no snapshot on this machine'
+    skip 'W42 no snapshot holds a private key' 'no snapshot on this machine'
+fi
+unset WV_SNAPSHOT_ROOT
+
 # --- the machine itself, only if it is already there ------------------------
 #
 # Verification creates nothing. It only reports what an existing machine is

@@ -185,6 +185,7 @@ it is tracked:
 | `~/.local/share/windows-vm/ssh/` | the key pair, mode 0600 |
 | `~/.local/share/windows-vm/vm.env` | the Windows account and its password, mode 0600 |
 | `~/.local/share/windows-vm/oem/` | the staged first-boot directory |
+| `~/.local/share/windows-vm/snapshots/` | the restore points |
 
 On btrfs, `winbox` turns copy-on-write off for the storage directory before
 the disk is created. Windows rewrites its disk constantly, and a copy-on-write
@@ -198,6 +199,46 @@ To change the machine, change the manifest and make the machine again:
 winbox destroy --disk
 winbox up --wait
 ```
+
+## Restore points
+
+A snapshot is a copy of the machine's disk, taken while Windows is shut down:
+
+```bash
+winbox snapshot clean-install    # stops Windows, copies, starts it again
+winbox snapshots                 # what there is
+winbox restore clean-install     # put the machine back
+winbox snapshot-rm clean-install
+```
+
+`snapshot` shuts Windows down first and starts it again afterwards, and only
+when it was running to begin with. A copy of a machine that is running is a
+copy of a machine that was interrupted, which is not a clean restore point.
+
+On a filesystem that can clone a file, which btrfs and XFS can, the copy shares
+its extents with the original: it is instant, and it costs almost nothing until
+one of the two sides is written. `winbox snapshots` still prints the full size,
+because nothing can tell `du` how much of it is shared. On any other filesystem
+the file is copied in full, `winbox` says so, and it takes as long as the disk
+is large.
+
+**A snapshot is a restore point, not a backup.** It sits on the same filesystem
+as the machine. A filesystem that fails takes the machine and every snapshot of
+it together. Copy one somewhere else if it has to survive that.
+
+A snapshot holds the disk and the firmware variables. It does **not** hold the
+SSH key or the Windows account, which live beside the storage directory rather
+than inside it. Both keep working across a restore, because neither of them
+changes. `./verify.sh --only 24` checks that no snapshot has picked either up.
+
+A snapshot name becomes a directory, and a restore removes what it replaces, so
+only a plain name is accepted: letters, digits, dot, dash and underscore. A
+name that walks the tree is refused before anything is touched, and module 24
+checks that too.
+
+`restore` and `snapshot` both need the container engine, to stop the machine
+first, so they belong to the host. `snapshots` reads directories and works
+anywhere.
 
 ## The boundaries
 
