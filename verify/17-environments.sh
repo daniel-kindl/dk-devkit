@@ -44,8 +44,8 @@ if [ -n "$environments" ]; then
             sh -c "'$INSTALLER' --dry-run --components $planned >/dev/null 2>&1; test \$? = 3"
     done
 
-    # The five environments the router can resolve each have a module.
-    for expected in android-dev dotnet-dev golang-dev python-dev rust-dev web-dev; do
+    # Every environment the router can resolve has a module.
+    for expected in android-dev dotnet-dev godot-dev golang-dev python-dev rust-dev web-dev; do
         if printf '%s\n' "$environments" | awk -F'\t' -v want="$expected" \
             '$1 == want { found = 1 } END { exit !found }'; then
             pass "E5 $expected is an environment module"
@@ -62,7 +62,7 @@ fi
 # may name an environment, because that is the coupling this layer removes.
 for shared in bootstrap/host.sh bootstrap/lib/devbox.sh; do
     # bin/web-dev-run is a compatibility wrapper, not an environment reference.
-    if grep -Eq '(web|python|rust|dotnet|android)-dev([^-]|$)' "$REPO_ROOT/$shared"; then
+    if grep -Eq '(web|python|rust|dotnet|android|godot|golang)-dev([^-]|$)' "$REPO_ROOT/$shared"; then
         fail "E6 $shared names no environment" \
              'discover the modules with environment_modules instead'
     else

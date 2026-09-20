@@ -1,0 +1,6 @@
+# godot-dev router markers: <environment><TAB><file or glob at the repository root>
+#
+# project.godot is "specific": a Godot C# project also holds a .csproj and a
+# .sln, which are dotnet-dev markers, and only this file says which of the two
+# environments owns the repository.
+godot-dev	project.godot	specific

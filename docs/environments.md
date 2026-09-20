@@ -23,10 +23,11 @@ module.
 | `rust-dev` | supported | Rust and cargo, through rustup |
 | `dotnet-dev` | supported | .NET SDK for C# |
 | `android-dev` | supported | Android SDK, JDK 25 and Gradle wrapper |
+| `godot-dev` | supported | Godot engine .NET build, plus the C# SDK |
 
 A **planned** module is a boundary without an installation. It declares the
 container name and the router markers, and nothing else. The installer refuses
-to install one. `dotnet-dev` is now a supported module with a container
+to install one. Every module above is supported: each has a container
 definition and an in-container bootstrap.
 
 ## The environment block
@@ -77,6 +78,27 @@ web-dev	package.json
 web-dev	pnpm-workspace.yaml
 ```
 
+A rule takes an optional third field, the **tier**:
+
+```tsv
+godot-dev	project.godot	specific
+```
+
+The tier is `general` when the field is absent. Resolution keeps the strongest
+tier that matched, and judges ambiguity only inside that tier. A `specific`
+marker therefore outranks the general markers of another environment.
+
+Use `specific` only when one environment's repositories necessarily carry
+another environment's markers. A Godot C# project holds `project.godot` **and**
+a `.csproj` and a `.sln`, and the `.csproj` alone does not say which of the two
+environments owns the repository. `project.godot` does, so it is the specific
+marker and `dotnet-dev` keeps its general ones.
+
+Markers must not otherwise overlap between environments. When the markers of two
+environments both match a repository in the same tier, the router fails with
+exit code 7 instead of guessing. Two specific markers are still ambiguous,
+because neither one is more specific than the other.
+
 `bootstrap/lib/devbox.sh` assembles every module's file into
 `~/.config/devbox-router/inference.tsv`. That file is generated, not linked into
 the checkout, because several modules own it together.
@@ -85,16 +107,13 @@ the checkout, because several modules own it together.
 configuration is not installed yet. `verify.sh --only 5` fails when the two
 disagree, so the module stays the source of truth.
 
-Markers must not overlap between environments. When the markers of two
-environments both match a repository, the router fails with exit code 7 instead
-of guessing.
-
 ## Adding an environment
 
 1. `mkdir components/<id>` and write `component.json` with the environment
    block. Start at `"status": "planned"` and declare `container` and
    `inference` only.
-2. Write `components/<id>/inference.tsv`. Every line names `<id>`.
+2. Write `components/<id>/inference.tsv`. Every line names `<id>`. Add the
+   `specific` tier only for the case the section above describes.
 3. Add the same rules to the fallback table in `bin/devbox`, in module order.
 4. When the environment becomes real, add the container definition, the package
    manifest, the toolchain manifest, the in-container bootstrap and the router

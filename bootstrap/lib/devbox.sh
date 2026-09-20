@@ -80,13 +80,19 @@ install_inference_rules() {
 
     tmp=$(mktemp) || die 'cannot create a temporary file'
     {
-        printf '# Automatic environment inference: <environment><TAB><file or glob at repo root>\n'
+        printf '# Automatic environment inference:\n'
+        printf '#     <environment><TAB><file or glob at repo root>[<TAB>specific]\n'
         printf '#\n'
         printf '# GENERATED from components/*/inference.tsv. Edit the module, not this file.\n'
         printf '#\n'
         printf '# Only used when a repository has no explicit declaration or assignment.\n'
         printf '# If patterns for MORE THAN ONE environment match, routing fails on purpose\n'
         printf '# rather than picking arbitrarily. Patterns must not contain whitespace.\n'
+        printf '#\n'
+        printf '# The third field is the tier, "general" when it is absent. Resolution keeps\n'
+        printf '# the strongest tier that matched, so a "specific" marker outranks the\n'
+        printf '# general markers of another environment. Ambiguity inside the winning\n'
+        printf '# tier still fails.\n'
         environment_rules "$repo_root"
     } > "$tmp"
 

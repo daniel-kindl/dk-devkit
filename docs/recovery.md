@@ -102,8 +102,8 @@ This step:
 ## 5b. Bootstrap the other development environments
 
 The `daniel` profile also composes `python-dev`, `golang-dev`, `rust-dev`,
-`dotnet-dev` and `android-dev`. Step 4 creates their containers. Each one
-converges its own toolchain in its isolated HOME:
+`dotnet-dev`, `android-dev` and `godot-dev`. Step 4 creates their containers.
+Each one converges its own toolchain in its isolated HOME:
 
 ```bash
 ~/.local/bin/devbox exec python-dev  --cwd ~/projects/dk-devkit -- ./bootstrap/python-dev.sh
@@ -111,6 +111,7 @@ converges its own toolchain in its isolated HOME:
 ~/.local/bin/devbox exec rust-dev    --cwd ~/projects/dk-devkit -- ./bootstrap/rust-dev.sh
 ~/.local/bin/devbox exec dotnet-dev  --cwd ~/projects/dk-devkit -- ./bootstrap/dotnet-dev.sh
 ~/.local/bin/devbox exec android-dev --cwd ~/projects/dk-devkit -- ./bootstrap/android-dev.sh
+~/.local/bin/devbox exec godot-dev   --cwd ~/projects/dk-devkit -- ./bootstrap/godot-dev.sh
 ```
 
 Each script installs its distribution packages, language toolchain, agent

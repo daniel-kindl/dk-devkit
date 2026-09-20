@@ -37,7 +37,8 @@ key, and `verify.sh` checks that the key survived.
 `~/.local/share/distrobox-homes/rust-dev/`,
 `~/.local/share/distrobox-homes/golang-dev/`,
 `~/.local/share/distrobox-homes/dotnet-dev/`,
-`~/.local/share/distrobox-homes/android-dev/`.
+`~/.local/share/distrobox-homes/android-dev/`,
+`~/.local/share/distrobox-homes/godot-dev/`.
 
 Each development environment keeps its own HOME, so its dotfiles never reach
 the host home. Every environment module declares that path as `state.local`,

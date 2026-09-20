@@ -33,8 +33,9 @@ private Node runtime of its own, and the section below says why that is not the
 same thing.
 
 **A Distrobox container** holds one purpose-specific development environment.
-`web-dev`, `python-dev`, `rust-dev`, `golang-dev`, `dotnet-dev` and `android-dev`
-exist today. `dotnet-dev` provides the .NET SDK for C# development.
+`web-dev`, `python-dev`, `rust-dev`, `golang-dev`, `dotnet-dev`, `android-dev`
+and `godot-dev` exist today. `dotnet-dev` provides the .NET SDK for C#
+development, and `godot-dev` adds the Godot engine to it for games.
 `docs/environments.md` describes the module.
 
 Each container has its own isolated HOME, so its dotfiles never reach the host

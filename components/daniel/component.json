@@ -9,7 +9,8 @@
     "agent-dev",
     "host-cli-tools",
     "desktop-apps",
-    "android-dev"
+    "android-dev",
+    "godot-dev"
   ],
   "capabilities": [],
   "unattended": false,

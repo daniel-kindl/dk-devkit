@@ -44,6 +44,17 @@ Inference never overrides an explicit declaration or assignment, and
 A repository whose markers point at more than one environment fails (exit 7)
 instead of picking one.
 
+An inference rule is `<environment><TAB><pattern>`, with an optional third
+field, the tier:
+
+    godot-dev	project.godot	specific
+
+The tier is `general` when the field is absent. Resolution keeps the strongest
+tier that matched, and judges ambiguity only inside that tier, so a `specific`
+marker outranks the general markers of another environment. A Godot C# project
+holds `project.godot` and a `.csproj`, and only the first one says which
+environment owns it. Two specific markers are still ambiguous.
+
 ## Environment files
 
 `environments.d/<name>.env`, `key = value`, comments with `#`:

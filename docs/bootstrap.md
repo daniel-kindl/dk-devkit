@@ -12,6 +12,7 @@ development environment. None of them writes a credential.
 | `bootstrap/golang-dev.sh` | Inside `golang-dev` |
 | `bootstrap/dotnet-dev.sh` | Inside `dotnet-dev` |
 | `bootstrap/android-dev.sh` | Inside `android-dev` |
+| `bootstrap/godot-dev.sh` | Inside `godot-dev` |
 
 Together, these scripts converge the whole machine. To install one part, use
 the component installer in [components.md](components.md):
@@ -198,7 +199,7 @@ It refuses to run on the host.
 ceiling. It is what a repository gets when it pins nothing, and a repository
 that carries `rust-toolchain.toml` overrides it. `docs/rust-dev.md` says why.
 
-## `bootstrap/golang-dev.sh`, `bootstrap/dotnet-dev.sh` and `bootstrap/android-dev.sh`
+## `bootstrap/golang-dev.sh`, `bootstrap/dotnet-dev.sh`, `bootstrap/android-dev.sh` and `bootstrap/godot-dev.sh`
 
 Each script runs inside its matching container and accepts `--dry-run` and
 `--skip-skills` where the component supports skill installation.
@@ -208,8 +209,9 @@ Each script runs inside its matching container and accepts `--dry-run` and
 | `golang-dev.sh` | Go from the distribution package; dependencies stay in `go.mod` and `go.sum` | `./verify.sh --only 28` |
 | `dotnet-dev.sh` | .NET SDK; target frameworks stay in project files and `global.json` | `./verify.sh --only 29` |
 | `android-dev.sh` | JDK 25, Android command-line tools and the SDK packages in `android-dev.env` | `./verify.sh --only 27` |
+| `godot-dev.sh` | The Godot engine .NET build pinned in `godot-dev.env`, plus the .NET SDK; project settings stay in `project.godot` and the project files | `./verify.sh --only 21` |
 
-All three also install the agent CLIs, shared agent configuration and status
+All four also install the agent CLIs, shared agent configuration and status
 line. `android-dev.sh` uses `--dry-run` but does not expose `--skip-skills`.
 The environment-specific manifests remain the source of truth.
 
