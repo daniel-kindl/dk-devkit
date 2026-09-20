@@ -7,7 +7,7 @@ The environment provides:
 
 - Fedora 44 in a Distrobox container;
 - the Godot engine, .NET build, pinned in `manifests/godot-dev.env`;
-- the .NET 10 SDK and the .NET 8 targeting pack for C#;
+- the .NET SDK for C#, pinned in `manifests/dotnet-sdk.env`;
 - the graphics, input, sound and font libraries the editor needs to open a
   window;
 - GitHub and build tools;
@@ -26,8 +26,30 @@ SHA-512 digest that `manifests/godot-dev.env` pins, and unpacks it into the
 container home. Change the version in the manifest, change the digest with it,
 and re-run the bootstrap.
 
-Godot 4.7 generates `net8.0` projects. The .NET 10 SDK builds them because the
-container also installs `dotnet-targeting-pack-8.0`.
+Godot 4.7 generates `net8.0` projects. The pinned SDK restores the `net8.0`
+reference pack from NuGet on the first build, so the first build of a project
+needs the network.
+
+## Why the SDK does not come from a package either
+
+A repository declares the SDK it needs in `global.json`, and that pin names a
+**feature band**: `10.0.401` is band 4xx, `10.0.111` is band 1xx. Every
+`rollForward` policy selects a version equal to or higher than the pin, and
+none of them moves down a band. Fedora packages band 1xx only, so a repository
+that pins band 4xx cannot build against `dotnet-sdk-10.0` at all.
+
+`bootstrap/godot-dev.sh` therefore installs the upstream SDK that
+`manifests/dotnet-sdk.env` pins, checks it against the published SHA-512
+digest, and unpacks it into the container home. `~/.bashrc.d` puts it in front
+of the distribution package, which stays installed as the fallback the
+container starts with. Change the version in the manifest, change the digest
+with it, and re-run the bootstrap.
+
+The `godot` command is a launcher, not a symlink, for the same reason. The
+editor builds C#, and the host application menu starts it through
+`distrobox-enter`, which runs a command **without** a login shell. The launcher
+sets `DOTNET_ROOT` and `PATH` itself, so the editor and a terminal build with
+the same SDK.
 
 ## Install
 

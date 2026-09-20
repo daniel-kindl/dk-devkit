@@ -41,8 +41,15 @@ for command_name in git gh jq curl unzip dotnet gcc g++ make pkg-config godot; d
     check "godot-dev command is available: $command_name" -- \
         godot_box_sh "command -v '$command_name' >/dev/null"
 done
-check_contains '.NET SDK command comes from the container' '/usr/' \
-    "$(godot_box_sh 'command -v dotnet' 2>/dev/null)"
+# The distribution package is feature band 1xx only, and no global.json
+# rollForward policy moves down a band, so the pinned upstream SDK must be the
+# command that wins. manifests/dotnet-sdk.env says why.
+DOTNET_SDK_VERSION=$(sed -n 's/^DOTNET_SDK_VERSION=//p' \
+    "$REPO_ROOT/manifests/dotnet-sdk.env" | head -1 | tr -d '\r')
+check_eq 'godot-dev runs the pinned .NET SDK' "$DOTNET_SDK_VERSION" \
+    "$(godot_box_sh 'cd "$HOME" && dotnet --version' 2>/dev/null | tr -d '\r')"
+check 'the .NET SDK comes from the isolated home, not from a package' -- \
+    godot_box_sh 'case "$(command -v dotnet)" in "$HOME"/*) exit 0 ;; *) exit 1 ;; esac'
 
 # The engine must be the pinned release AND the C# build. The distribution
 # package is the standard build, which cannot run C# at all.
@@ -52,8 +59,17 @@ check_contains "godot is the pinned release ($GODOT_VERSION.$GODOT_RELEASE)" \
 check_contains "godot is the C# build ($GODOT_FLAVOR)" "$GODOT_FLAVOR" "$godot_version_string"
 check 'godot comes from the isolated home, not from a package' -- \
     godot_box_sh 'case "$(readlink -f "$(command -v godot)")" in "$HOME"/*) exit 0 ;; *) exit 1 ;; esac'
+GODOT_ROOT_REL=$(godot_pin GODOT_ROOT_REL)
+GODOT_ENGINE_DIR=$GODOT_BOX_HOME/$GODOT_ROOT_REL/$GODOT_VERSION-$GODOT_RELEASE-$GODOT_FLAVOR
 check 'the C# assemblies sit beside the engine' -- \
-    godot_box_sh 'test -d "$(dirname "$(readlink -f "$(command -v godot)")")/GodotSharp"'
+    godot_box_sh "test -d '$GODOT_ENGINE_DIR/GodotSharp'"
+# The editor builds C#, and the host application menu gives it no login shell,
+# so the command is a launcher that names the pinned SDK itself.
+check 'the godot command is a launcher, not a link to the engine' -- \
+    godot_box_sh 'test -f "$HOME/.local/bin/godot" && ! test -L "$HOME/.local/bin/godot"'
+check_contains 'the launcher names the pinned .NET SDK' \
+    "$GODOT_BOX_HOME/.local/share/dotnet" \
+    "$(godot_box_sh 'cat "$HOME/.local/bin/godot"' 2>/dev/null)"
 
 section '2x. godot-dev routing and agent clients'
 check 'godot-dev router definition exists' -- \

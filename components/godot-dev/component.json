@@ -27,7 +27,7 @@
     "home": "~/.local/share/distrobox-homes/godot-dev/"
   },
   "state": {
-    "public": ["distrobox/godot-dev.ini", "manifests/godot-dev-packages.txt", "manifests/godot-dev.env", "config/godot-dev/"],
+    "public": ["distrobox/godot-dev.ini", "manifests/godot-dev-packages.txt", "manifests/godot-dev.env", "manifests/dotnet-sdk.env", "config/godot-dev/"],
     "local": ["~/.local/share/distrobox-homes/godot-dev/"]
   }
 }

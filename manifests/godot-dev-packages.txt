@@ -19,8 +19,15 @@ gcc-c++
 make
 pkgconf-pkg-config
 
-# The C# toolchain. Godot 4.7 generates net8.0 projects, so the .NET 10 SDK
-# needs the 8.0 targeting pack to build them.
+# The C# toolchain. The distribution SDK is feature band 1xx only, so it cannot
+# build a repository whose global.json pins another band.
+# bootstrap/godot-dev.sh installs the pinned upstream SDK and puts it in front;
+# this package stays as the fallback the container starts with.
+# manifests/dotnet-sdk.env says why.
+#
+# Godot 4.7 generates net8.0 projects. The pinned SDK restores the net8.0
+# reference pack from NuGet on the first build, so it does not read this
+# package. The package keeps the fallback able to build net8.0 offline.
 dotnet-sdk-10.0
 dotnet-targeting-pack-8.0
 

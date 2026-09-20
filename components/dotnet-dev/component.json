@@ -26,7 +26,7 @@
     "home": "~/.local/share/distrobox-homes/dotnet-dev/"
   },
   "state": {
-    "public": ["distrobox/dotnet-dev.ini", "manifests/dotnet-dev-packages.txt", "manifests/dotnet-dev.env"],
+    "public": ["distrobox/dotnet-dev.ini", "manifests/dotnet-dev-packages.txt", "manifests/dotnet-dev.env", "manifests/dotnet-sdk.env"],
     "local": ["~/.local/share/distrobox-homes/dotnet-dev/"]
   }
 }

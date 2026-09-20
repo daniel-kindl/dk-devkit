@@ -36,8 +36,21 @@ for command_name in git gh jq curl dotnet gcc g++ make pkg-config; do
     check "dotnet-dev command is available: $command_name" -- \
         dotnet_box_sh "command -v '$command_name' >/dev/null"
 done
-check_contains '.NET SDK command comes from the container' '/usr/' \
-    "$(dotnet_box_sh 'command -v dotnet' 2>/dev/null)"
+# The distribution package is feature band 1xx only, and no global.json
+# rollForward policy moves down a band, so the pinned upstream SDK must be the
+# command that wins. manifests/dotnet-sdk.env says why.
+DOTNET_SDK_VERSION=$(sed -n 's/^DOTNET_SDK_VERSION=//p' \
+    "$REPO_ROOT/manifests/dotnet-sdk.env" | head -1 | tr -d '\r')
+check_eq 'dotnet-dev runs the pinned .NET SDK' "$DOTNET_SDK_VERSION" \
+    "$(dotnet_box_sh 'cd "$HOME" && dotnet --version' 2>/dev/null | tr -d '\r')"
+check 'the .NET SDK comes from the isolated home, not from a package' -- \
+    dotnet_box_sh 'case "$(command -v dotnet)" in "$HOME"/*) exit 0 ;; *) exit 1 ;; esac'
+check 'dotnet-dev honours a global.json feature band' -- \
+    dotnet_box_sh 'set -e
+        probe=$(mktemp -d); trap "rm -rf \"$probe\"" EXIT
+        printf "{\"sdk\":{\"version\":\"%s\",\"rollForward\":\"latestPatch\"}}\n" \
+            "'"$DOTNET_SDK_VERSION"'" > "$probe/global.json"
+        cd "$probe" && dotnet --version >/dev/null'
 
 section '2t. dotnet-dev routing and agent clients'
 check 'dotnet-dev router definition exists' -- \

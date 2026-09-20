@@ -6,6 +6,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/dotnet.sh
+. "$REPO_ROOT/bootstrap/lib/dotnet.sh"
 
 SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
@@ -25,9 +27,13 @@ fi
 . "$REPO_ROOT/manifests/godot-dev.env"
 # shellcheck source=../manifests/toolchain.env
 . "$REPO_ROOT/manifests/toolchain.env"
+# shellcheck source=../manifests/dotnet-sdk.env
+. "$REPO_ROOT/manifests/dotnet-sdk.env"
 
 export DOTNET_CLI_HOME="$HOME/$DOTNET_CLI_HOME_REL"
-export PATH="$HOME/.local/bin${PATH:+:$PATH}"
+DOTNET_SDK_ROOT=$HOME/$DOTNET_SDK_ROOT_REL
+export DOTNET_ROOT="$DOTNET_SDK_ROOT"
+export PATH="$DOTNET_SDK_ROOT:$HOME/.local/bin${PATH:+:$PATH}"
 
 # One release names three things: the archive, the directory inside it, and the
 # binary. The binary spells the architecture with a dot where the directory
@@ -38,6 +44,7 @@ GODOT_BINARY_NAME=Godot_v${GODOT_TAG}_${GODOT_FLAVOR}_linux.x86_64
 GODOT_URL=https://github.com/godotengine/godot/releases/download/$GODOT_TAG/$GODOT_STEM.zip
 GODOT_DIR=$HOME/$GODOT_ROOT_REL/$GODOT_TAG-$GODOT_FLAVOR
 GODOT_BINARY=$GODOT_DIR/$GODOT_BINARY_NAME
+GODOT_COMMAND=$HOME/.local/bin/godot
 DESKTOP_FILE=$HOME/.local/share/applications/godot.desktop
 
 LINK_ROOT=$REPO_ROOT
@@ -54,6 +61,7 @@ info "link root  $LINK_ROOT"
 info "box home   $HOME"
 info "engine     $GODOT_DIR"
 info "DOTNET_CLI_HOME $DOTNET_CLI_HOME"
+info "DOTNET_ROOT $DOTNET_ROOT"
 [ "$DRY_RUN" = 1 ] && info 'DRY RUN - nothing is written'
 
 section 'Distribution packages'
@@ -70,12 +78,15 @@ install_file "$REPO_ROOT/config/godot-dev/bashrc.d/10-godot-dev.sh" \
     "$HOME/.bashrc.d/10-godot-dev.sh" 0644
 
 section '.NET SDK'
-if command -v dotnet >/dev/null 2>&1; then
-    ok "$(dotnet --version)"
-elif [ "$DRY_RUN" = 1 ]; then
-    info 'would install the .NET SDK from the distribution package'
-else
-    die '.NET SDK is not available after package installation'
+# The distribution package is feature band 1xx only. A repository pins a band
+# in global.json, and no rollForward policy moves down a band, so the
+# environment installs the pinned upstream SDK and puts it in front.
+# manifests/dotnet-sdk.env says why.
+ensure_dotnet_sdk "$DOTNET_SDK_ROOT" "$DOTNET_SDK_VERSION" "$DOTNET_SDK_SHA512"
+if [ -x "$DOTNET_SDK_ROOT/dotnet" ]; then
+    ok "dotnet resolves to $(command -v dotnet)"
+elif [ "$DRY_RUN" != 1 ]; then
+    die "the pinned .NET SDK is missing: $DOTNET_SDK_ROOT/dotnet"
 fi
 
 section 'Godot engine'
@@ -104,19 +115,33 @@ fi
 
 section 'Godot command and desktop entry'
 ensure_dir "$HOME/.local/bin"
-if [ -x "$GODOT_BINARY" ]; then
-    link_into "$GODOT_BINARY" "$HOME/.local/bin/godot"
-elif [ "$DRY_RUN" = 1 ]; then
-    info "would link $HOME/.local/bin/godot -> $GODOT_BINARY"
-else
+# The command is a launcher, not a symlink. The editor builds C#, so it needs
+# the pinned SDK in front of the distribution package, and the host
+# application menu cannot get that from ~/.bashrc.d: distrobox-enter runs the
+# entry WITHOUT a login shell. config/godot-dev/bin/godot says the same.
+if [ ! -x "$GODOT_BINARY" ] && [ "$DRY_RUN" != 1 ]; then
     die "the Godot binary is missing: $GODOT_BINARY"
 fi
+# An earlier version linked this name straight at the engine. Remove such a
+# link first: install_file copies onto the destination, and a copy onto a
+# symlink writes through it and would overwrite the engine binary.
+if [ -L "$GODOT_COMMAND" ]; then
+    save_copy "$GODOT_COMMAND"
+    run rm -f -- "$GODOT_COMMAND"
+fi
+rendered=$(mktemp) || die 'cannot create a temporary file'
+sed -e "s|@DOTNET_ROOT@|$DOTNET_SDK_ROOT|" \
+    -e "s|@DOTNET_CLI_HOME@|$DOTNET_CLI_HOME|" \
+    -e "s|@GODOT_BINARY@|$GODOT_BINARY|" \
+    -- "$REPO_ROOT/config/godot-dev/bin/godot" > "$rendered"
+install_file "$rendered" "$GODOT_COMMAND" 0755
+rm -f -- "$rendered"
 ensure_dir "$HOME/.local/share/applications"
 # The entry names the engine by absolute path. distrobox-enter runs a command
 # WITHOUT a login shell, and the PATH it passes is the host one, which does not
 # hold this container's ~/.local/bin, so a bare name does not resolve.
 rendered=$(mktemp) || die 'cannot create a temporary file'
-sed -e "s|@GODOT_COMMAND@|$HOME/.local/bin/godot|" \
+sed -e "s|@GODOT_COMMAND@|$GODOT_COMMAND|" \
     -- "$REPO_ROOT/config/godot-dev/godot.desktop" > "$rendered"
 desktop_changed=1
 if [ -f "$DESKTOP_FILE" ] && cmp -s -- "$rendered" "$DESKTOP_FILE"; then

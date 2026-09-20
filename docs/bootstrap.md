@@ -207,13 +207,20 @@ Each script runs inside its matching container and accepts `--dry-run` and
 | Script | Toolchain state | Verification |
 | --- | --- | --- |
 | `golang-dev.sh` | Go from the distribution package; dependencies stay in `go.mod` and `go.sum` | `./verify.sh --only 28` |
-| `dotnet-dev.sh` | .NET SDK; target frameworks stay in project files and `global.json` | `./verify.sh --only 29` |
+| `dotnet-dev.sh` | The .NET SDK pinned in `dotnet-sdk.env`; target frameworks stay in project files and `global.json` | `./verify.sh --only 29` |
 | `android-dev.sh` | JDK 25, Android command-line tools and the SDK packages in `android-dev.env` | `./verify.sh --only 27` |
-| `godot-dev.sh` | The Godot engine .NET build pinned in `godot-dev.env`, plus the .NET SDK; project settings stay in `project.godot` and the project files | `./verify.sh --only 21` |
+| `godot-dev.sh` | The Godot engine .NET build pinned in `godot-dev.env`, plus the .NET SDK pinned in `dotnet-sdk.env`; project settings stay in `project.godot` and the project files | `./verify.sh --only 21` |
 
 All four also install the agent CLIs, shared agent configuration and status
 line. `android-dev.sh` uses `--dry-run` but does not expose `--skip-skills`.
 The environment-specific manifests remain the source of truth.
+
+`dotnet-dev.sh` and `godot-dev.sh` install the same .NET SDK, from
+`manifests/dotnet-sdk.env`, through `ensure_dotnet_sdk` in
+`bootstrap/lib/dotnet.sh`. The distribution package carries feature band 1xx
+only, and no `global.json` `rollForward` policy moves down a band, so a
+repository that pins another band needs the upstream SDK.
+`docs/dotnet-dev.md` says why.
 
 ### Only `web-dev` carries the coordinator
 
