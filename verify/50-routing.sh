@@ -14,7 +14,7 @@ for tool in devbox devbox-verify devbox-run web-dev-run; do
     check_link "host: ~/.local/bin/$tool -> the repository" "$target" "$REPO_ROOT/bin/$tool"
 done
 
-for tool in claude codex; do
+for tool in claude codex grok; do
     if on_host test -x "$HOST_HOME/.local/bin/$tool"; then
         pass "host shim: ~/.local/bin/$tool is executable"
     else
@@ -86,6 +86,13 @@ check_contains 'claude shim preserves argv'     'argv[0]=claude' "$out"
 
 out=$(host_sh "cd '$HOST_HOME' && DEVBOX_DRY_RUN=1 '$HOST_HOME/.local/bin/codex' --version" 2>&1)
 check_contains 'codex shim routes to web-dev' 'env=web-dev' "$out"
+
+out=$(host_sh "cd '$HOST_HOME' && DEVBOX_DRY_RUN=1 '$HOST_HOME/.local/bin/grok' --version" 2>&1)
+check_contains 'grok shim outside a repository uses the default environment' 'source=default' "$out"
+check_contains 'grok shim routes to web-dev' 'env=web-dev' "$out"
+check_contains 'grok shim preserves argv' 'argv[0]=grok' "$out"
+check 'the router strips the host Grok bin from the container PATH' -- \
+    grep -q '\.grok/bin' "$REPO_ROOT/bin/devbox"
 
 # The recursion guard must hold from inside an environment.
 rc=0

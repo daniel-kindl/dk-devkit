@@ -37,7 +37,7 @@ devbox doctor
 devbox exec web-dev --cwd ~/projects/example -- pnpm check
 ```
 
-Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
+Host `claude`, `codex` and `grok` shims use the same router so interactive agents execute in the repository's development environment.
 
 Each environment is an independent module: `web-dev`, `python-dev`, `rust-dev`, `golang-dev`, `dotnet-dev`, `android-dev` and `godot-dev` are installable today. Read [docs/environments.md](docs/environments.md).
 
@@ -53,7 +53,7 @@ pi                                # then /login for each provider
 
 Pi is a host control-plane tool, so it is not installed into a development
 environment and `~/.local/bin/pi` is not a router shim. That is what separates
-it from the `claude` and `codex` shims above: those CLIs live inside the
+it from the `claude`, `codex` and `grok` shims above: those CLIs live inside the
 environment that owns a repository, and Pi does not.
 
 Pi needs Node, and the host keeps no Node development toolchain. The component
@@ -61,7 +61,7 @@ therefore installs Pi's own private runtime, which only the generated launcher
 puts on a PATH. A host shell still resolves no `node`, `npm` or `pnpm`, and
 `./verify.sh` checks that.
 
-Pi reads the same `config/agents/AGENTS.md` policy as Claude Code and Codex, as
+Pi reads the same `config/agents/AGENTS.md` policy as Claude Code, Codex and Grok, as
 a link. The policy keeps one source.
 
 Delegating a project command from Pi into the environment that owns the

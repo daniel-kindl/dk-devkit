@@ -13,7 +13,7 @@
   "doctor": null,
   "verify": ["./verify.sh", "--only", "27"],
   "manual": [
-    "Authenticate Claude Code and Codex inside android-dev if you use them.",
+    "Authenticate Claude Code, Codex and Grok inside android-dev if you use them.",
     "Create an Android emulator on the host or connect a device for connected tests."
   ],
   "environment": {

@@ -11,7 +11,7 @@ The environment provides:
 - the graphics, input, sound and font libraries the editor needs to open a
   window;
 - GitHub and build tools;
-- Claude Code and Codex after bootstrap;
+- Claude Code, Codex and Grok after bootstrap;
 - an isolated home at `~/.local/share/distrobox-homes/godot-dev`.
 
 The repository owns the target framework and the project dependencies through

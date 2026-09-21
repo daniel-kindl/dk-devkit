@@ -8,7 +8,7 @@ The environment provides:
 - Fedora 44 in a Distrobox container;
 - the .NET SDK, pinned in `manifests/dotnet-sdk.env`;
 - GitHub and build tools;
-- Claude Code and Codex after bootstrap;
+- Claude Code, Codex and Grok after bootstrap;
 - an isolated home at `~/.local/share/distrobox-homes/dotnet-dev`.
 
 The repository owns the target framework and project dependencies through

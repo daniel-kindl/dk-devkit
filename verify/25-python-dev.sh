@@ -80,7 +80,7 @@ done
 check_contains 'web inference remains present for mixed Python/web repositories' \
     $'web-dev\tpackage.json' "$all_rules"
 
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "python-dev interactive agent is available: $agent" -- \
         python_box_sh "command -v '$agent' >/dev/null"
 done

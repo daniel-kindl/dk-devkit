@@ -39,7 +39,7 @@ component identifier, and `component.json` is the contract.
   "install": ["components/web-dev/install.sh"],
   "doctor": null,
   "verify": ["./verify.sh", "--only", "2"],
-  "manual": ["Sign in to Claude Code and Codex inside web-dev."],
+  "manual": ["Sign in to Claude Code, Codex and Grok inside web-dev."],
   "environment": { "container": "web-dev", "ini": "distrobox/web-dev.ini", "...": "..." },
   "state": {
     "public": ["distrobox/web-dev.ini"],
@@ -290,7 +290,7 @@ web-dev  (environment)
   public  distrobox/web-dev.ini
   public  manifests/web-dev-packages.txt
   local   ~/.local/share/distrobox-homes/web-dev/
-  manual  Sign in to Claude Code and Codex inside web-dev; ...
+  manual  Sign in to Claude Code, Codex and Grok inside web-dev; ...
 
 repo-labels  (tool)
   public  manifests/github-labels.json

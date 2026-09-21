@@ -15,7 +15,7 @@
 #   * installs the Flatpak applications in manifests/flatpaks.txt
 #   * installs the devbox router, its verification suite and the compatibility
 #     wrappers into ~/.local/bin as symlinks into this checkout
-#   * generates the claude and codex host shims with 'devbox new-shim'
+#   * generates the claude, codex and grok host shims with 'devbox new-shim'
 #   * installs the devbox router configuration into ~/.config/devbox-router
 #   * creates the Distrobox of every supported environment module
 #   * merges the non-secret Codex preferences into the host ~/.codex/config.toml

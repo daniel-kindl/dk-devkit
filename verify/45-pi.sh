@@ -80,7 +80,7 @@ fi
 
 # Pi is a host control-plane tool. A development environment must NOT own one:
 # that is the whole point of the component, and it is what separates Pi from
-# the claude and codex CLIs, which do live inside an environment.
+# the claude, codex and grok CLIs, which do live inside an environment.
 #
 # Distrobox forwards the host PATH verbatim, so the HOST launcher is visible
 # from inside every environment. That is the one installation seen from the

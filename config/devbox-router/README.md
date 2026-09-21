@@ -1,8 +1,8 @@
 # devbox router
 
-Routes host commands — in particular the `claude` and `codex` agent CLIs that
-Orca launches — into the Distrobox development environment that owns the
-current Git repository.
+Routes host commands — in particular the `claude`, `codex` and `grok` agent CLIs —
+into the Distrobox development environment that owns the current Git repository.
+Orca launches `claude` and `codex`. A person launches `grok` the same way.
 
 Everything here is workstation configuration. It deliberately lives outside any
 project repository. The only per-project artefact this system understands is an
@@ -14,6 +14,7 @@ optional `.devbox` file, and using one is a project's own decision.
     ~/.local/bin/devbox-verify       the verification suite
     ~/.local/bin/claude              host shim -> devbox agent claude
     ~/.local/bin/codex               host shim -> devbox agent codex
+    ~/.local/bin/grok                host shim -> devbox agent grok
     ~/.local/bin/agentq          pinned shim -> devbox exec web-dev
     ~/.local/bin/devbox-run          compatibility wrapper -> devbox run
     ~/.local/bin/web-dev-run         compatibility wrapper -> devbox exec web-dev
@@ -146,7 +147,8 @@ this directory from the container `PATH`, so a shim can never call itself.
 ## Orca
 
 Orca finds bare `claude` and `codex` on `PATH` because the shims keep those
-names in `~/.local/bin`. Each shim hands off to `devbox agent`, which resolves
+names in `~/.local/bin`. The `grok` shim keeps that name there too. Each shim
+hands off to `devbox agent`, which resolves
 the environment from the worktree, translates the working directory, and execs
 the agent inside the container — so the agent and everything it spawns stay in
 that environment.

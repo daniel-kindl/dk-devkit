@@ -56,7 +56,7 @@ for marker in settings.gradle.kts gradlew; do
     check_contains "android-dev inference includes $marker" \
         $'android-dev\t'"$marker" "$(cat "$REPO_ROOT/components/android-dev/inference.tsv")"
 done
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "android-dev interactive agent is available: $agent" -- \
         android_box_sh "command -v '$agent' >/dev/null"
 done

@@ -92,7 +92,7 @@ This step:
 
 - installs `git`, `jq` and `gh` inside the container
 - installs nvm, Node, Corepack and pnpm at the versions in `manifests/toolchain.env`
-- installs the Claude Code and Codex native CLIs
+- installs the Claude Code, Codex and Grok native CLIs
 - wires `~/.agents`, `~/.claude` and `~/.codex` to the shared policy and skills
 - installs the Orca bridge wrappers and `sync-agent-skills`
 - installs the 43 skills in `manifests/skills.tsv`, then runs `sync-agent-skills`

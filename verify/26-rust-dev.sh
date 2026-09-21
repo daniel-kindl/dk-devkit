@@ -84,7 +84,7 @@ for marker in Cargo.toml Cargo.lock rust-toolchain.toml; do
         $'rust-dev\t'"$marker" "$(cat "$REPO_ROOT/components/rust-dev/inference.tsv")"
 done
 
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "rust-dev interactive agent is available: $agent" -- \
         rust_box_sh "command -v '$agent' >/dev/null"
 done

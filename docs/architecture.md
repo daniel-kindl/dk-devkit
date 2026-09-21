@@ -24,7 +24,7 @@ system, so this repository adds as little to it as possible:
 - Orca, the agent IDE, installed as an AppImage
 - `~/projects`, the one root for source checkouts
 - `~/.local/bin/devbox`, the environment router
-- `~/.local/bin/claude` and `~/.local/bin/codex`, shims that call the router
+- `~/.local/bin/claude`, `~/.local/bin/codex` and `~/.local/bin/grok`, shims that call the router
 - `~/.local/bin/pi`, the Pi coding harness, which runs on the host itself
 
 The host holds **no language toolchain**. There is no Node and no npm on the
@@ -81,15 +81,16 @@ every clone routes the same way.
 
 ### Why the agent shims exist
 
-Orca launches a bare `claude` or `codex` from the host. Both names resolve to a
-shim in `~/.local/bin`. The shim calls `devbox agent <tool>`, which resolves the
-environment from the worktree and runs the real binary inside the container. The
-agent, and everything the agent spawns, stays in that environment.
+Orca launches a bare `claude` or `codex` from the host. A person launches `grok`
+the same way. Each name resolves to a shim in `~/.local/bin`. The shim calls
+`devbox agent <tool>`, which resolves the environment from the worktree and runs
+the real binary inside the container. The agent, and everything the agent
+spawns, stays in that environment.
 
 The shims refuse to run inside a container. That recursion guard is why an agent
-inside `web-dev` reaches the real `claude` binary and not the shim. The router
-also strips the host `~/.local/bin` from the container `PATH` for the same
-reason, because Distrobox forwards the host `PATH` verbatim.
+inside `web-dev` reaches the real binary and not the shim. The router also
+strips the host `~/.local/bin` and the host `~/.grok/bin` from the container
+`PATH`, because Distrobox forwards the host `PATH` verbatim.
 
 ## Pi, the host coding harness
 
@@ -102,9 +103,9 @@ installation of it.
     ~/.pi/agent/                       Pi's configuration, authentication and sessions
     ~/.pi/agent/AGENTS.md -> config/agents/AGENTS.md
 
-### Why Pi does not follow the claude and codex model
+### Why Pi does not follow the claude, codex and grok model
 
-The `claude` and `codex` shims route into the environment that owns a
+The `claude`, `codex` and `grok` shims route into the environment that owns a
 repository, because those CLIs are installed inside that environment. Copying
 that model for Pi would mean one Pi per environment, which is the opposite of
 what Pi is for: it is a control plane, and it should see every repository from
@@ -173,6 +174,11 @@ shared policy and the routing.
     ~/.claude/skills         -> ~/.agents/skills
     ~/.codex/skills/<name>   -> ~/.agents/skills/<name>   (one link per skill)
     ~/.codex/skills/.system  Codex native skills, never touched
+
+Grok reads the shared policy through `~/.claude/CLAUDE.md`. Claude compatibility
+is on by default. Grok also reads a project `AGENTS.md` directly. It reads
+`~/.agents/skills` and `~/.claude/skills`, and it keeps its own skills in
+`~/.grok/skills`.
 
 The host Pi reads the same policy file, from its own home:
 

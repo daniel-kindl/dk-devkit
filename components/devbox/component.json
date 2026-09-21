@@ -8,7 +8,7 @@
   "requires": [],
   "capabilities": ["linux", "host"],
   "unattended": true,
-  "commands": ["devbox", "claude", "codex"],
+  "commands": ["devbox", "claude", "codex", "grok"],
   "install": ["components/devbox/install.sh"],
   "doctor": ["components/devbox/doctor.sh"],
   "verify": ["./verify.sh", "--only", "5"],

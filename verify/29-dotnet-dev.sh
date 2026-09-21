@@ -59,7 +59,7 @@ for marker in '*.sln' '*.slnx' '*.csproj' '*.fsproj' global.json; do
     check_contains "dotnet-dev inference includes $marker" \
         $'dotnet-dev\t'"$marker" "$(cat "$REPO_ROOT/components/dotnet-dev/inference.tsv")"
 done
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "dotnet-dev interactive agent is available: $agent" -- \
         dotnet_box_sh "command -v '$agent' >/dev/null"
 done

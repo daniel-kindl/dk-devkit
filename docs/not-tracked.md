@@ -5,7 +5,7 @@ Every entry below was inspected on the live machine and left out on purpose.
 ## Credentials and authentication state
 
 `~/.ssh/id_ed25519`, `~/.config/gh/hosts.yml`, `~/.claude/.credentials.json`,
-`~/.claude.json`, `~/.codex/auth.json`, `~/.gnupg/`, `~/.pki/`.
+`~/.claude.json`, `~/.codex/auth.json`, `~/.grok/auth.json`, `~/.gnupg/`, `~/.pki/`.
 
 A restore cannot reproduce authentication, and a repository is the wrong place
 to attempt it. See [secrets.md](secrets.md).
@@ -15,6 +15,7 @@ to attempt it. See [secrets.md](secrets.md).
 `~/.claude/sessions/`, `~/.claude/history.jsonl`, `~/.claude/shell-snapshots/`,
 `~/.claude/paste-cache/`, `~/.claude/session-env/`, `~/.codex/*.sqlite`,
 `~/.codex/sessions/`, `~/.codex/models_cache.json`, `~/.codex/installation_id`,
+`~/.grok/sessions/`,
 `~/.claude/plugins/known_marketplaces.json`, `~/.local/state/skills/.skill-lock.json`.
 
 This is per-session state. It has no value on another machine, and some of it

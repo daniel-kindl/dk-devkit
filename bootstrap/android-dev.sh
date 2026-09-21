@@ -6,6 +6,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/agents.sh
+. "$REPO_ROOT/bootstrap/lib/agents.sh"
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -110,12 +112,11 @@ link_into "$HOME/.agents/skills" "$HOME/.claude/skills"
 ensure_dir "$HOME/.local/bin"
 link_into "$LINK_ROOT/bin/sync-agent-skills" "$HOME/.local/bin/sync-agent-skills"
 
-section 'Agent CLIs'
-if [ -x "$HOME/.local/bin/claude" ]; then ok 'claude is installed'; else run bash -c "curl -fsSL $CLAUDE_CODE_INSTALLER | bash"; fi
-if [ -x "$HOME/.local/bin/codex" ]; then ok 'codex is installed'; else run bash -c "curl -fsSL $CODEX_INSTALLER | sh"; fi
+install_agent_clis
 
 manual 'Authenticate Claude Code in android-dev: claude (then /login)'
 manual 'Authenticate Codex in android-dev: codex login'
+manual 'Authenticate Grok in android-dev: grok (the first start opens a browser)'
 manual 'Run the Ocho checks from its checkout: ./gradlew check'
 manual 'Use a host emulator or a connected device for connected Android tests'
 summary

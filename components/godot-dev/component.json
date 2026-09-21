@@ -13,7 +13,7 @@
   "doctor": null,
   "verify": ["./verify.sh", "--only", "21"],
   "manual": [
-    "Authenticate Claude Code and Codex inside godot-dev if you use them.",
+    "Authenticate Claude Code, Codex and Grok inside godot-dev if you use them.",
     "Install the Godot export templates before the first export; docs/godot-dev.md gives the command."
   ],
   "environment": {

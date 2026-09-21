@@ -8,7 +8,7 @@
 # What it does, all idempotently:
 #   * installs the distribution packages in manifests/web-dev-packages.txt
 #   * installs nvm, Node, Corepack and pnpm at the versions in manifests/toolchain.env
-#   * installs the Claude Code and Codex native CLIs when they are absent
+#   * installs the Claude Code, Codex and Grok native CLIs when they are absent
 #   * wires the shared agent configuration into ~/.agents, ~/.claude and ~/.codex
 #   * installs the Orca bridge wrappers and sync-agent-skills
 #   * installs the third-party skills in manifests/skills.tsv
@@ -23,6 +23,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/agents.sh
+. "$REPO_ROOT/bootstrap/lib/agents.sh"
 # shellcheck source=lib/agentq.sh
 . "$REPO_ROOT/bootstrap/lib/agentq.sh"
 
@@ -134,17 +136,7 @@ else
 fi
 
 # ----------------------------------------------------------- agent CLIs -----
-section 'Agent CLIs'
-if [ -x "$HOME/.local/bin/claude" ]; then
-    ok "claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CLAUDE_CODE_INSTALLER | bash" && change 'installed Claude Code'
-fi
-if [ -x "$HOME/.local/bin/codex" ]; then
-    ok "codex ($("$HOME/.local/bin/codex" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CODEX_INSTALLER | sh" && change 'installed Codex'
-fi
+install_agent_clis
 
 # ------------------------------------------------- shared agent configuration --
 section 'Shared agent configuration (~/.agents)'
@@ -212,6 +204,7 @@ fi
 # ------------------------------------------------------------ manual steps ---
 manual 'Authenticate Claude Code:  claude  (then /login)'
 manual 'Authenticate Codex:        codex login'
+manual 'Authenticate Grok:          grok (the first start opens a browser)'
 manual 'Authenticate GitHub in the box: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Verify the whole workstation: ./verify.sh'
 

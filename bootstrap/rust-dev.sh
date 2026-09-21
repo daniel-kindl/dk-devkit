@@ -11,6 +11,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/agents.sh
+. "$REPO_ROOT/bootstrap/lib/agents.sh"
 
 SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
@@ -138,17 +140,7 @@ section 'Dependency ownership'
 ok 'crates remain repository-owned through Cargo.toml'
 
 # ----------------------------------------------------------- agent CLIs -----
-section 'Agent CLIs'
-if [ -x "$HOME/.local/bin/claude" ]; then
-    ok "claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CLAUDE_CODE_INSTALLER | bash" && change 'installed Claude Code'
-fi
-if [ -x "$HOME/.local/bin/codex" ]; then
-    ok "codex ($("$HOME/.local/bin/codex" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CODEX_INSTALLER | sh" && change 'installed Codex'
-fi
+install_agent_clis
 
 # ------------------------------------------------- shared agent configuration --
 section 'Shared agent configuration (~/.agents)'
@@ -207,6 +199,7 @@ fi
 
 manual 'Authenticate Claude Code in rust-dev: claude  (then /login)'
 manual 'Authenticate Codex in rust-dev: codex login'
+manual 'Authenticate Grok in rust-dev: grok (the first start opens a browser)'
 manual 'Authenticate GitHub in rust-dev: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Pin the toolchain of a project with rust-toolchain.toml'
 manual 'Verify the environment: ./verify.sh --only 26'

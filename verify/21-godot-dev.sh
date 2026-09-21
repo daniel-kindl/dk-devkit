@@ -80,7 +80,7 @@ check_contains 'godot-dev inference marks project.godot specific' \
     $'godot-dev\tproject.godot\tspecific' "$(cat "$REPO_ROOT/components/godot-dev/inference.tsv")"
 check 'the router implements the specific tier' -- \
     grep -q 'best=specific' "$REPO_ROOT/bin/devbox"
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "godot-dev interactive agent is available: $agent" -- \
         godot_box_sh "command -v '$agent' >/dev/null"
 done

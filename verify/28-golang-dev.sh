@@ -50,7 +50,7 @@ for marker in go.mod go.sum go.work go.work.sum; do
     check_contains "golang-dev inference includes $marker" \
         $'golang-dev\t'"$marker" "$(cat "$REPO_ROOT/components/golang-dev/inference.tsv")"
 done
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "golang-dev interactive agent is available: $agent" -- \
         go_box_sh "command -v '$agent' >/dev/null"
 done

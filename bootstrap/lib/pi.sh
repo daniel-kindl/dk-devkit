@@ -3,8 +3,8 @@
 #
 # Pi is a HOST control-plane tool, and there is exactly one installation of it.
 # It is deliberately NOT installed into a development environment, and
-# ~/.local/bin/pi is deliberately NOT a devbox router shim: the existing claude
-# and codex shims route into the environment that owns a repository because
+# ~/.local/bin/pi is deliberately NOT a devbox router shim: the existing claude,
+# codex and grok shims route into the environment that owns a repository because
 # those CLIs live inside that environment, and Pi does not. Delegating a
 # project command from Pi into a development environment is separate future
 # work, and it will call the existing devbox router rather than repeat it.

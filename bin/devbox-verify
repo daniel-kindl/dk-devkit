@@ -5,7 +5,7 @@
 # and a throwaway copy of the router configuration.
 #
 #   devbox-verify           run everything
-#   devbox-verify --fast    skip the tests that actually launch claude/codex
+#   devbox-verify --fast    skip the tests that actually launch claude/codex/grok
 
 set -uo pipefail
 
@@ -183,12 +183,14 @@ fi
 
 # ------------------------------------------------ E/F: agent shims ---------
 
-section 'E/F. claude and codex resolve to the web-dev binaries'
+section 'E/F. claude, codex and grok resolve to the web-dev binaries'
 if [[ -d $DIR ]]; then
     out=$(cd "$DIR" && dbx run -- bash -lc 'command -v claude' 2>&1)
     expect_contains 'E1 claude binary in the box home' 'distrobox-homes/web-dev' "$out"
     out=$(cd "$DIR" && dbx run -- bash -lc 'command -v codex' 2>&1)
     expect_contains 'F1 codex binary in the box home'  'distrobox-homes/web-dev' "$out"
+    out=$(cd "$DIR" && dbx run -- bash -lc 'command -v grok' 2>&1)
+    expect_contains 'F5 grok binary in the box home'   'distrobox-homes/web-dev' "$out"
 
     out=$(cd "$DIR" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/claude" --version 2>&1)
     expect_contains 'E2 host claude shim routes to web-dev' $'env=web-dev' "$out"
@@ -197,14 +199,19 @@ if [[ -d $DIR ]]; then
     out=$(cd "$DIR" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/codex" exec 'a b' 2>&1)
     expect_contains 'F2 host codex shim routes to web-dev'  $'env=web-dev' "$out"
     expect_contains 'F3 host codex shim preserves spaces'   $'argv[2]=a b' "$out"
+    out=$(cd "$DIR" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/grok" --version 2>&1)
+    expect_contains 'F6 host grok shim routes to web-dev'   $'env=web-dev' "$out"
+    expect_contains 'F7 host grok shim passes argv'         $'argv[0]=grok' "$out"
 
     if (( FAST )); then
-        t_skip 'E5/F4 real agent launch' '--fast'
+        t_skip 'E5/F4/F8 real agent launch' '--fast'
     else
         out=$("$SHIM_DIR/claude" --version 2>&1 </dev/null); rc=$?
         expect_rc 'E5 claude --version through the host shim' 0 "$rc" "$out"
         out=$("$SHIM_DIR/codex" --version 2>&1 </dev/null); rc=$?
         expect_rc 'F4 codex --version through the host shim' 0 "$rc" "$out"
+        out=$("$SHIM_DIR/grok" --version 2>&1 </dev/null); rc=$?
+        expect_rc 'F8 grok --version through the host shim' 0 "$rc" "$out"
     fi
 else
     t_skip 'E/F agent shims' 'no dkkb checkout'
@@ -221,6 +228,8 @@ expect_contains 'G2 falls back to web-dev'    $'env=web-dev' "$out"
 expect_contains 'G3 source is the default'    $'source=default' "$out"
 out=$(cd "$OUTSIDE" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/codex" 2>&1)
 expect_contains 'G4 codex shim falls back too' $'env=web-dev' "$out"
+out=$(cd "$OUTSIDE" && DEVBOX_DRY_RUN=1 "$SHIM_DIR/grok" 2>&1)
+expect_contains 'G6 grok shim falls back too' $'env=web-dev' "$out"
 out=$(cd "$OUTSIDE" && dbx run -- true 2>&1); rc=$?
 expect_rc 'G5 devbox run still refuses outside a repo' 3 "$rc" "$out"
 
@@ -312,8 +321,12 @@ out=$(DEVBOX_ACTIVE_ENV=web-dev "$SHIM_DIR/claude" --version 2>&1); rc=$?
 expect_rc 'M2 claude shim refuses inside an environment' 8 "$rc" "$out"
 out=$(DEVBOX_ACTIVE_ENV=web-dev "$SHIM_DIR/codex" --version 2>&1); rc=$?
 expect_rc 'M3 codex shim refuses inside an environment' 8 "$rc" "$out"
+out=$(DEVBOX_ACTIVE_ENV=web-dev "$SHIM_DIR/grok" --version 2>&1); rc=$?
+expect_rc 'M3b grok shim refuses inside an environment' 8 "$rc" "$out"
 out=$(dbx exec web-dev -- bash -lc 'case ":$PATH:" in *":'"$SHIM_DIR"':"*) echo LEAK ;; *) echo CLEAN ;; esac' 2>&1)
 expect_eq 'M4 host shim dir is stripped from the container PATH' CLEAN "$out"
+out=$(dbx exec web-dev -- bash -lc 'case ":$PATH:" in *":'"$HOME/.grok/bin"':"*) echo LEAK ;; *) echo CLEAN ;; esac' 2>&1)
+expect_eq 'M4b host Grok bin is stripped from the container PATH' CLEAN "$out"
 out=$(dbx exec web-dev -- bash -lc 'printf %s "${DEVBOX_ACTIVE_ENV:-unset}"' 2>&1)
 expect_eq 'M5 container is marked as an active environment' web-dev "$out"
 out=$(dbx exec web-dev -- definitely-not-a-real-command 2>&1); rc=$?

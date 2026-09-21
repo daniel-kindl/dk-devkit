@@ -667,9 +667,10 @@ run_in_env() {
     shell_flag=-c
     is_true "$E_LOGIN" && shell_flag=-lc
 
-    # Distrobox forwards the host PATH verbatim, which would put the host agent
-    # shims ahead of the real binaries inside the box. Remove that directory.
-    strip="$HOME/.local/bin:$(canon "$HOME/.local/bin")"
+    # Distrobox forwards the host PATH verbatim. That puts the host agent
+    # shims, and a host Grok install under ~/.grok/bin, ahead of the real
+    # binaries inside the box. Remove both directories.
+    strip="$HOME/.local/bin:$(canon "$HOME/.local/bin"):$HOME/.grok/bin:$(canon "$HOME/.grok/bin")"
 
     if is_true "${DEVBOX_DRY_RUN:-0}"; then
         printf 'env=%s\n' "$E_NAME"
