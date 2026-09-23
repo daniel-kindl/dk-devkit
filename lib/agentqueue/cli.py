@@ -55,7 +55,8 @@ import time
 from typing import List, Optional
 
 from . import VERSION, effort as effort_mod, policy as policy_mod
-from . import report as report_mod, setup as setup_mod, ui as ui_mod
+from . import report as report_mod, runtime as runtime_mod
+from . import setup as setup_mod, ui as ui_mod
 from . import sandbox as sandbox_mod
 from .coordinator import Coordinator
 from .ghapi import GitHub, GhTransport
@@ -353,7 +354,7 @@ def cmd_doctor(args, install_root: str) -> int:
 
     transport = GhTransport()
     if not transport.available():
-        print("  gh                 NOT FOUND (agentq runs inside web-dev)")
+        print("  gh                 NOT FOUND (install the GitHub CLI)")
         rc = EXIT_NOT_READY
     else:
         code, out, _ = transport.run(["auth", "status"])
@@ -361,7 +362,7 @@ def cmd_doctor(args, install_root: str) -> int:
         if code != 0:
             rc = EXIT_NOT_READY
 
-    agentbox = os.path.join(install_root, "bin", "agentbox")
+    agentbox = runtime_mod.executable("agentbox", install_root, repo_root)
     print(f"  agentbox           {agentbox}"
           f"{'' if os.access(agentbox, os.X_OK) else '  NOT EXECUTABLE'}")
     if not os.access(agentbox, os.X_OK):
@@ -454,7 +455,7 @@ def cmd_setup(args, install_root: str) -> int:
         read_labels=github.list_labels if github is not None else None,
         gh_ready=gh_ready,
         ssh_agent=os.environ.get("SSH_AUTH_SOCK", ""),
-        agentbox=os.path.join(install_root, "bin", "agentbox"),
+        agentbox=runtime_mod.executable("agentbox", install_root, repo_root),
     )
 
     if getattr(args, "json", False):
@@ -610,7 +611,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
     profile, image = sandbox_mod.resolve(repo_root, install_root)
 
     runner = AgentboxRunner(
-        os.path.join(install_root, "bin", "agentbox"),
+        runtime_mod.executable("agentbox", install_root, repo_root),
         pol,
         run_dir,
         dry_run=dry_run,
@@ -623,7 +624,7 @@ def cmd_run(args, install_root: str, dry_run: bool) -> int:
     catalog = _catalog(install_root, repo_root, pol)
     coordinator = Coordinator(
         github, git, pol, runner, state_dir,
-        os.path.join(install_root, "bin", "scan-secrets"),
+        runtime_mod.executable("scan-secrets", install_root, repo_root),
         emit=lambda line: ui.note(line, level="verbose"), dry_run=dry_run,
         run_id=run_id, run_log=run_log.path,
         agent_identities=_agent_identities(install_root),

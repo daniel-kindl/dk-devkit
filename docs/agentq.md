@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 12301)
+Total output lines: 1144
+
 # The GitHub backlog coordinator (agentq)
 
 ## What this adds
@@ -542,23 +545,7 @@ what it may do with the backlog. Neither reads the other.
 | `effort` | `standard` | the tier `effortMode: "fixed"` pins |
 | `effortLabelPrefix` | `effort:` | the label prefix that pins one issue |
 | `escalateEffortOnRetry` | `true` | a failed attempt raises the tier |
-| `modelTiers` | `""` | another tier catalog, relative to the repository |
-| `maxParallel` | `1` | issues at a time |
-| `maxRetries` | `2` | repair attempts per issue, shared across both loops |
-| `maxFixRounds` | `2` | repair rounds inside one sandbox |
-| `maxIterations` | `1` | agent turns per run. One bounded invocation is the normal path |
-| `softBudgetSeconds` | `600` | one invocation past this reports an efficiency warning and keeps going. 0 turns it off |
-| `hardBudgetSeconds` | `1200` | one invocation past this is stopped, and nothing is imported. 0 turns it off |
-| `softToolCalls` | `30` | the same warning, counted in tool calls |
-| `hardToolCalls` | `60` | the same stop, counted in tool calls |
-| `maxCommits` | `20` | the import bound |
-| `agentTimeoutSeconds` | `3600` | the wall-clock limit of one run |
-| `staleClaimSeconds` | `7200` | when a claim with no release is stale |
-| `adoptExistingBranch` | `true` | continue from validated work |
-| `adoptExistingPullRequest` | `true` | do not open a second pull request |
-| `requireAgentAuthoredCommits` | `true` | adoption rule 7 |
-| `scanDiffForSecrets` | `true` | read the diff before publishing it |
-| `referencedIssueDepth` | `1` | quote the issues an issue points at |
+| `mod…301 tokens truncated…e the issues an issue points at |
 | `maxPromptBytes` | `60000` | the prompt size bound |
 
 The shipped defaults refuse an automatic merge. A repository turns it on
@@ -1109,6 +1096,33 @@ lock, and the tests force a real overlap to prove the blocks arrive whole.
   `web-dev`, because `podman exec` does not forward it. This is a property of
   `distrobox enter`, and it is the same for `devbox exec`, `devbox run` and the
   `claude` and `codex` shims. Stop a run with Ctrl-C.
+
+## Portable package
+
+The portable package lets another Linux environment run `agentq` without the
+`dk-devkit` checkout or the `devbox` router. Build it from this repository:
+
+```bash
+tools/package-agentq /tmp/agentq.tar.gz
+mkdir -p /tmp/agentq-package
+tar -xzf /tmp/agentq.tar.gz -C /tmp/agentq-package
+cd /tmp/agentq-package/agentq
+./install.sh
+```
+
+The package includes the coordinator, its default policy and model tiers, the
+sandbox profile catalog, the lifecycle label catalog, and `scan-secrets`.
+Install a compatible `agentbox` separately and make it available on `PATH`.
+`agentq` checks its own `bin/` directory first, then `PATH` for that command.
+Run it in the trusted environment that holds `gh` authentication and the SSH
+agent. The sandbox must not receive either one.
+
+The `dk-devkit` component remains the integrated install path. It still
+installs the host router shim and runs the coordinator inside `web-dev`. The
+portable package is for an environment that supplies the compatible
+`agentbox`, `gh`, Git, Python, and SSH agent itself. See
+[`packaging/agentq/README.md`](../packaging/agentq/README.md) for its install
+contract.
 
 ## Related documents
 

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Build a portable agentq source package. Do not overwrite an existing archive.
+set -euo pipefail
+
+REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+OUT=${1:?Usage: tools/package-agentq <new-output.tar.gz>}
+case "$OUT" in
+    /*) ;;
+    *) OUT="$PWD/$OUT" ;;
+esac
+if [ -e "$OUT" ]; then
+    printf 'package-agentq: output already exists: %s\n' "$OUT" >&2
+    exit 2
+fi
+mkdir -p -- "$(dirname -- "$OUT")"
+TMP=$(mktemp -d)
+trap 'rm -rf -- "$TMP"' EXIT
+ROOT="$TMP/agentq"
+mkdir -p "$ROOT"
+mkdir -p "$ROOT/lib" "$ROOT/config"
+
+for path in bin/agentq bin/scan-secrets; do
+    install -D -m 0755 "$REPO_ROOT/$path" "$ROOT/$path"
+done
+cp -R -- "$REPO_ROOT/lib/agentqueue" "$ROOT/lib/"
+cp -R -- "$REPO_ROOT/config/agentqueue" "$ROOT/config/"
+install -D -m 0644 "$REPO_ROOT/manifests/model-tiers.json" "$ROOT/manifests/model-tiers.json"
+install -D -m 0644 "$REPO_ROOT/manifests/sandcastle.env" "$ROOT/manifests/sandcastle.env"
+install -D -m 0644 "$REPO_ROOT/manifests/github-labels.json" "$ROOT/manifests/github-labels.json"
+install -D -m 0644 "$REPO_ROOT/LICENSE" "$ROOT/LICENSE"
+install -D -m 0644 "$REPO_ROOT/packaging/agentq/README.md" "$ROOT/README.md"
+install -D -m 0755 "$REPO_ROOT/packaging/agentq/install.sh" "$ROOT/install.sh"
+
+tar -czf "$OUT" -C "$TMP" agentq
+printf 'package-agentq: wrote %s\n' "$OUT"
