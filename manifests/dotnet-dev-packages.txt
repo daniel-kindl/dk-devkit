@@ -5,9 +5,14 @@
 # an existing container from this manifest, and verify/29-dotnet-dev.sh checks it.
 
 git
+bubblewrap
 jq
 gh
 curl
+# The distribution SDK. It is feature band 1xx only, so it cannot build a
+# repository whose global.json pins another band. bootstrap/dotnet-dev.sh
+# installs the pinned upstream SDK and puts it in front; this package stays as
+# the fallback the container starts with. manifests/dotnet-sdk.env says why.
 dotnet-sdk-10.0
 gcc
 gcc-c++

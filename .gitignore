@@ -45,6 +45,7 @@ keyring*
 .claude.json
 .claude/
 .codex/
+.grok/
 .copilot/
 .orca/
 .pi/

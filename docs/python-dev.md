@@ -13,7 +13,7 @@ The container provides the development capability:
 - SQLite CLI;
 - a small native-build baseline;
 - pinned `uv`;
-- Claude Code and Codex for interactive development;
+- Claude Code, Codex and Grok for interactive development;
 - the shared agent policy, skills, status line, and Orca bridge.
 
 A project provides its own Python/application state:

@@ -6,6 +6,10 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/agents.sh
+. "$REPO_ROOT/bootstrap/lib/agents.sh"
+# shellcheck source=lib/dotnet.sh
+. "$REPO_ROOT/bootstrap/lib/dotnet.sh"
 
 SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
@@ -25,9 +29,13 @@ fi
 . "$REPO_ROOT/manifests/dotnet-dev.env"
 # shellcheck source=../manifests/toolchain.env
 . "$REPO_ROOT/manifests/toolchain.env"
+# shellcheck source=../manifests/dotnet-sdk.env
+. "$REPO_ROOT/manifests/dotnet-sdk.env"
 
 export DOTNET_CLI_HOME="$HOME/$DOTNET_CLI_HOME_REL"
-export PATH="$HOME/.local/bin${PATH:+:$PATH}"
+DOTNET_SDK_ROOT=$HOME/$DOTNET_SDK_ROOT_REL
+export DOTNET_ROOT="$DOTNET_SDK_ROOT"
+export PATH="$DOTNET_SDK_ROOT:$HOME/.local/bin${PATH:+:$PATH}"
 
 LINK_ROOT=$REPO_ROOT
 if [ -n "${DISTROBOX_HOST_HOME:-}" ]; then
@@ -42,6 +50,7 @@ info "checkout   $REPO_ROOT"
 info "link root  $LINK_ROOT"
 info "box home   $HOME"
 info "DOTNET_CLI_HOME $DOTNET_CLI_HOME"
+info "DOTNET_ROOT $DOTNET_ROOT"
 [ "$DRY_RUN" = 1 ] && info 'DRY RUN - nothing is written'
 
 section 'Distribution packages'
@@ -58,25 +67,18 @@ install_file "$REPO_ROOT/config/dotnet-dev/bashrc.d/10-dotnet-dev.sh" \
     "$HOME/.bashrc.d/10-dotnet-dev.sh" 0644
 
 section '.NET SDK'
-if command -v dotnet >/dev/null 2>&1; then
-    ok "$(dotnet --version)"
-elif [ "$DRY_RUN" = 1 ]; then
-    info 'would install the .NET SDK from the distribution package'
-else
-    die '.NET SDK is not available after package installation'
+# The distribution package is feature band 1xx only. A repository pins a band
+# in global.json, and no rollForward policy moves down a band, so the
+# environment installs the pinned upstream SDK and puts it in front.
+# manifests/dotnet-sdk.env says why.
+ensure_dotnet_sdk "$DOTNET_SDK_ROOT" "$DOTNET_SDK_VERSION" "$DOTNET_SDK_SHA512"
+if [ -x "$DOTNET_SDK_ROOT/dotnet" ]; then
+    ok "dotnet resolves to $(command -v dotnet)"
+elif [ "$DRY_RUN" != 1 ]; then
+    die "the pinned .NET SDK is missing: $DOTNET_SDK_ROOT/dotnet"
 fi
 
-section 'Agent CLIs'
-if [ -x "$HOME/.local/bin/claude" ]; then
-    ok "claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CLAUDE_CODE_INSTALLER | bash" && change 'installed Claude Code'
-fi
-if [ -x "$HOME/.local/bin/codex" ]; then
-    ok "codex ($("$HOME/.local/bin/codex" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CODEX_INSTALLER | sh" && change 'installed Codex'
-fi
+install_agent_clis
 
 section 'Shared agent configuration (~/.agents)'
 ensure_dir_reported "$HOME/.agents"
@@ -113,13 +115,12 @@ else
     [ -f "$HOME/.claude/settings.json" ] || printf '{}\n' > "$HOME/.claude/settings.json"
     python3 "$REPO_ROOT/bin/merge-json-defaults.py" \
         "$HOME/.claude/settings.json" "$REPO_ROOT/config/claude/settings.base.json"
-    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
-        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
     "$HOME/.agents/statusline/install.sh"
 fi
 
 manual 'Authenticate Claude Code in dotnet-dev: claude (then /login)'
 manual 'Authenticate Codex in dotnet-dev: codex login'
+manual 'Authenticate Grok in dotnet-dev: grok (the first start opens a browser)'
 manual 'Authenticate GitHub in dotnet-dev: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Verify the environment: ./verify.sh --only 29'
 summary

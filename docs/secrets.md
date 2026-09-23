@@ -16,9 +16,10 @@ closed.
 | GitHub authentication | `~/.config/gh/hosts.yml`, the token in the system keyring |
 | Claude Code authentication | `~/.claude/.credentials.json`, `~/.claude.json` |
 | Codex authentication | `~/.codex/auth.json` |
+| Grok authentication | `~/.grok/auth.json` |
 | Pi authentication | `~/.pi/agent/auth.json` |
 | Pi project trust decisions | `~/.pi/agent/trust.json` |
-| Agent session state | `~/.claude/sessions/`, `~/.codex/*.sqlite`, `history.jsonl`, `~/.pi/agent/sessions/` |
+| Agent session state | `~/.claude/sessions/`, `~/.codex/*.sqlite`, `~/.grok/sessions/`, `history.jsonl`, `~/.pi/agent/sessions/` |
 | Keyrings and password stores | `~/.gnupg/`, `~/.pki/`, KWallet |
 | Caches, logs, histories | `~/.cache/`, `~/.bash_history` |
 | Machine identifiers | `installation_id`, `device-id` |

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Template. bootstrap/godot-dev.sh renders the @NAME@ fields and installs the
+# result as ~/.local/bin/godot.
+#
+# The engine is a launcher, not a symlink, because the editor builds C# and
+# must use the same SDK as the `dotnet` command in a terminal. The terminal
+# gets that SDK from ~/.bashrc.d, but the host application menu does not:
+# distrobox-enter runs the desktop entry WITHOUT a login shell. The launcher
+# therefore sets the environment itself, and both ways in agree.
+set -euo pipefail
+
+export DOTNET_ROOT="@DOTNET_ROOT@"
+export DOTNET_CLI_HOME="@DOTNET_CLI_HOME@"
+case ":${PATH:-}:" in
+    *":$DOTNET_ROOT:"*) ;;
+    *) PATH="$DOTNET_ROOT:${PATH:-}" ;;
+esac
+export PATH
+
+exec "@GODOT_BINARY@" "$@"

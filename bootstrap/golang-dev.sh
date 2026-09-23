@@ -6,6 +6,8 @@
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
+# shellcheck source=lib/agents.sh
+. "$REPO_ROOT/bootstrap/lib/agents.sh"
 
 SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
@@ -70,17 +72,7 @@ fi
 section 'Go dependency ownership'
 ok 'modules remain repository-owned through go.mod and go.sum'
 
-section 'Agent CLIs'
-if [ -x "$HOME/.local/bin/claude" ]; then
-    ok "claude ($("$HOME/.local/bin/claude" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CLAUDE_CODE_INSTALLER | bash" && change 'installed Claude Code'
-fi
-if [ -x "$HOME/.local/bin/codex" ]; then
-    ok "codex ($("$HOME/.local/bin/codex" --version 2>/dev/null | head -1))"
-else
-    run bash -c "curl -fsSL $CODEX_INSTALLER | sh" && change 'installed Codex'
-fi
+install_agent_clis
 
 section 'Shared agent configuration (~/.agents)'
 ensure_dir_reported "$HOME/.agents"
@@ -117,13 +109,12 @@ else
     [ -f "$HOME/.claude/settings.json" ] || printf '{}\n' > "$HOME/.claude/settings.json"
     python3 "$REPO_ROOT/bin/merge-json-defaults.py" \
         "$HOME/.claude/settings.json" "$REPO_ROOT/config/claude/settings.base.json"
-    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
-        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
     "$HOME/.agents/statusline/install.sh"
 fi
 
 manual 'Authenticate Claude Code in golang-dev: claude (then /login)'
 manual 'Authenticate Codex in golang-dev: codex login'
+manual 'Authenticate Grok in golang-dev: grok (the first start opens a browser)'
 manual 'Authenticate GitHub in golang-dev: gh auth login --git-protocol ssh --skip-ssh-key'
 manual 'Verify the environment: ./verify.sh --only 28'
 summary

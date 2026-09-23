@@ -2,7 +2,10 @@
 
 Canonical file: `~/.agents/AGENTS.md`.
 Claude Code reads it through `~/.claude/CLAUDE.md`. Codex reads it through `~/.codex/AGENTS.md`.
-Both paths are symlinks to this file. Edit this file only.
+Grok reads the same file through `~/.claude/CLAUDE.md`.
+Claude compatibility is on by default.
+Grok also reads a project `AGENTS.md` directly.
+These paths are symlinks to this file. Edit this file only.
 
 Project files add to this file. A project file wins if it disagrees.
 
@@ -71,6 +74,7 @@ The canonical third-party skill store is `~/.agents/skills`.
 Run `sync-agent-skills` after you install a skill. The command refreshes the
 per-skill Codex symlinks. It does not change the Codex native skills in
 `~/.codex/skills/.system`.
+Grok reads `~/.agents/skills` and `~/.claude/skills`. It keeps its own skills in `~/.grok/skills`.
 
 ## Status line
 

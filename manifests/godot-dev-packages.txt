@@ -1,0 +1,59 @@
+# Distribution packages required inside the godot-dev container.
+#
+# This file is the source of truth. distrobox/godot-dev.ini repeats the list
+# because the INI format cannot read a file. bootstrap/godot-dev.sh converges
+# an existing container from this manifest, and verify/21-godot-dev.sh checks it.
+#
+# The engine itself is not here: the distribution package is the standard build,
+# which has no C# support. bootstrap/godot-dev.sh installs the upstream .NET
+# build that manifests/godot-dev.env pins.
+
+# Source control and build tools.
+git
+bubblewrap
+jq
+gh
+curl
+unzip
+gcc
+gcc-c++
+make
+pkgconf-pkg-config
+
+# The C# toolchain. The distribution SDK is feature band 1xx only, so it cannot
+# build a repository whose global.json pins another band.
+# bootstrap/godot-dev.sh installs the pinned upstream SDK and puts it in front;
+# this package stays as the fallback the container starts with.
+# manifests/dotnet-sdk.env says why.
+#
+# Godot 4.7 generates net8.0 projects. The pinned SDK restores the net8.0
+# reference pack from NuGet on the first build, so it does not read this
+# package. The package keeps the fallback able to build net8.0 offline.
+dotnet-sdk-10.0
+dotnet-targeting-pack-8.0
+
+# What the editor needs to open a window: graphics, input, sound and fonts.
+mesa-dri-drivers
+mesa-vulkan-drivers
+mesa-libGL
+mesa-libEGL
+vulkan-loader
+libX11
+libXcursor
+libXinerama
+libXrandr
+libXi
+libXext
+libxkbcommon
+libxkbcommon-x11
+libwayland-client
+libwayland-cursor
+libwayland-egl
+libdecor
+alsa-lib
+pulseaudio-libs
+fontconfig
+freetype
+
+# distrobox-export reads and writes desktop entries.
+desktop-file-utils

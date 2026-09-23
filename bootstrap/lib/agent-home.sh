@@ -14,10 +14,9 @@ install_host_agent_home() {
     section 'Codex host preferences (~/.codex/config.toml)'
     ensure_dir "$home/.codex"
     if [ "$DRY_RUN" = 1 ]; then
-        info "would merge $repo_root/config/codex/config.base.toml into $home/.codex/config.toml"
+        info "would apply Codex defaults to $home/.codex/config.toml"
     else
-        python3 "$repo_root/bin/merge-toml-defaults.py" \
-            "$home/.codex/config.toml" "$repo_root/config/codex/config.base.toml"
+        python3 "$repo_root/bin/configure-codex.py" "$home/.codex/config.toml"
     fi
 
     section 'Codex host policy and status line'

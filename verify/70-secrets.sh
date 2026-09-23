@@ -30,7 +30,8 @@ else
     for probe in .ssh/id_ed25519 .claude/.credentials.json .codex/auth.json \
                  .config/gh/hosts.yml .codex/state_5.sqlite skills/humanizer/SKILL.md \
                  config/devbox-router/repos.tsv .claude.json \
-                 .pi/agent/auth.json .pi/agent/trust.json .pi/agent/sessions/x.jsonl; do
+                 .pi/agent/auth.json .pi/agent/trust.json .pi/agent/sessions/x.jsonl \
+                 .grok/auth.json; do
         (cd "$REPO_ROOT" && git check-ignore -q "$probe") || unignored="$unignored $probe"
     done
     if [ -z "$unignored" ]; then

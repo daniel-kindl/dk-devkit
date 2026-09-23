@@ -80,7 +80,7 @@ done
 check_contains 'web inference remains present for mixed Python/web repositories' \
     $'web-dev\tpackage.json' "$all_rules"
 
-for agent in claude codex; do
+for agent in claude codex grok; do
     check "python-dev interactive agent is available: $agent" -- \
         python_box_sh "command -v '$agent' >/dev/null"
 done
@@ -88,6 +88,7 @@ check 'python-dev shared agent policy is wired' -- \
     python_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'python-dev shared skill store exists' -- \
     python_box_sh 'test -d "$HOME/.agents/skills"'
+check_codex_sandbox python-dev python_box_sh
 
 # Both files are run directly, so a lost executable bit breaks the documented
 # bootstrap command and the Orca bridge.

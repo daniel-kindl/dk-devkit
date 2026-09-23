@@ -7,6 +7,7 @@
 
 # Repository and GitHub tooling.
 git
+bubblewrap
 jq
 gh
 curl

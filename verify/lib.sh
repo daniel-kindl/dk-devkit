@@ -44,6 +44,14 @@ check() {
     fi
 }
 
+# check_codex_sandbox <environment> <runner>
+# The runner accepts one shell command and executes it inside the environment.
+check_codex_sandbox() {
+    local environment=$1 runner=$2
+    check "$environment Codex sandbox can create a user namespace" -- "$runner" \
+        'bwrap --unshare-user --ro-bind / / --proc /proc --dev /dev true'
+}
+
 # check_eq <name> <expected> <actual>
 check_eq() {
     local name=$1 want=$2 got=$3

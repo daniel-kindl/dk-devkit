@@ -4,7 +4,7 @@ Reusable development tools, agent workflows, environment definitions, and automa
 
 This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-> The toolkit architecture is in place: modular component installation, interactive selection, named profiles, and the platform capability layer all exist as `./install.sh`. Bazzite is the only platform with verification evidence; the other adapters carry the support tier the evidence allows, and this README does not present them as verified. `dotnet-dev` is a supported .NET and C# environment. The remaining environment work is tracked in #53.
+> The toolkit architecture is in place: modular component installation, interactive selection, named profiles, and the platform capability layer all exist as `./install.sh`. Bazzite is the only platform with verification evidence; the other adapters carry the support tier the evidence allows, and this README does not present them as verified. `dotnet-dev` is a supported .NET and C# environment, and `godot-dev` adds the Godot engine on top of it for games. The remaining environment work is tracked in #53.
 
 ## Current tools
 
@@ -37,9 +37,9 @@ devbox doctor
 devbox exec web-dev --cwd ~/projects/example -- pnpm check
 ```
 
-Host `claude` and `codex` shims use the same router so interactive agents execute in the repository's development environment.
+Host `claude`, `codex` and `grok` shims use the same router so interactive agents execute in the repository's development environment.
 
-Each environment is an independent module: `web-dev`, `python-dev`, `rust-dev`, `golang-dev`, `dotnet-dev` and `android-dev` are installable today. Read [docs/environments.md](docs/environments.md).
+Each environment is an independent module: `web-dev`, `python-dev`, `rust-dev`, `golang-dev`, `dotnet-dev`, `android-dev` and `godot-dev` are installable today. Read [docs/environments.md](docs/environments.md).
 
 ### `pi`
 
@@ -53,7 +53,7 @@ pi                                # then /login for each provider
 
 Pi is a host control-plane tool, so it is not installed into a development
 environment and `~/.local/bin/pi` is not a router shim. That is what separates
-it from the `claude` and `codex` shims above: those CLIs live inside the
+it from the `claude`, `codex` and `grok` shims above: those CLIs live inside the
 environment that owns a repository, and Pi does not.
 
 Pi needs Node, and the host keeps no Node development toolchain. The component
@@ -61,7 +61,7 @@ therefore installs Pi's own private runtime, which only the generated launcher
 puts on a PATH. A host shell still resolves no `node`, `npm` or `pnpm`, and
 `./verify.sh` checks that.
 
-Pi reads the same `config/agents/AGENTS.md` policy as Claude Code and Codex, as
+Pi reads the same `config/agents/AGENTS.md` policy as Claude Code, Codex and Grok, as
 a link. The policy keeps one source.
 
 Delegating a project command from Pi into the environment that owns the
@@ -165,8 +165,12 @@ Bazzite/Fedora host
 |            |                     +-- .NET SDK / C#
 |            |                     `-- Claude Code, Codex
 |            |
-|            `-------------------> android-dev Distrobox
-|                                  +-- JDK 25 / Android SDK
+|            +-------------------> android-dev Distrobox
+|            |                     +-- JDK 25 / Android SDK
+|            |                     `-- Claude Code, Codex
+|            |
+|            `-------------------> godot-dev Distrobox
+|                                  +-- Godot engine (.NET build) / C# SDK
 |                                  `-- Claude Code, Codex
 |
 +-- pi
@@ -185,7 +189,10 @@ Bazzite/Fedora host
 
 Each environment has its own isolated home, and the router picks the one that
 owns a repository. `android-dev` provides the Android SDK and JDK 25. `dotnet-dev`
-provides the .NET SDK for C# development.
+provides the .NET SDK for C# development, and `godot-dev` adds the Godot engine
+to it for game development. A Godot C# repository carries `dotnet-dev` markers
+too, so `project.godot` is a *specific* marker and outranks them;
+[docs/environments.md](docs/environments.md) describes the tier.
 
 The trust boundary is deliberate:
 

@@ -5,7 +5,12 @@
 
 section '3. Agent CLIs inside web-dev'
 
-for tool in claude codex; do
+for script in web-dev python-dev rust-dev golang-dev dotnet-dev android-dev godot-dev; do
+    check "$script bootstrap installs the agent CLIs through one function" -- \
+        grep -q 'install_agent_clis' "$REPO_ROOT/bootstrap/$script.sh"
+done
+
+for tool in claude codex grok; do
     out=$(box_sh "command -v $tool" 2>/dev/null)
     if [ -z "$out" ]; then
         fail "$tool is installed in the box" 'run bootstrap/web-dev.sh'
@@ -15,6 +20,9 @@ for tool in claude codex; do
 done
 
 section '3b. Shared agent configuration'
+
+check 'Codex policy defaults preserve user overrides and migrate the old pair' -- \
+    python3 "$REPO_ROOT/verify/probes/codex-policy.test.py"
 
 AGENTS_CANON=$REPO_ROOT/config/agents/AGENTS.md
 

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "godot-dev",
+  "name": "godot-dev environment",
+  "kind": "environment",
+  "group": "Development environments",
+  "status": "supported",
+  "summary": "Fedora Distrobox with an isolated home, the Godot engine .NET build and the C# SDK for game development.",
+  "requires": ["distrobox", "devbox"],
+  "capabilities": ["linux", "host", "distrobox", "container-runtime"],
+  "unattended": true,
+  "install": ["components/godot-dev/install.sh"],
+  "doctor": null,
+  "verify": ["./verify.sh", "--only", "21"],
+  "manual": [
+    "Authenticate Claude Code, Codex and Grok inside godot-dev if you use them.",
+    "Install the Godot export templates before the first export; docs/godot-dev.md gives the command."
+  ],
+  "environment": {
+    "container": "godot-dev",
+    "ini": "distrobox/godot-dev.ini",
+    "packages": "manifests/godot-dev-packages.txt",
+    "toolchain": "manifests/godot-dev.env",
+    "bootstrap": "bootstrap/godot-dev.sh",
+    "router": "config/devbox-router/environments.d/godot-dev.env",
+    "inference": "components/godot-dev/inference.tsv",
+    "home": "~/.local/share/distrobox-homes/godot-dev/"
+  },
+  "state": {
+    "public": ["distrobox/godot-dev.ini", "manifests/godot-dev-packages.txt", "manifests/godot-dev.env", "manifests/dotnet-sdk.env", "config/godot-dev/"],
+    "local": ["~/.local/share/distrobox-homes/godot-dev/"]
+  }
+}

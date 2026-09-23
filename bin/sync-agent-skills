@@ -41,7 +41,7 @@ fi
 run mkdir -p "$CODEX_DIR"
 added=0 kept=0 removed=0
 for skill_dir in "$STORE"/*/; do
-  [ -d "$skill_dir" ] || continue
+  [ -f "$skill_dir/SKILL.md" ] || continue
   name=$(basename "$skill_dir")
   case "$name" in .*) continue ;; esac
   target="$CODEX_DIR/$name"
@@ -63,9 +63,10 @@ done
 for target in "$CODEX_DIR"/*; do
   [ -L "$target" ] || continue
   name=$(basename "$target")
-  [ -d "$STORE/$name" ] && continue
+  [ "$(readlink "$target")" = "$STORE/$name" ] || continue
+  [ -f "$STORE/$name/SKILL.md" ] && continue
   run rm -f "$target"
-  log "prune: $target (no longer in $STORE)"
+  log "prune: $target (no longer a skill in $STORE)"
   removed=$((removed + 1))
 done
 

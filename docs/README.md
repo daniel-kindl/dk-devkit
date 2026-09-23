@@ -30,6 +30,7 @@ policy and the trust boundaries.
 | [python-dev.md](python-dev.md) | The `python-dev` environment and its toolchain |
 | [rust-dev.md](rust-dev.md) | The `rust-dev` environment and its toolchain |
 | [dotnet-dev.md](dotnet-dev.md) | The `dotnet-dev` environment and its toolchain |
+| [godot-dev.md](godot-dev.md) | The `godot-dev` environment, the Godot engine and C# |
 | [windows-vm.md](windows-vm.md) | `winbox`, the Windows virtual machine an agent drives over SSH |
 
 `devbox` has no separate reference yet. The router is described in

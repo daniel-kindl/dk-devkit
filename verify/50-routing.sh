@@ -14,7 +14,7 @@ for tool in devbox devbox-verify devbox-run web-dev-run; do
     check_link "host: ~/.local/bin/$tool -> the repository" "$target" "$REPO_ROOT/bin/$tool"
 done
 
-for tool in claude codex; do
+for tool in claude codex grok; do
     if on_host test -x "$HOST_HOME/.local/bin/$tool"; then
         pass "host shim: ~/.local/bin/$tool is executable"
     else
@@ -87,23 +87,43 @@ check_contains 'claude shim preserves argv'     'argv[0]=claude' "$out"
 out=$(host_sh "cd '$HOST_HOME' && DEVBOX_DRY_RUN=1 '$HOST_HOME/.local/bin/codex' --version" 2>&1)
 check_contains 'codex shim routes to web-dev' 'env=web-dev' "$out"
 
+out=$(host_sh "cd '$HOST_HOME' && DEVBOX_DRY_RUN=1 '$HOST_HOME/.local/bin/grok' --version" 2>&1)
+check_contains 'grok shim outside a repository uses the default environment' 'source=default' "$out"
+check_contains 'grok shim routes to web-dev' 'env=web-dev' "$out"
+check_contains 'grok shim preserves argv' 'argv[0]=grok' "$out"
+check 'the router strips the host Grok bin from the container PATH' -- \
+    grep -q '\.grok/bin' "$REPO_ROOT/bin/devbox"
+
 # The recursion guard must hold from inside an environment.
 rc=0
 host_sh "DEVBOX_ACTIVE_ENV=web-dev '$HOST_HOME/.local/bin/claude' --version" >/dev/null 2>&1 || rc=$?
 check_eq 'claude shim refuses to run inside an environment (exit 8)' '8' "$rc"
 
-# Inference must resolve all five environments from repository markers.
+# Inference must resolve every environment from repository markers. A rule may
+# carry a third field, the tier, so the marker is not always the end of a line.
 for marker_env in "web-dev:package.json" "python-dev:pyproject.toml" "rust-dev:Cargo.toml" \
-    "dotnet-dev:global.json" "android-dev:gradlew"; do
+    "dotnet-dev:global.json" "android-dev:gradlew" "golang-dev:go.mod" \
+    "godot-dev:project.godot"; do
     envname=${marker_env%%:*}
     marker=${marker_env#*:}
-    if printf '%s\n' "$module_rules" | grep -q "^$envname"$'\t'"$marker\$"; then
+    if printf '%s\n' "$module_rules" | awk -F'\t' -v e="$envname" -v m="$marker" \
+        '$1 == e && $2 == m { found = 1 } END { exit !found }'; then
         pass "inference rule: $marker -> $envname"
     else
         fail "inference rule: $marker -> $envname" \
              "missing from components/$envname/inference.tsv"
     fi
 done
+
+# A Godot C# repository holds project.godot AND a .csproj, so the two modules
+# would both match. The specific tier is what decides it, and the router has to
+# implement the tier for the rule to mean anything.
+check_contains 'project.godot is a specific marker' \
+    $'godot-dev\tproject.godot\tspecific' "$module_rules"
+check 'the router resolves the specific tier before the general one' -- \
+    grep -q 'best=specific' "$REPO_ROOT/bin/devbox"
+check_not_contains 'the dotnet-dev markers stay general' 'specific' \
+    "$(sed -e 's/#.*//' "$REPO_ROOT/components/dotnet-dev/inference.tsv" | awk 'NF')"
 
 check_eq 'default (management) environment is web-dev' 'web-dev' \
     "$(sed -n 's/^ *default_environment *= *//p' "$REPO_ROOT/config/devbox-router/settings.env" | tr -d ' ')"

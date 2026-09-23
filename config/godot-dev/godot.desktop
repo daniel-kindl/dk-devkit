@@ -1,0 +1,19 @@
+# Template. bootstrap/godot-dev.sh renders @GODOT_COMMAND@ and installs the
+# result into the container home, then distrobox-export copies it to the host
+# application menu.
+#
+# The command is an absolute path on purpose. distrobox-enter runs a command
+# WITHOUT a login shell, and the PATH it passes is the host one, which does not
+# hold this container's ~/.local/bin, so a bare name does not resolve.
+[Desktop Entry]
+Type=Application
+Name=Godot Engine (C#)
+GenericName=Game Engine
+Comment=Godot with C# support, from the godot-dev environment
+Exec=@GODOT_COMMAND@ %f
+Icon=applications-games
+Terminal=false
+Categories=Development;IDE;
+MimeType=application/x-godot-project;
+StartupNotify=true
+StartupWMClass=Godot

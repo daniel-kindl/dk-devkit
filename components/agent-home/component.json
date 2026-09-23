@@ -13,7 +13,13 @@
   "verify": ["./verify.sh", "--only", "4"],
   "manual": [],
   "state": {
-    "public": ["config/agents/AGENTS.md", "config/agents/statusline/spec.json"],
-    "local": ["~/.codex/auth.json", "~/.claude.json"]
+    "public": [
+      "bin/configure-codex.py",
+      "bin/set-agent-modes.py",
+      "config/agents/AGENTS.md",
+      "config/agents/statusline/spec.json",
+      "config/codex/config.base.toml"
+    ],
+    "local": ["~/.codex/auth.json", "~/.codex/config.toml", "~/.claude.json"]
   }
 }

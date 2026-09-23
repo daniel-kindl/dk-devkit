@@ -31,20 +31,20 @@ else
         './install.sh --components agent-skills'
 fi
 
-# Codex needs one symlink per skill, and every one of them must resolve into
-# the canonical store.
+# Codex needs one symlink per declared skill. Other directories in the store
+# can come from plugins and have their own lifecycle.
 broken=''
-for name in $(cd "$STORE" 2>/dev/null && ls -1 2>/dev/null); do
-    [ -d "$STORE/$name" ] || continue
+while IFS=$'\t' read -r name _source _ref _path; do
+    case ${name:-} in ''|'#'*) continue ;; esac
     if [ ! -L "$CODEX_SKILLS/$name" ]; then
         broken="$broken $name"
     elif [ "$(readlink -f -- "$CODEX_SKILLS/$name")" != "$(readlink -f -- "$STORE/$name")" ]; then
         broken="$broken $name(wrong-target)"
     fi
-done
+done < "$REPO_ROOT/manifests/skills.tsv"
 if [ -z "$broken" ]; then
-    pass 'S4 Codex has a per-skill symlink for every skill in the store'
+    pass 'S4 Codex has a per-skill symlink for every declared skill'
 else
-    fail 'S4 Codex has a per-skill symlink for every skill in the store' \
+    fail 'S4 Codex has a per-skill symlink for every declared skill' \
         "broken:$broken" 'run sync-agent-skills'
 fi

@@ -1,4 +1,5 @@
 {
   "theme": "dark",
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "permissions": { "defaultMode": "bypassPermissions" }
 }
