@@ -7,9 +7,11 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
 . "$REPO_ROOT/bootstrap/lib/common.sh"
 
+SKIP_SKILLS=0
 while [ $# -gt 0 ]; do
     case $1 in
         --dry-run) DRY_RUN=1; shift ;;
+        --skip-skills) SKIP_SKILLS=1; shift ;;
         -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
@@ -113,6 +115,27 @@ link_into "$LINK_ROOT/bin/sync-agent-skills" "$HOME/.local/bin/sync-agent-skills
 section 'Agent CLIs'
 if [ -x "$HOME/.local/bin/claude" ]; then ok 'claude is installed'; else run bash -c "curl -fsSL $CLAUDE_CODE_INSTALLER | bash"; fi
 if [ -x "$HOME/.local/bin/codex" ]; then ok 'codex is installed'; else run bash -c "curl -fsSL $CODEX_INSTALLER | sh"; fi
+
+section 'Third-party skills'
+if [ "$SKIP_SKILLS" = 1 ]; then
+    info 'skipped (--skip-skills)'
+elif [ "$DRY_RUN" = 1 ]; then
+    info 'would run bin/install-skills against manifests/skills.tsv'
+else
+    "$REPO_ROOT/bin/install-skills"
+fi
+
+section 'Client preferences'
+if [ "$DRY_RUN" = 1 ]; then
+    info "would merge shared client preferences into $HOME"
+else
+    [ -f "$HOME/.claude/settings.json" ] || printf '{}\n' > "$HOME/.claude/settings.json"
+    python3 "$REPO_ROOT/bin/merge-json-defaults.py" \
+        "$HOME/.claude/settings.json" "$REPO_ROOT/config/claude/settings.base.json"
+    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
+        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
+    "$HOME/.agents/statusline/install.sh"
+fi
 
 manual 'Authenticate Claude Code in android-dev: claude (then /login)'
 manual 'Authenticate Codex in android-dev: codex login'

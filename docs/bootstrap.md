@@ -201,7 +201,7 @@ that carries `rust-toolchain.toml` overrides it. `docs/rust-dev.md` says why.
 ## `bootstrap/golang-dev.sh`, `bootstrap/dotnet-dev.sh` and `bootstrap/android-dev.sh`
 
 Each script runs inside its matching container and accepts `--dry-run` and
-`--skip-skills` where the component supports skill installation.
+`--skip-skills`.
 
 | Script | Toolchain state | Verification |
 | --- | --- | --- |
@@ -209,9 +209,9 @@ Each script runs inside its matching container and accepts `--dry-run` and
 | `dotnet-dev.sh` | .NET SDK; target frameworks stay in project files and `global.json` | `./verify.sh --only 29` |
 | `android-dev.sh` | JDK 25, Android command-line tools and the SDK packages in `android-dev.env` | `./verify.sh --only 27` |
 
-All three also install the agent CLIs, shared agent configuration and status
-line. `android-dev.sh` uses `--dry-run` but does not expose `--skip-skills`.
-The environment-specific manifests remain the source of truth.
+All three also install the agent CLIs, the shared agent configuration, the
+third-party skills, the client preferences and the status line. The
+environment-specific manifests remain the source of truth.
 
 ### Only `web-dev` carries the coordinator
 
