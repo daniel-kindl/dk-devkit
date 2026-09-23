@@ -4,7 +4,7 @@ Reusable development tools, agent workflows, environment definitions, and automa
 
 This repository is evolving from a Bazzite workstation definition into a **portable personal development toolkit**. Reusable commands and workflows are the product; Daniel's complete workstation becomes one opinionated composition of those pieces. Bazzite/Fedora remains the primary verified platform today.
 
-> The toolkit architecture is in place: modular component installation, interactive selection, named profiles, and the platform capability layer all exist as `./install.sh`. Bazzite is the only platform with verification evidence; the other adapters carry the support tier the evidence allows, and this README does not present them as verified. `dotnet-dev` is a supported .NET and C# environment, and `godot-dev` adds the Godot engine on top of it for games. The remaining environment work is tracked in #53.
+> The toolkit architecture is in place: modular component installation, interactive selection, named profiles, and the platform capability layer all exist as `./install.sh`. Bazzite is the only platform with verification evidence. The other adapters carry the support tier the evidence allows, and this README does not present them as verified. `dotnet-dev` is a supported .NET and C# environment. `godot-dev` adds the Godot engine to it for games. The repository implements all seven development environments listed below.
 
 ## Current tools
 
@@ -229,7 +229,7 @@ personal development toolkit
 
 Each profile contains the smaller one. The `daniel` profile composes the complete personal workstation. No profile is a dependency of a reusable tool, and `./install.sh --dry-run --profile daniel` shows what it resolves to.
 
-The remaining environment roadmap priority is [#53](https://github.com/daniel-kindl/dk-devkit/issues/53), which covers `android-dev`. The architectural epics [#8](https://github.com/daniel-kindl/dk-devkit/issues/8) and [#24](https://github.com/daniel-kindl/dk-devkit/issues/24) are complete.
+The Android environment work in [#53](https://github.com/daniel-kindl/dk-devkit/issues/53) is complete. The architectural epics [#8](https://github.com/daniel-kindl/dk-devkit/issues/8) and [#24](https://github.com/daniel-kindl/dk-devkit/issues/24) are also complete.
 
 The repository was renamed from `workstation` to `dk-devkit` to name the product rather than one machine. [docs/naming.md](docs/naming.md) records that evaluation. GitHub redirects the old URL. A checkout made before the rename keeps working after `git remote set-url origin`, and the checkout directory is `~/projects/dk-devkit`.
 
