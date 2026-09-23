@@ -16,6 +16,7 @@ policy and the trust boundaries.
 | [environments.md](environments.md) | The development environment module, and the environments that exist today |
 | [not-tracked.md](not-tracked.md) | What stays outside Git, and where each excluded thing lives instead |
 | [secrets.md](secrets.md) | The credential policy, and the secret scanner that enforces it |
+| [Agent skill setup](agents/issue-tracker.md) | The issue tracker, [triage labels](agents/triage-labels.md), and [domain docs](agents/domain.md) used by the engineering skills |
 
 ## The commands
 

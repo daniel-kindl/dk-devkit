@@ -1,5 +1,19 @@
 # Agent instructions for the dk-devkit repository
 
+## Agent skills
+
+### Issue tracker
+
+Issues for this repository live in GitHub Issues. Use `gh` from this checkout. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use the single-context layout at `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
 This repository is a portable personal development toolkit: reusable commands,
 agent workflows, environment definitions and policies. Daniel's complete
 Bazzite workstation is one profile of the same components, and Bazzite is the
