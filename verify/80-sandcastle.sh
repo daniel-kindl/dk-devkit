@@ -628,8 +628,8 @@ check 'J2 no run directory is tracked' -- \
 if command -v node >/dev/null 2>&1; then
     probe_out=$(node --test "$REPO_ROOT/verify/probes/clone-integrity.test.mjs" 2>&1) &&
         probe_rc=0 || probe_rc=$?
-    probe_pass=$(printf '%s\n' "$probe_out" | sed -n 's/^# pass //p')
-    probe_fail=$(printf '%s\n' "$probe_out" | sed -n 's/^# fail //p')
+    probe_pass=$(printf '%s\n' "$probe_out" | sed -n -e 's/^# pass //p' -e 's/^ℹ pass //p')
+    probe_fail=$(printf '%s\n' "$probe_out" | sed -n -e 's/^# fail //p' -e 's/^ℹ fail //p')
     if [ "$probe_rc" = 0 ] && [ "${probe_fail:-1}" = 0 ]; then
         pass "L1 the clone integrity comparison behaves ($probe_pass assertions)"
     else
@@ -676,8 +676,8 @@ check_contains 'P9 a soft limit above its hard limit is refused' \
 if command -v node >/dev/null 2>&1; then
     probe_out=$(node --test "$REPO_ROOT/verify/probes/budget.test.mjs" 2>&1) &&
         probe_rc=0 || probe_rc=$?
-    probe_pass=$(printf '%s\n' "$probe_out" | sed -n 's/^# pass //p')
-    probe_fail=$(printf '%s\n' "$probe_out" | sed -n 's/^# fail //p')
+    probe_pass=$(printf '%s\n' "$probe_out" | sed -n -e 's/^# pass //p' -e 's/^ℹ pass //p')
+    probe_fail=$(printf '%s\n' "$probe_out" | sed -n -e 's/^# fail //p' -e 's/^ℹ fail //p')
     if [ "$probe_rc" = 0 ] && [ "${probe_fail:-1}" = 0 ]; then
         pass "P10 the efficiency budget behaves ($probe_pass assertions)"
     else

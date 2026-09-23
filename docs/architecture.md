@@ -163,8 +163,10 @@ shared policy and the routing.
 
 ## Shared agent configuration
 
-`~/.agents` is the canonical cross-agent configuration area. It lives inside the
-`web-dev` HOME, because that is where the agent CLIs run.
+`~/.agents` is the canonical cross-agent configuration area in each devbox HOME.
+Each devbox installs skills from `manifests/skills.tsv` and updates its own
+Claude Code, Codex and Grok CLI. The isolated homes keep credentials and sessions
+separate.
 
     ~/.agents/AGENTS.md      -> config/agents/AGENTS.md   (this repository)
     ~/.agents/statusline     -> config/agents/statusline  (this repository)
@@ -188,6 +190,17 @@ Claude Code accepts one directory symlink for the whole skill store. Codex needs
 one symlink per skill, because `~/.codex/skills/.system` holds the Codex native
 skills and must survive. `bin/sync-agent-skills` maintains those links, and it
 never deletes a real directory.
+
+Codex invokes a skill with `$<name>` or through `/skills`. Its initial skill
+list can omit entries when it exceeds the context budget. The skill remains
+installed in `~/.agents/skills`. Claude Code and Grok can use slash skill names.
+Grok also reads Claude Code plugins through its compatibility support. Codex and
+Claude Code manage their own plugin marketplaces and account connections.
+
+The interactive CLIs use no-prompt permission modes in each devbox. Codex uses
+`approval_policy = "never"` with `sandbox_mode = "danger-full-access"`. Claude
+Code and Grok use `bypassPermissions`. The unattended `agentbox` sandbox uses a
+separate disposable clone and does not read these interactive settings.
 
 The link targets use the host spelling of the checkout
 (`~/projects/dk-devkit/...`), not `/workspace/...`. Both spellings reach the

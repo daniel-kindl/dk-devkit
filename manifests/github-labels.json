@@ -123,25 +123,25 @@
     },
     {
       "name": "wayfinder:map",
-      "color": "5319e7",
+      "color": "5941a9",
       "description": "A wayfinder map issue. It indexes the decisions of one effort.",
       "group": "wayfinder"
     },
     {
       "name": "wayfinder:prototype",
-      "color": "a2eeef",
+      "color": "6bcbb8",
       "description": "A wayfinder ticket resolved by a throwaway prototype.",
       "group": "wayfinder"
     },
     {
       "name": "wayfinder:research",
-      "color": "0075ca",
+      "color": "1164a6",
       "description": "A wayfinder ticket resolved by reading primary sources.",
       "group": "wayfinder"
     },
     {
       "name": "wayfinder:task",
-      "color": "fbca04",
+      "color": "e3b341",
       "description": "A wayfinder ticket resolved by manual work that unblocks a decision.",
       "group": "wayfinder"
     },

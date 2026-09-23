@@ -114,6 +114,24 @@ link_into "$LINK_ROOT/bin/sync-agent-skills" "$HOME/.local/bin/sync-agent-skills
 
 install_agent_clis
 
+section 'Third-party skills'
+if [ "$DRY_RUN" = 1 ]; then
+    info 'would install skills from manifests/skills.tsv'
+else
+    "$REPO_ROOT/bin/install-skills"
+fi
+
+section 'Client preferences'
+if [ "$DRY_RUN" = 1 ]; then
+    info "would merge shared client preferences into $HOME"
+else
+    python3 "$REPO_ROOT/bin/merge-json-defaults.py" \
+        "$HOME/.claude/settings.json" "$REPO_ROOT/config/claude/settings.base.json"
+    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
+        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
+    "$HOME/.agents/statusline/install.sh"
+fi
+
 manual 'Authenticate Claude Code in android-dev: claude (then /login)'
 manual 'Authenticate Codex in android-dev: codex login'
 manual 'Authenticate Grok in android-dev: grok (the first start opens a browser)'

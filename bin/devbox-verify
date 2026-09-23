@@ -16,6 +16,7 @@ PROJECTS=$HOME/projects
 PRIMARY_REPO=$PROJECTS/dkkb
 FAST=0
 [[ ${1:-} == --fast ]] && FAST=1
+NODE_VERSION=$(sed -n 's/^NODE_VERSION=//p' "$(dirname -- "$(readlink -f -- "$DEVBOX")")/../manifests/toolchain.env")
 
 PASSED=0; FAILED=0; SKIPPED=0
 canon() { realpath -m -- "$1"; }
@@ -169,7 +170,7 @@ DIR=${WT:-$PRIMARY_REPO}
 if [[ -d $DIR ]]; then
     out=$(cd "$DIR" && dbx run -- bash -lc 'printf "%s|%s|%s" "$(node -v)" "$(pnpm -v)" "$(pwd)"' 2>&1); rc=$?
     if (( rc == 0 )); then
-        expect_contains 'D1 Node comes from the box'  'v22.'          "$out"
+        expect_contains 'D1 Node comes from the box'  "v$NODE_VERSION|" "$out"
         expect_contains 'D2 pnpm is available'        '|11.'          "$out"
         expect_contains 'D3 cwd was translated'       '|/workspace/'  "$out"
     else

@@ -8,7 +8,7 @@
 # What it does, all idempotently:
 #   * installs the distribution packages in manifests/web-dev-packages.txt
 #   * installs nvm, Node, Corepack and pnpm at the versions in manifests/toolchain.env
-#   * installs the Claude Code, Codex and Grok native CLIs when they are absent
+#   * installs or updates the Claude Code, Codex and Grok native CLIs
 #   * wires the shared agent configuration into ~/.agents, ~/.claude and ~/.codex
 #   * installs the Orca bridge wrappers and sync-agent-skills
 #   * installs the third-party skills in manifests/skills.tsv

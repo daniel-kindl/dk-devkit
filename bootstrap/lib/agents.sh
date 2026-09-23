@@ -2,9 +2,8 @@
 # Source this file; do not execute it. It needs bootstrap/lib/common.sh
 # and the installer URLs from manifests/toolchain.env.
 #
-# Claude Code, Codex and Grok are native installers. Each one self-updates.
-# The bootstrap installs a CLI only when its binary is absent. It never
-# downgrades a CLI that is already there.
+# Claude Code, Codex and Grok are native installers. The bootstrap installs
+# missing CLIs and asks each installed CLI to update itself.
 
 # install_one_agent <binary> <name> <shell> <installer-url>
 install_one_agent() {
@@ -14,6 +13,11 @@ install_one_agent() {
     if [ -x "$bin" ]; then
         version=$("$bin" --version 2>/dev/null | head -1)
         ok "$name ($version)"
+        if [ "${DRY_RUN:-0}" = 1 ]; then
+            info "would update $name"
+        else
+            "$bin" update || die "$name update failed"
+        fi
         return 0
     fi
     [ -n "$installer" ] || die "no installer URL for $name"
@@ -36,6 +40,12 @@ install_agent_clis() {
     install_one_agent "$HOME/.local/bin/claude" claude bash "$CLAUDE_CODE_INSTALLER"
     install_one_agent "$HOME/.local/bin/codex"  codex  sh   "$CODEX_INSTALLER"
     install_one_agent "$HOME/.grok/bin/grok"    grok   bash "$GROK_INSTALLER"
+
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        info "would set bypass permission mode for Claude Code, Codex and Grok"
+    else
+        python3 "$REPO_ROOT/bin/set-agent-modes.py" "$HOME"
+    fi
 
     if [ -x "$HOME/.grok/bin/grok" ]; then
         link_into "$HOME/.grok/bin/grok" "$HOME/.local/bin/grok"

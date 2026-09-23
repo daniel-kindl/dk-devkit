@@ -50,7 +50,7 @@ class ManifestCase(unittest.TestCase):
     def test_every_shipped_label_declares_a_known_group(self):
         # A group is documentation metadata, but agentq selects the lifecycle
         # labels by group. A typo there would silently empty that selection.
-        known = {"type", "agent-workflow", "impact", "status"}
+        known = {"type", "agent-workflow", "wayfinder", "impact", "status"}
         for item in repo_labels.load_manifest(MANIFEST):
             self.assertIn(item.group, known, f"{item.name} has group {item.group!r}")
 
@@ -88,8 +88,11 @@ class ManifestCase(unittest.TestCase):
         section = re.search(r"^## The canonical catalog$(.*?)^## ",
                             document, re.M | re.S)
         self.assertIsNotNone(section, "docs/repo-labels.md lost its catalog section")
-        documented = dict(re.findall(r"^\| `([^`]+)` \| (.+?) \|$",
-                                     section.group(1), re.M))
+        documented = {}
+        for line in section.group(1).splitlines():
+            match = re.match(r"^\| `([^`]+)` \| (?:`#[0-9a-f]{6}` \| )?(.+?) \|$", line)
+            if match:
+                documented[match.group(1)] = match.group(2)
         shipped = {item.name: item.description
                    for item in repo_labels.load_manifest(MANIFEST)}
         self.assertEqual(documented, shipped)

@@ -15,9 +15,11 @@ install_host_agent_home() {
     ensure_dir "$home/.codex"
     if [ "$DRY_RUN" = 1 ]; then
         info "would merge $repo_root/config/codex/config.base.toml into $home/.codex/config.toml"
+        info "would set Codex to bypass permission prompts"
     else
         python3 "$repo_root/bin/merge-toml-defaults.py" \
             "$home/.codex/config.toml" "$repo_root/config/codex/config.base.toml"
+        python3 "$repo_root/bin/set-agent-modes.py" "$home" --codex-only
     fi
 
     section 'Codex host policy and status line'
