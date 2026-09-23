@@ -35,6 +35,8 @@ check 'A6c the model routing test exists'    -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-effort.test.py"
 check 'A6e the repository setup test exists' -- \
     test -f "$REPO_ROOT/verify/probes/agentqueue-setup.test.py"
+check 'A6f the portable package test exists' -- \
+    test -f "$REPO_ROOT/verify/probes/agentqueue-portable.test.py"
 check 'A6d the model tier catalog exists'    -- \
     test -f "$REPO_ROOT/manifests/model-tiers.json"
 check 'A7 the architecture document exists'  -- test -f "$REPO_ROOT/docs/agentq.md"
@@ -465,6 +467,16 @@ if command -v python3 >/dev/null 2>&1; then
     else
         fail 'H1d the repository setup tests pass' \
             "$(printf '%s\n' "$set_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
+    fi
+
+    portable_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-portable.test.py" 2>&1) &&
+        portable_rc=0 || portable_rc=$?
+    portable_n=$(printf '%s\n' "$portable_out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
+    if [ "$portable_rc" = 0 ]; then
+        pass "H1e the portable package tests pass ($portable_n tests)"
+    else
+        fail 'H1e the portable package tests pass' \
+            "$(printf '%s\n' "$portable_out" | grep -E '^(FAIL|ERROR):' | head -5 | tr '\n' ' ')"
     fi
 
     int_out=$(python3 "$REPO_ROOT/verify/probes/agentqueue-integration.test.py" 2>&1) &&

@@ -1110,6 +1110,33 @@ lock, and the tests force a real overlap to prove the blocks arrive whole.
   `distrobox enter`, and it is the same for `devbox exec`, `devbox run` and the
   `claude` and `codex` shims. Stop a run with Ctrl-C.
 
+## Portable package
+
+The portable package lets another Linux environment run `agentq` without the
+`dk-devkit` checkout or the `devbox` router. Build it from this repository:
+
+```bash
+tools/package-agentq /tmp/agentq.tar.gz
+mkdir -p /tmp/agentq-package
+tar -xzf /tmp/agentq.tar.gz -C /tmp/agentq-package
+cd /tmp/agentq-package/agentq
+./install.sh
+```
+
+The package includes the coordinator, its default policy and model tiers, the
+sandbox profile catalog, the lifecycle label catalog, and `scan-secrets`.
+Install a compatible `agentbox` separately and make it available on `PATH`.
+`agentq` checks its own `bin/` directory first, then `PATH` for that command.
+Run it in the trusted environment that holds `gh` authentication and the SSH
+agent. The sandbox must not receive either one.
+
+The `dk-devkit` component remains the integrated install path. It still
+installs the host router shim and runs the coordinator inside `web-dev`. The
+portable package is for an environment that supplies the compatible
+`agentbox`, `gh`, Git, Python, and SSH agent itself. See
+[`packaging/agentq/README.md`](../packaging/agentq/README.md) for its install
+contract.
+
 ## Related documents
 
 - [sandcastle.md](sandcastle.md) - the unattended agent and its boundary

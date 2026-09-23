@@ -22,6 +22,7 @@ policy and the trust boundaries.
 | Document | Command |
 | --- | --- |
 | [agentq.md](agentq.md) | `agentq`, the GitHub backlog coordinator |
+| [../packaging/agentq/README.md](../packaging/agentq/README.md) | The standalone `agentq` package and its `agentbox` dependency contract |
 | [sandcastle.md](sandcastle.md) | `agentbox`, the unattended agent sandbox and its import boundary |
 | [agent-sandbox-profiles.md](agent-sandbox-profiles.md) | `agent-sandbox`, the sandbox profiles, and how a repository selects one |
 | [repo-labels.md](repo-labels.md) | `repo-labels`, the exact-sync GitHub label tool |
