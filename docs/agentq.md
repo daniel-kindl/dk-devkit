@@ -1110,13 +1110,6 @@ lock, and the tests force a real overlap to prove the blocks arrive whole.
   `distrobox enter`, and it is the same for `devbox exec`, `devbox run` and the
   `claude` and `codex` shims. Stop a run with Ctrl-C.
 
-## Related documents
-
-- [sandcastle.md](sandcastle.md) - the unattended agent and its boundary
-- [architecture.md](architecture.md) - the whole machine
-- [secrets.md](secrets.md) - what never enters a repository or a sandbox
-
-
 ## Portable package
 
 The portable package lets another Linux environment run `agentq` without the
@@ -1143,3 +1136,9 @@ portable package is for an environment that supplies the compatible
 `agentbox`, `gh`, Git, Python, and SSH agent itself. See
 [`packaging/agentq/README.md`](../packaging/agentq/README.md) for its install
 contract.
+
+## Related documents
+
+- [sandcastle.md](sandcastle.md) - the unattended agent and its boundary
+- [architecture.md](architecture.md) - the whole machine
+- [secrets.md](secrets.md) - what never enters a repository or a sandbox
