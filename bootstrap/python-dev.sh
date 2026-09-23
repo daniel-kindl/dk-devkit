@@ -141,14 +141,6 @@ else
         "$HOME/.claude/settings.json" "$REPO_ROOT/config/claude/settings.base.json"
 fi
 
-section 'Codex preferences ($CODEX_HOME/config.toml)'
-if [ "$DRY_RUN" = 1 ]; then
-    info "would merge config/codex/config.base.toml into $HOME/.codex/config.toml"
-else
-    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
-        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
-fi
-
 section 'Status line'
 if [ "$DRY_RUN" = 1 ]; then
     info 'would run ~/.agents/statusline/install.sh'

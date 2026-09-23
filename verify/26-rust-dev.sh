@@ -88,6 +88,7 @@ for agent in claude codex grok; do
     check "rust-dev interactive agent is available: $agent" -- \
         rust_box_sh "command -v '$agent' >/dev/null"
 done
+check_codex_sandbox rust-dev rust_box_sh
 check 'rust-dev shared agent policy is wired' -- \
     rust_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'rust-dev shared skill store exists' -- \

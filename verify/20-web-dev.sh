@@ -53,9 +53,13 @@ check_contains 'node comes from the isolated HOME (nvm), not the host' \
 web_dev_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/web-dev-packages.txt" | awk 'NF')
 
 for pkg in $web_dev_packages; do
-    check "web-dev package: $pkg (rpm)"  -- box_sh "rpm -q $pkg >/dev/null"
-    check "web-dev package: $pkg (PATH)" -- box_sh "command -v $pkg >/dev/null"
+    check "web-dev package: $pkg (rpm)" -- box_sh "rpm -q $pkg >/dev/null"
+    if [ "$pkg" != bubblewrap ]; then
+        check "web-dev package: $pkg (PATH)" -- box_sh "command -v $pkg >/dev/null"
+    fi
 done
+check 'web-dev bubblewrap command is available' -- box_sh 'command -v bwrap >/dev/null'
+check_codex_sandbox web-dev box_sh
 
 # distrobox/web-dev.ini repeats the list, because the INI format cannot read a
 # file. Nothing else notices when the two drift apart, and a container created

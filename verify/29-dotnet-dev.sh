@@ -63,6 +63,7 @@ for agent in claude codex grok; do
     check "dotnet-dev interactive agent is available: $agent" -- \
         dotnet_box_sh "command -v '$agent' >/dev/null"
 done
+check_codex_sandbox dotnet-dev dotnet_box_sh
 check 'dotnet-dev shared agent policy is wired' -- \
     dotnet_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'dotnet-dev shared skill store exists' -- dotnet_box_sh 'test -d "$HOME/.agents/skills"'

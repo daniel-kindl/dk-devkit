@@ -10,6 +10,7 @@
 
 # Source control and build tools.
 git
+bubblewrap
 jq
 gh
 curl

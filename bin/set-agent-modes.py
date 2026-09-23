@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set the interactive permission defaults for the three devbox agent CLIs."""
+"""Set the interactive permission modes for Claude Code and Grok."""
 
 import json
 import re
@@ -67,14 +67,11 @@ def set_claude_mode(path: Path) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--codex-only"):
-        raise SystemExit("usage: set-agent-modes.py <home> [--codex-only]")
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: set-agent-modes.py <home>")
     home = Path(sys.argv[1])
-    set_toml_value(home / ".codex/config.toml", None, "approval_policy", "never")
-    set_toml_value(home / ".codex/config.toml", None, "sandbox_mode", "danger-full-access")
-    if len(sys.argv) == 2:
-        set_claude_mode(home / ".claude/settings.json")
-        set_toml_value(home / ".grok/config.toml", "ui", "permission_mode", "bypassPermissions")
+    set_claude_mode(home / ".claude/settings.json")
+    set_toml_value(home / ".grok/config.toml", "ui", "permission_mode", "bypassPermissions")
 
 
 if __name__ == "__main__":

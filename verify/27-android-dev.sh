@@ -60,6 +60,7 @@ for agent in claude codex grok; do
     check "android-dev interactive agent is available: $agent" -- \
         android_box_sh "command -v '$agent' >/dev/null"
 done
+check_codex_sandbox android-dev android_box_sh
 check 'android-dev shared agent policy is wired' -- \
     android_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'no private SSH key inside android-dev HOME' -- \

@@ -54,6 +54,7 @@ for agent in claude codex grok; do
     check "golang-dev interactive agent is available: $agent" -- \
         go_box_sh "command -v '$agent' >/dev/null"
 done
+check_codex_sandbox golang-dev go_box_sh
 check 'golang-dev shared agent policy is wired' -- \
     go_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'golang-dev shared skill store exists' -- go_box_sh 'test -d "$HOME/.agents/skills"'

@@ -1094,15 +1094,19 @@ class CommandLineCase(unittest.TestCase):
         self.assertIn("not a profile", result.stderr)
 
     def test_state_reports_the_boundary_and_changes_nothing(self):
+        before = subprocess.run(
+            ["git", "status", "--porcelain", "--", "components"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
         result = self.run_installer("--state")
         self.assertEqual(result.returncode, toolkit.EXIT_OK)
         self.assertIn("public  manifests/github-labels.json", result.stdout)
         self.assertIn("local   ~/.local/share/distrobox-homes/web-dev/", result.stdout)
-        self.assertEqual(
-            "", subprocess.run(["git", "status", "--porcelain", "--", "components"],
-                               cwd=ROOT, capture_output=True, text=True,
-                               check=True).stdout.strip(),
-        )
+        after = subprocess.run(
+            ["git", "status", "--porcelain", "--", "components"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertEqual(before, after)
 
     def test_state_narrows_to_a_selection(self):
         result = self.run_installer("--state", "--components", "repo-labels")

@@ -42,8 +42,9 @@ install_agent_clis() {
     install_one_agent "$HOME/.grok/bin/grok"    grok   bash "$GROK_INSTALLER"
 
     if [ "${DRY_RUN:-0}" = 1 ]; then
-        info "would set bypass permission mode for Claude Code, Codex and Grok"
+        info 'would configure Codex defaults and set Claude Code and Grok permission modes'
     else
+        python3 "$REPO_ROOT/bin/configure-codex.py" "$HOME/.codex/config.toml"
         python3 "$REPO_ROOT/bin/set-agent-modes.py" "$HOME"
     fi
 

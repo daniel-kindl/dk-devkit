@@ -84,6 +84,7 @@ for agent in claude codex grok; do
     check "godot-dev interactive agent is available: $agent" -- \
         godot_box_sh "command -v '$agent' >/dev/null"
 done
+check_codex_sandbox godot-dev godot_box_sh
 check 'godot-dev shared agent policy is wired' -- \
     godot_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'godot-dev shared skill store exists' -- godot_box_sh 'test -d "$HOME/.agents/skills"'

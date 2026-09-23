@@ -45,10 +45,10 @@ guarantees:
   not match.
 - **Non-destructive.** Anything a script replaces is copied into
   `~/.agents/backups/<timestamp>/` first.
-- **Additive for configuration this repository does not own.** The Claude and
-  Codex preference merges only ADD a key that is absent. They never change an
-  existing value, so Orca's hooks, a hand edit, and any state a client wrote for
-  itself all survive.
+- **Additive for configuration this repository does not own.** Claude and
+  Codex defaults add missing keys and preserve existing values. Codex also
+  migrates the previous toolkit policy when both old values are present.
+  Orca's hooks and state a client wrote for itself survive.
 - **`--dry-run`.** Prints what a run would change, and writes nothing.
 
 Both scripts print a summary at the end: how many steps changed something, how

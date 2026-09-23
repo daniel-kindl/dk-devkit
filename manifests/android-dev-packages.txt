@@ -2,6 +2,7 @@
 # The INI definition repeats this list because it cannot read a manifest.
 
 git
+bubblewrap
 jq
 gh
 curl

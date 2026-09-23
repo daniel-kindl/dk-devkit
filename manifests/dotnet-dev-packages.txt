@@ -5,6 +5,7 @@
 # an existing container from this manifest, and verify/29-dotnet-dev.sh checks it.
 
 git
+bubblewrap
 jq
 gh
 curl

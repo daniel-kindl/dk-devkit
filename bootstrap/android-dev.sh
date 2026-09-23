@@ -127,8 +127,6 @@ if [ "$DRY_RUN" = 1 ]; then
 else
     python3 "$REPO_ROOT/bin/merge-json-defaults.py" \
         "$HOME/.claude/settings.json" "$REPO_ROOT/config/claude/settings.base.json"
-    python3 "$REPO_ROOT/bin/merge-toml-defaults.py" \
-        "$HOME/.codex/config.toml" "$REPO_ROOT/config/codex/config.base.toml"
     "$HOME/.agents/statusline/install.sh"
 fi
 

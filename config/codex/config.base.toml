@@ -1,7 +1,7 @@
-# Non-secret Codex preferences. Merged into $CODEX_HOME/config.toml by
-# bootstrap. Authentication (auth.json) and per-project trust levels are
-# runtime state and are never written from here.
+# Non-secret Codex defaults. bootstrap/configure-codex.py applies these to
+# $CODEX_HOME/config.toml and migrates the previous toolkit policy. Authentication
+# (auth.json) and per-project trust levels are runtime state and stay local.
 model = "gpt-5.6-luna"
 model_reasoning_effort = "high"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
