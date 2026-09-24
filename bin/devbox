@@ -611,6 +611,16 @@ set -euo pipefail
 strip_list="$1"; shift
 init_file="$1"; shift
 target_dir="$1"; shift
+host_git_name="$1"; shift
+host_git_email="$1"; shift
+
+# Keep every routed development box aligned with the host global Git
+# identity. These values are passed as arguments, so spaces and shell syntax
+# in the Git name or email stay data.
+if [[ -n "$host_git_name" && -n "$host_git_email" ]]; then
+    git config --global user.name "$host_git_name"
+    git config --global user.email "$host_git_email"
+fi
 
 if [[ -n "$strip_list" ]]; then
     IFS=: read -r -a __strip <<< "$strip_list"
@@ -660,8 +670,10 @@ run_in_env() {
     shift
     (( $# > 0 )) || fail 2 "no command given"
 
-    local gcwd init_guest shell_flag strip
+    local gcwd init_guest shell_flag strip git_name git_email
     gcwd=$(guest_path "$host_cwd")
+    git_name=$(git config --global --get user.name 2>/dev/null || true)
+    git_email=$(git config --global --get user.email 2>/dev/null || true)
     init_guest=""
     [[ -n $E_INIT ]] && init_guest=$(guest_path "$E_INIT")
     shell_flag=-c
@@ -691,7 +703,8 @@ run_in_env() {
     export DEVBOX_ACTIVE_ENV=$E_NAME
     export DEVBOX_ACTIVE_BOX=$E_BOX
     exec distrobox enter --name "$E_BOX" -- \
-        bash "$shell_flag" "$INNER" "$PROGRAM" "$strip" "$init_guest" "$gcwd" "$@"
+        bash "$shell_flag" "$INNER" "$PROGRAM" "$strip" "$init_guest" "$gcwd" \
+        "$git_name" "$git_email" "$@"
 }
 
 # --------------------------------------------------------- Orca integration --

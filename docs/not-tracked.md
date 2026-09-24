@@ -146,8 +146,17 @@ unique to one session:
     helper = "!f() { .../node /tmp/vscode-remote-containers-<uuid>.js ...; }; f"
 
 It is dead on any other machine and on any later session. The repository tracks
-no `.gitconfig`. Git identity is a personal setting, and `verify.sh` only checks
-that a `user.email` is configured, not what it is.
+no `.gitconfig`. Git identity is a personal setting. `devbox` copies the host's
+global `user.name` and `user.email` into each box before it runs a routed
+command. Set the identity once on the host:
+
+```sh
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+The verifier checks that a Git email is configured in the web-dev box, not
+what the email is.
 
 ## Base system packages
 
