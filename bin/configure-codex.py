@@ -10,12 +10,12 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULTS = ROOT / "config/codex/config.base.toml"
 MERGER = ROOT / "bin/merge-toml-defaults.py"
 OLD_POLICY = {
-    "approval_policy": '"never"',
-    "sandbox_mode": '"danger-full-access"',
-}
-NEW_POLICY = {
     "approval_policy": '"on-request"',
     "sandbox_mode": '"workspace-write"',
+}
+NEW_POLICY = {
+    "approval_policy": '"never"',
+    "sandbox_mode": '"danger-full-access"',
 }
 
 

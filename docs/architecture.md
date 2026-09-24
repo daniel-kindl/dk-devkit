@@ -197,15 +197,13 @@ installed in `~/.agents/skills`. Claude Code and Grok can use slash skill names.
 Grok also reads Claude Code plugins through its compatibility support. Codex and
 Claude Code manage their own plugin marketplaces and account connections.
 
-Codex uses `approval_policy = "on-request"` with
-`sandbox_mode = "workspace-write"` in the host Codex home used by Orca and in
-each devbox home. The devboxes install `bubblewrap`, and verification checks
-that each can create a user namespace.
-Bootstrap adds these values when they are absent. It migrates the previous
-Codex defaults only when both old values are present, and it preserves other
-values. Claude Code and Grok use `bypassPermissions`. The unattended `agentbox`
-sandbox uses a separate disposable clone and does not read these interactive
-settings.
+Codex uses `approval_policy = "never"` with
+`sandbox_mode = "danger-full-access"` in the host Codex home used by Orca and in
+each devbox home. These settings enable YOLO mode. Bootstrap adds them when
+they are absent. It migrates the previous defaults only when both old values
+are present, and it preserves other values. Claude Code and Grok use
+`bypassPermissions`. The unattended `agentbox` sandbox uses a separate
+disposable clone and does not read these interactive settings.
 
 The link targets use the host spelling of the checkout
 (`~/projects/dk-devkit/...`), not `/workspace/...`. Both spellings reach the

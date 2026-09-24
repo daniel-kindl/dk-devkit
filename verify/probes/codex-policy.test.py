@@ -28,26 +28,26 @@ class CodexPolicyTests(unittest.TestCase):
     def read(self) -> dict[str, object]:
         return tomllib.loads(self.config.read_text())
 
-    def test_defaults_enable_the_native_workspace_sandbox(self) -> None:
+    def test_defaults_enable_yolo_mode(self) -> None:
         self.configure()
         config = self.read()
-        self.assertEqual(config["approval_policy"], "on-request")
-        self.assertEqual(config["sandbox_mode"], "workspace-write")
+        self.assertEqual(config["approval_policy"], "never")
+        self.assertEqual(config["sandbox_mode"], "danger-full-access")
         self.assertEqual(config["model"], "gpt-5.6-luna")
 
-    def test_old_policy_pair_migrates_and_keeps_other_content(self) -> None:
+    def test_previous_default_pair_migrates_and_keeps_other_content(self) -> None:
         self.config.parent.mkdir(parents=True)
         self.config.write_text(
-            'approval_policy = "never" # previous default\n'
-            'sandbox_mode = "danger-full-access"\n'
+            'approval_policy = "on-request" # previous default\n'
+            'sandbox_mode = "workspace-write"\n'
             '\n[tui]\nnotifications = false\n'
         )
 
         self.configure()
 
         config = self.read()
-        self.assertEqual(config["approval_policy"], "on-request")
-        self.assertEqual(config["sandbox_mode"], "workspace-write")
+        self.assertEqual(config["approval_policy"], "never")
+        self.assertEqual(config["sandbox_mode"], "danger-full-access")
         self.assertEqual(config["tui"]["notifications"], False)
         self.assertIn("# previous default", self.config.read_text())
 
@@ -69,8 +69,8 @@ class CodexPolicyTests(unittest.TestCase):
     def test_migration_is_idempotent(self) -> None:
         self.config.parent.mkdir(parents=True)
         self.config.write_text(
-            'approval_policy = "never"\n'
-            'sandbox_mode = "danger-full-access"\n'
+            'approval_policy = "on-request"\n'
+            'sandbox_mode = "workspace-write"\n'
         )
         self.configure()
         first = self.config.read_bytes()

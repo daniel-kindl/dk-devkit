@@ -21,7 +21,7 @@ done
 
 section '3b. Shared agent configuration'
 
-check 'Codex policy defaults preserve user overrides and migrate the old pair' -- \
+check 'Codex policy defaults enable YOLO mode, preserve user overrides, and migrate the previous pair' -- \
     python3 "$REPO_ROOT/verify/probes/codex-policy.test.py"
 
 AGENTS_CANON=$REPO_ROOT/config/agents/AGENTS.md
