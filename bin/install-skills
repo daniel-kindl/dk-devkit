@@ -149,8 +149,13 @@ run_environments() {
 
 run_machine() {
     local failed=0
-    machine_child_args
 
+    in_container && {
+        printf 'install-skills: machine-wide dispatch must run on the host\n' >&2
+        return 2
+    }
+
+    machine_child_args
     if [ "$WHOLE_MACHINE" = 1 ]; then
         printf '==> host\n'
         if ! "$REPO_ROOT/bin/install-skills" "${MACHINE_CHILD_ARGS[@]}"; then
@@ -418,8 +423,3 @@ printf '\n%d installed, %d updated, %d failed\n' "$INSTALLED" "$UPDATED" "$FAILE
 if [ "$DRY_RUN" != 1 ]; then
     printf '\n-- sync-agent-skills --\n'
     sync=$HOME/.local/bin/sync-agent-skills
-    [ -x "$sync" ] || sync=$REPO_ROOT/bin/sync-agent-skills
-    "$sync"
-fi
-
-[ "$FAILED" -eq 0 ]
