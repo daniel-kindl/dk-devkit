@@ -78,6 +78,43 @@ bin/install-skills --dry-run --prune
 `--prune` removes only skill directories that are not in the selected profile.
 It does not run when individual skill names are supplied.
 
+## Machine-wide convergence
+
+Each development environment has an isolated home, so one normal install changes
+only the current `$HOME`. Run machine-wide operations from the host.
+
+Preview the default profile across the host and every existing supported
+environment:
+
+```bash
+bin/install-skills --whole-machine --dry-run --prune
+```
+
+Converge the whole machine:
+
+```bash
+bin/install-skills --whole-machine --prune
+```
+
+Check every store without changing it:
+
+```bash
+bin/install-skills --whole-machine --check
+```
+
+Use `--all-environments` instead of `--whole-machine` when the host store must
+stay unchanged.
+
+The command discovers environments from `bin/toolkit-install --environments`.
+It does not contain an environment-name list. Only supported environments whose
+isolated home already exists are entered. Missing environments are reported and
+skipped. Each environment is entered through `devbox exec`, so the existing
+router owns host-to-container path mapping and the container boundary.
+
+Machine-wide dispatch rejects `--resolve`, `--list-profiles`, and
+`SKILLS_MANIFEST` overrides. Those operations either do not depend on a home or
+can name a host-only path that is not safe to reuse across isolated homes.
+
 ## Add or change a pack
 
 Add one row to `manifests/skill-packs.tsv`:
