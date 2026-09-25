@@ -10,6 +10,8 @@
 #   install-skills --check             report drift, change nothing, no network
 #   install-skills --dry-run           print what would change
 #   install-skills --prune             also remove store entries not in profile
+#   install-skills --all-environments  apply the operation in every existing supported environment
+#   install-skills --whole-machine     apply on the host and in every existing supported environment
 #
 # A skill profile selects exact paths from source packs declared in
 # manifests/skill-packs.tsv. Skill content is never vendored here.
@@ -28,6 +30,8 @@ MODE=install
 DRY_RUN=0
 PRUNE=0
 LIST_PROFILES=0
+ALL_ENVIRONMENTS=0
+WHOLE_MACHINE=0
 declare -a ONLY=()
 
 while [ $# -gt 0 ]; do
@@ -36,13 +40,28 @@ while [ $# -gt 0 ]; do
         --resolve)       MODE=resolve; shift ;;
         --list-profiles) LIST_PROFILES=1; shift ;;
         --check)         MODE=check; shift ;;
-        --dry-run)       DRY_RUN=1; shift ;;
-        --prune)         PRUNE=1; shift ;;
-        -h|--help)       sed -n '2,22p' "$0"; exit 0 ;;
+        --dry-run)          DRY_RUN=1; shift ;;
+        --prune)            PRUNE=1; shift ;;
+        --all-environments) ALL_ENVIRONMENTS=1; shift ;;
+        --whole-machine)    WHOLE_MACHINE=1; shift ;;
+        -h|--help)          sed -n '2,24p' "$0"; exit 0 ;;
         -*)              printf 'install-skills: unknown option: %s\n' "$1" >&2; exit 2 ;;
         *)               ONLY+=("$1"); shift ;;
     esac
 done
+
+if [ "$ALL_ENVIRONMENTS" = 1 ] && [ "$WHOLE_MACHINE" = 1 ]; then
+    printf 'install-skills: choose --all-environments or --whole-machine, not both\n' >&2
+    exit 2
+fi
+if { [ "$ALL_ENVIRONMENTS" = 1 ] || [ "$WHOLE_MACHINE" = 1 ]; } && { [ "$MODE" = resolve ] || [ "$LIST_PROFILES" = 1 ]; }; then
+    printf 'install-skills: machine-wide dispatch is only valid for install or --check\n' >&2
+    exit 2
+fi
+if { [ "$ALL_ENVIRONMENTS" = 1 ] || [ "$WHOLE_MACHINE" = 1 ]; } && [ -n "$LEGACY_MANIFEST" ]; then
+    printf 'install-skills: machine-wide dispatch does not support SKILLS_MANIFEST overrides\n' >&2
+    exit 2
+fi
 
 if [ "$LIST_PROFILES" = 1 ]; then
     [ -d "$PROFILE_DIR" ] || { printf 'install-skills: profile directory not found: %s\n' "$PROFILE_DIR" >&2; exit 1; }
@@ -66,6 +85,95 @@ info()   { printf '  %s%s%s\n' "$DIM" "$1" "$RESET"; }
 FAILED=0
 INSTALLED=0
 UPDATED=0
+
+in_container() {
+    [ -f /run/.containerenv ] || [ -f /.dockerenv ] || [ -n "${DEVBOX_ACTIVE_ENV:-}" ]
+}
+
+machine_child_args() {
+    MACHINE_CHILD_ARGS=(--profile "$PROFILE")
+    [ "$MODE" = check ] && MACHINE_CHILD_ARGS+=(--check)
+    [ "$DRY_RUN" = 1 ] && MACHINE_CHILD_ARGS+=(--dry-run)
+    [ "$PRUNE" = 1 ] && MACHINE_CHILD_ARGS+=(--prune)
+    MACHINE_CHILD_ARGS+=("${ONLY[@]}")
+}
+
+run_environments() {
+    local toolkit_install devbox id status container ini packages toolchain bootstrap router inference home box_home
+    local attempted=0 skipped=0 failed=0
+
+    in_container && {
+        printf 'install-skills: machine-wide dispatch must run on the host\n' >&2
+        return 2
+    }
+
+    toolkit_install=${TOOLKIT_INSTALL_BIN:-$REPO_ROOT/bin/toolkit-install}
+    devbox=${DEVBOX_BIN:-$HOME/.local/bin/devbox}
+    [ -x "$devbox" ] || devbox=$REPO_ROOT/bin/devbox
+
+    [ -x "$toolkit_install" ] || {
+        printf 'install-skills: environment discovery command not executable: %s\n' "$toolkit_install" >&2
+        return 1
+    }
+    [ -x "$devbox" ] || {
+        printf 'install-skills: devbox router not executable: %s\n' "$devbox" >&2
+        return 1
+    }
+
+    machine_child_args
+    while IFS=$'\t' read -r id status container ini packages toolchain bootstrap router inference home; do
+        [ -n "${id:-}" ] || continue
+        [ "$status" = supported ] || continue
+        [ "${home:-}" != - ] || continue
+
+        box_home=${home/#\~\//$HOME/}
+        box_home=${box_home%/}
+        if [ ! -d "$box_home" ]; then
+            printf '\n==> %s\n' "$id"
+            info "skipped: environment home does not exist: $box_home"
+            skipped=$(( skipped + 1 ))
+            continue
+        fi
+
+        printf '\n==> %s\n' "$id"
+        attempted=$(( attempted + 1 ))
+        if ! "$devbox" exec "$id" --cwd "$REPO_ROOT" -- ./bin/install-skills "${MACHINE_CHILD_ARGS[@]}"; then
+            printf 'install-skills: %s failed\n' "$id" >&2
+            failed=$(( failed + 1 ))
+        fi
+    done < <("$toolkit_install" --environments | awk -F '\t' 'NR > 1')
+
+    printf '\n%d environment(s) processed, %d skipped, %d failed\n' "$attempted" "$skipped" "$failed"
+    [ "$failed" -eq 0 ]
+}
+
+run_machine() {
+    local failed=0
+
+    in_container && {
+        printf 'install-skills: machine-wide dispatch must run on the host\n' >&2
+        return 2
+    }
+
+    machine_child_args
+    if [ "$WHOLE_MACHINE" = 1 ]; then
+        printf '==> host\n'
+        if ! "$REPO_ROOT/bin/install-skills" "${MACHINE_CHILD_ARGS[@]}"; then
+            printf 'install-skills: host failed\n' >&2
+            failed=1
+        fi
+    fi
+
+    if ! run_environments; then
+        failed=1
+    fi
+    return "$failed"
+}
+
+if [ "$ALL_ENVIRONMENTS" = 1 ] || [ "$WHOLE_MACHINE" = 1 ]; then
+    run_machine
+    exit $?
+fi
 
 # Repository plumbing that must never become part of an installed skill. It
 # matters most for a skill whose path is "." (the repository root IS the skill).

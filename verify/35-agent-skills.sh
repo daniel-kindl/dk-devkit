@@ -64,5 +64,25 @@ else
         "broken:$broken" 'run sync-agent-skills'
 fi
 
+check 'S6 install-skills has valid shell syntax' -- bash -n "$REPO_ROOT/bin/install-skills"
+
+skill_help=$("$REPO_ROOT/bin/install-skills" --help)
+if printf '%s\n' "$skill_help" | grep -q -- '--whole-machine' &&
+   printf '%s\n' "$skill_help" | grep -q -- '--all-environments'; then
+    pass 'S7 install-skills exposes machine-wide convergence'
+else
+    fail 'S7 install-skills exposes machine-wide convergence' \
+        'help is missing --whole-machine or --all-environments'
+fi
+
+if grep -qF '"$toolkit_install" --environments' "$REPO_ROOT/bin/install-skills" &&
+   ! grep -Eq '(^|[^A-Za-z-])(web-dev|python-dev|golang-dev|rust-dev|dotnet-dev|android-dev|godot-dev)([^A-Za-z-]|$)' \
+       "$REPO_ROOT/bin/install-skills"; then
+    pass 'S8 machine-wide convergence discovers environments from component modules'
+else
+    fail 'S8 machine-wide convergence discovers environments from component modules' \
+        'use toolkit-install --environments; do not hard-code environment names'
+fi
+
 rm -f -- "$RESOLVED"
-unset STORE CODEX_SKILLS RESOLVED missing broken count duplicate name _source _ref _path _pack
+unset STORE CODEX_SKILLS RESOLVED missing broken count duplicate name _source _ref _path _pack skill_help
