@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 #
-# install-skills - install and update the third-party agent skills declared in
-# manifests/skills.tsv into the canonical store ~/.agents/skills.
+# install-skills - resolve, install and update third-party agent skills.
 #
-#   install-skills                 install or update every skill in the manifest
-#   install-skills tdd humanizer   only these skills
-#   install-skills --check         report drift, change nothing, no network
-#   install-skills --dry-run       print what would change
-#   install-skills --prune         also remove store entries not in the manifest
+#   install-skills                     install the default skill profile
+#   install-skills --profile NAME      install another tracked profile
+#   install-skills --resolve           print the resolved profile as TSV
+#   install-skills --list-profiles     list tracked profiles
+#   install-skills tdd humanizer       install only these resolved skills
+#   install-skills --check             report drift, change nothing, no network
+#   install-skills --dry-run           print what would change
+#   install-skills --prune             also remove store entries not in profile
 #
-# Skill content is never vendored into this repository. Each source
-# repository is cached under ~/.cache/workstation/skills, checked out at the ref
-# from the manifest, and only the skill directory is copied into the store.
-#
-# The script finishes by running sync-agent-skills, which refreshes the
-# per-skill Codex symlinks and leaves ~/.codex/skills/.system untouched.
+# A skill profile selects exact paths from source packs declared in
+# manifests/skill-packs.tsv. Skill content is never vendored here.
 set -euo pipefail
 
 REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
-MANIFEST=${SKILLS_MANIFEST:-$REPO_ROOT/manifests/skills.tsv}
+PACKS_MANIFEST=${SKILL_PACKS_MANIFEST:-$REPO_ROOT/manifests/skill-packs.tsv}
+PROFILE_DIR=${SKILL_PROFILE_DIR:-$REPO_ROOT/manifests/skill-profiles}
+PROFILE=${SKILLS_PROFILE:-default}
+LEGACY_MANIFEST=${SKILLS_MANIFEST:-}
 STORE=${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}
 CACHE=${WORKSTATION_CACHE:-$HOME/.cache/workstation}/skills
 PROVENANCE=${AGENTS_DIR:-$HOME/.agents}/third-party-skills.tsv
@@ -26,18 +27,31 @@ PROVENANCE=${AGENTS_DIR:-$HOME/.agents}/third-party-skills.tsv
 MODE=install
 DRY_RUN=0
 PRUNE=0
+LIST_PROFILES=0
 declare -a ONLY=()
 
 while [ $# -gt 0 ]; do
     case $1 in
-        --check)   MODE=check; shift ;;
-        --dry-run) DRY_RUN=1; shift ;;
-        --prune)   PRUNE=1; shift ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
-        -*)        printf 'install-skills: unknown option: %s\n' "$1" >&2; exit 2 ;;
-        *)         ONLY+=("$1"); shift ;;
+        --profile)       PROFILE=${2:?--profile needs a name}; shift 2 ;;
+        --resolve)       MODE=resolve; shift ;;
+        --list-profiles) LIST_PROFILES=1; shift ;;
+        --check)         MODE=check; shift ;;
+        --dry-run)       DRY_RUN=1; shift ;;
+        --prune)         PRUNE=1; shift ;;
+        -h|--help)       sed -n '2,22p' "$0"; exit 0 ;;
+        -*)              printf 'install-skills: unknown option: %s\n' "$1" >&2; exit 2 ;;
+        *)               ONLY+=("$1"); shift ;;
     esac
 done
+
+if [ "$LIST_PROFILES" = 1 ]; then
+    [ -d "$PROFILE_DIR" ] || { printf 'install-skills: profile directory not found: %s\n' "$PROFILE_DIR" >&2; exit 1; }
+    for file in "$PROFILE_DIR"/*.tsv; do
+        [ -f "$file" ] || continue
+        basename "$file" .tsv
+    done
+    exit 0
+fi
 
 RED=''; GREEN=''; YELLOW=''; DIM=''; RESET=''
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -59,8 +73,6 @@ REPO_PLUMBING=(.git .github)
 DIFF_EXCLUDES=()
 for junk in "${REPO_PLUMBING[@]}"; do DIFF_EXCLUDES+=("--exclude=$junk"); done
 
-[ -f "$MANIFEST" ] || { printf 'install-skills: manifest not found: %s\n' "$MANIFEST" >&2; exit 1; }
-
 wanted() {
     local name=$1 n
     [ "${#ONLY[@]}" -eq 0 ] && return 0
@@ -68,25 +80,136 @@ wanted() {
     return 1
 }
 
+valid_name() {
+    [[ $1 =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+valid_relpath() {
+    local path=$1
+    [ -n "$path" ] || return 1
+    [ "${path#/}" = "$path" ] || return 1
+    case "/$path/" in */../*|*/./../*|*/.././*) return 1 ;; esac
+    return 0
+}
+
+join_path() {
+    local root=$1 child=$2
+    if [ "$root" = "." ]; then
+        printf '%s\n' "$child"
+    elif [ "$child" = "." ]; then
+        printf '%s\n' "$root"
+    else
+        printf '%s/%s\n' "${root%/}" "${child#./}"
+    fi
+}
+
+# Resolve to five columns:
+#   name source ref path pack
+# SKILLS_MANIFEST keeps compatibility with the old explicit four-column format.
+resolve_profile() {
+    if [ -n "$LEGACY_MANIFEST" ]; then
+        [ -f "$LEGACY_MANIFEST" ] || {
+            printf 'install-skills: manifest not found: %s\n' "$LEGACY_MANIFEST" >&2
+            return 1
+        }
+        while IFS=$'\t' read -r name source ref path _rest; do
+            case ${name:-} in ''|'#'*) continue ;; esac
+            printf '%s\t%s\t%s\t%s\tlegacy\n' "$name" "$source" "$ref" "$path"
+        done < "$LEGACY_MANIFEST"
+        return 0
+    fi
+
+    [ -f "$PACKS_MANIFEST" ] || {
+        printf 'install-skills: pack manifest not found: %s\n' "$PACKS_MANIFEST" >&2
+        return 1
+    }
+    local profile_file=$PROFILE_DIR/$PROFILE.tsv
+    [ -f "$profile_file" ] || {
+        printf 'install-skills: profile not found: %s\n' "$PROFILE" >&2
+        return 1
+    }
+
+    declare -A pack_source=()
+    declare -A pack_ref=()
+    declare -A pack_root=()
+    local pack source ref root extra
+    while IFS=$'\t' read -r pack source ref root extra; do
+        case ${pack:-} in ''|'#'*) continue ;; esac
+        if ! valid_name "$pack" || [ -z "${source:-}" ] || [ -z "${ref:-}" ] || ! valid_relpath "${root:-}"; then
+            printf 'install-skills: malformed pack row: %s\n' "$pack" >&2
+            return 1
+        fi
+        if [ -n "${pack_source[$pack]:-}" ]; then
+            printf 'install-skills: duplicate pack: %s\n' "$pack" >&2
+            return 1
+        fi
+        pack_source[$pack]=$source
+        pack_ref[$pack]=$ref
+        pack_root[$pack]=$root
+    done < "$PACKS_MANIFEST"
+
+    declare -A seen=()
+    local name path resolved_path
+    while IFS=$'\t' read -r name pack path extra; do
+        case ${name:-} in ''|'#'*) continue ;; esac
+        if ! valid_name "$name" || ! valid_name "${pack:-}" || ! valid_relpath "${path:-}"; then
+            printf 'install-skills: malformed profile row for %s\n' "${name:-<empty>}" >&2
+            return 1
+        fi
+        if [ -n "${seen[$name]:-}" ]; then
+            printf 'install-skills: profile %s selects skill %s more than once (%s and %s)\n' \
+                "$PROFILE" "$name" "${seen[$name]}" "$pack" >&2
+            return 1
+        fi
+        if [ -z "${pack_source[$pack]:-}" ]; then
+            printf 'install-skills: profile %s references unknown pack %s for %s\n' \
+                "$PROFILE" "$pack" "$name" >&2
+            return 1
+        fi
+        seen[$name]=$pack
+        resolved_path=$(join_path "${pack_root[$pack]}" "$path")
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "$name" "${pack_source[$pack]}" "${pack_ref[$pack]}" "$resolved_path" "$pack"
+    done < "$profile_file"
+}
+
+RESOLVED=$(mktemp)
+trap 'rm -f -- "$RESOLVED"' EXIT
+if ! resolve_profile > "$RESOLVED"; then exit 1; fi
+
+if [ "$MODE" = resolve ]; then
+    cat "$RESOLVED"
+    exit 0
+fi
+
+# Fail if a requested name does not exist in the selected profile.
+if [ "${#ONLY[@]}" -gt 0 ]; then
+    for requested in "${ONLY[@]}"; do
+        if ! awk -F '\t' -v name="$requested" '$1 == name { found=1 } END { exit !found }' "$RESOLVED"; then
+            printf 'install-skills: skill is not in profile %s: %s\n' "$PROFILE" "$requested" >&2
+            exit 1
+        fi
+    done
+fi
+
 # --------------------------------------------------------------- check mode --
 if [ "$MODE" = check ]; then
     printf 'skill store   %s\n' "$STORE"
-    printf 'manifest      %s\n\n' "$MANIFEST"
-    while IFS=$'\t' read -r name source ref path; do
-        case ${name:-} in ''|'#'*) continue ;; esac
+    printf 'profile       %s\n\n' "$PROFILE"
+    while IFS=$'\t' read -r name source ref _path pack; do
         wanted "$name" || continue
         if [ -f "$STORE/$name/SKILL.md" ]; then
-            ok "$name  ($source@$ref)"
+            ok "$name  ($pack: $source@$ref)"
         else
-            bad "$name is missing from the store ($source@$ref)"
+            bad "$name is missing from the store ($pack: $source@$ref)"
         fi
-    done < "$MANIFEST"
-    # store entries that the manifest does not declare
+    done < "$RESOLVED"
     if [ -d "$STORE" ]; then
         for dir in "$STORE"/*/; do
             [ -d "$dir" ] || continue
             n=$(basename "$dir")
-            grep -q "^$n"$'\t' "$MANIFEST" || info "$n is in the store but not in the manifest"
+            awk -F '\t' -v name="$n" '$1 == name { found=1 } END { exit !found }' "$RESOLVED" || \
+                info "$n is in the store but not in profile $PROFILE"
         done
     fi
     printf '\n%d problem(s)\n' "$FAILED"
@@ -112,7 +235,6 @@ sync_repo() {
         rm -rf -- "$dir"
         git clone --quiet --filter=blob:none "https://github.com/$source.git" "$dir" </dev/null || return 1
     fi
-    # ref may be a branch, a tag or a commit SHA.
     git -C "$dir" checkout --quiet --detach "origin/$ref" </dev/null 2>/dev/null ||
         git -C "$dir" checkout --quiet --detach "$ref" </dev/null 2>/dev/null || return 1
     REPO_DIR[$key]=$dir
@@ -123,20 +245,17 @@ sync_repo() {
 : > "$PROVENANCE.new"
 {
     printf '# Generated by bin/install-skills. Do not edit by hand.\n'
-    printf '# name\tsource\tref\tresolved\tinstalled\n'
+    printf '# name\tsource\tref\tresolved\tinstalled\tpack\n'
 } >> "$PROVENANCE.new"
 if [ "${#ONLY[@]}" -gt 0 ] && [ -f "$PROVENANCE" ]; then
-    while IFS=$'\t' read -r old_name old_source old_ref old_sha old_date; do
+    while IFS=$'\t' read -r old_name old_source old_ref old_sha old_date old_pack; do
         case ${old_name:-} in ''|'#'*) continue ;; esac
-        wanted "$old_name" || printf '%s\t%s\t%s\t%s\t%s\n' \
-            "$old_name" "$old_source" "$old_ref" "$old_sha" "$old_date" >> "$PROVENANCE.new"
+        wanted "$old_name" || printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$old_name" "$old_source" "$old_ref" "$old_sha" "$old_date" "${old_pack:-legacy}" >> "$PROVENANCE.new"
     done < "$PROVENANCE"
 fi
 
-while IFS=$'\t' read -r name source ref path; do
-    case ${name:-} in ''|'#'*) continue ;; esac
-    [ -n "${source:-}" ] && [ -n "${ref:-}" ] && [ -n "${path:-}" ] || {
-        bad "malformed manifest row for '$name'"; continue; }
+while IFS=$'\t' read -r name source ref path pack; do
     wanted "$name" || continue
 
     if ! sync_repo "$source" "$ref"; then
@@ -153,9 +272,9 @@ while IFS=$'\t' read -r name source ref path; do
 
     dest=$STORE/$name
     if [ -d "$dest" ] && diff -rq "${DIFF_EXCLUDES[@]}" -- "$src" "$dest" >/dev/null 2>&1; then
-        ok "$name  ($source@$ref)"
+        ok "$name  ($pack: $source@$ref)"
     elif [ "$DRY_RUN" = 1 ]; then
-        change "$name would be $( [ -d "$dest" ] && printf updated || printf installed ) from $source@$ref"
+        change "$name would be $( [ -d "$dest" ] && printf updated || printf installed ) from $pack: $source@$ref"
     else
         if [ -d "$dest" ]; then UPDATED=$(( UPDATED + 1 )); else INSTALLED=$(( INSTALLED + 1 )); fi
         rm -rf -- "$dest.new"
@@ -163,23 +282,23 @@ while IFS=$'\t' read -r name source ref path; do
         for junk in "${REPO_PLUMBING[@]}"; do rm -rf -- "$dest.new/$junk"; done
         rm -rf -- "$dest"
         mv -- "$dest.new" "$dest"
-        change "$name  ($source@$ref)"
+        change "$name  ($pack: $source@$ref)"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$name" "$source" "$ref" "${REPO_SHA[$source@$ref]:-unknown}" "$(date -u +%Y-%m-%d)" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$name" "$source" "$ref" "${REPO_SHA[$source@$ref]:-unknown}" "$(date -u +%Y-%m-%d)" "$pack" \
         >> "$PROVENANCE.new"
-done < "$MANIFEST"
+done < "$RESOLVED"
 
 if [ "$PRUNE" = 1 ] && [ "${#ONLY[@]}" -eq 0 ]; then
     for dir in "$STORE"/*/; do
         [ -d "$dir" ] || continue
         n=$(basename "$dir")
-        grep -q "^$n"$'\t' "$MANIFEST" && continue
+        awk -F '\t' -v name="$n" '$1 == name { found=1 } END { exit !found }' "$RESOLVED" && continue
         if [ "$DRY_RUN" = 1 ]; then
-            change "$n would be pruned (not in the manifest)"
+            change "$n would be pruned (not in profile $PROFILE)"
         else
             rm -rf -- "$dir"
-            change "$n pruned (not in the manifest)"
+            change "$n pruned (not in profile $PROFILE)"
         fi
     done
 fi

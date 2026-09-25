@@ -4,7 +4,7 @@
   "name": "third-party agent skills",
   "kind": "tool",
   "group": "Core tools",
-  "summary": "Installs the skills in manifests/skills.tsv into the canonical store and refreshes the Codex symlinks.",
+  "summary": "Resolves a curated skill profile from third-party source packs, installs it into the canonical store, and refreshes agent links.",
   "requires": [],
   "capabilities": ["linux", "git"],
   "unattended": true,
@@ -13,7 +13,7 @@
   "verify": ["./verify.sh", "--only", "35"],
   "manual": [],
   "state": {
-    "public": ["manifests/skills.tsv"],
+    "public": ["manifests/skill-packs.tsv", "manifests/skill-profiles/"],
     "local": ["~/.agents/skills/", "~/.agents/third-party-skills.tsv"]
   }
 }
