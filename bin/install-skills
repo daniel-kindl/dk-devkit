@@ -143,7 +143,7 @@ run_environments() {
         fi
     done < <("$toolkit_install" --environments | awk -F '\t' 'NR > 1')
 
-    printf '\n%d environment(s) updated, %d skipped, %d failed\n' "$attempted" "$skipped" "$failed"
+    printf '\n%d environment(s) processed, %d skipped, %d failed\n' "$attempted" "$skipped" "$failed"
     [ "$failed" -eq 0 ]
 }
 
