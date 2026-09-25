@@ -1,0 +1,18 @@
+# Third-party skill source packs.
+#
+# Columns (tab separated):
+#   pack    stable pack id
+#   source  GitHub repository "<owner>/<repo>"
+#   ref     branch, tag or commit to check out
+#   root    directory inside the repository used as the profile path base
+#
+# Profiles select exact skills from these packs. New upstream skills are never
+# installed automatically. Pin a pack by replacing its ref with a commit SHA.
+#
+# pack	source	ref	root
+asd-ste100	danyuchn/asd-ste100-skill	master	.
+humanizer	blader/humanizer	main	.
+matt	mattpocock/skills	main	.
+orca	stablyai/orca	main	skills
+pstack	cursor/plugins	main	pstack/skills
+vercel-skills	vercel-labs/skills	main	skills
