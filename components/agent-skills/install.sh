@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Install the third-party agent skills declared in manifests/skills.tsv.
+# Install the default third-party agent skill profile.
 #
 #   components/agent-skills/install.sh [--dry-run]
 #
 # Skill content is never vendored into this repository. bin/install-skills
-# copies it into the canonical store from each source repository.
+# resolves the profile and copies each selected skill from its source pack.
 set -euo pipefail
 REPO_ROOT=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../.." && pwd)
 

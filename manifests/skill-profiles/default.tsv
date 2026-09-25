@@ -1,0 +1,89 @@
+# Default agent skill profile.
+#
+# Columns (tab separated):
+#   name    final directory name under ~/.agents/skills
+#   pack    pack id from manifests/skill-packs.tsv
+#   path    skill directory relative to the pack root
+#
+# Composition rule:
+# - Matt Pocock skills own planning, domain work, specifications and handoff.
+# - pstack owns implementation, debugging, TDD, verification and PR execution.
+# - exact duplicate names are not allowed by the resolver.
+#
+# name	pack	path
+asd-ste100	asd-ste100	.
+computer-use	orca	computer-use
+find-skills	vercel-skills	find-skills
+humanizer	humanizer	.
+orca-cli	orca	orca-cli
+orchestration	orca	orchestration
+
+# Matt: planning, design, issue shaping and human handoff.
+codebase-design	matt	skills/engineering/codebase-design
+domain-modeling	matt	skills/engineering/domain-modeling
+grilling	matt	skills/productivity/grilling
+grill-me	matt	skills/productivity/grill-me
+grill-with-docs	matt	skills/engineering/grill-with-docs
+handoff	matt	skills/productivity/handoff
+improve-codebase-architecture	matt	skills/engineering/improve-codebase-architecture
+research	matt	skills/engineering/research
+resolving-merge-conflicts	matt	skills/engineering/resolving-merge-conflicts
+setup-matt-pocock-skills	matt	skills/engineering/setup-matt-pocock-skills
+teach	matt	skills/productivity/teach
+to-questionnaire	matt	skills/productivity/to-questionnaire
+to-spec	matt	skills/engineering/to-spec
+to-tickets	matt	skills/engineering/to-tickets
+triage	matt	skills/engineering/triage
+wait-what	matt	skills/productivity/wait-what
+wayfinder	matt	skills/engineering/wayfinder
+wizard	matt	skills/engineering/wizard
+writing-for-agents	matt	skills/productivity/writing-for-agents
+
+# pstack: execution and verification. pstack teach is intentionally omitted;
+# the profile uses Matt's teach skill above.
+architect	pstack	architect
+arena	pstack	arena
+automate-me	pstack	automate-me
+blast-radius	pstack	blast-radius
+bro	pstack	bro
+create-verification-skill	pstack	create-verification-skill
+figure-it-out	pstack	figure-it-out
+how	pstack	how
+interrogate	pstack	interrogate
+maintain-verification-skill	pstack	maintain-verification-skill
+make-bot-ui	pstack	make-bot-ui
+no-comments	pstack	no-comments
+poteto-mode	pstack	poteto-mode
+principle-attack-the-premise	pstack	principle-attack-the-premise
+principle-boundary-discipline	pstack	principle-boundary-discipline
+principle-build-the-lever	pstack	principle-build-the-lever
+principle-encode-lessons-in-structure	pstack	principle-encode-lessons-in-structure
+principle-exhaust-the-design-space	pstack	principle-exhaust-the-design-space
+principle-experience-first	pstack	principle-experience-first
+principle-fix-root-causes	pstack	principle-fix-root-causes
+principle-foundational-thinking	pstack	principle-foundational-thinking
+principle-guard-the-context-window	pstack	principle-guard-the-context-window
+principle-laziness-protocol	pstack	principle-laziness-protocol
+principle-make-operations-idempotent	pstack	principle-make-operations-idempotent
+principle-migrate-callers-then-delete-legacy-apis	pstack	principle-migrate-callers-then-delete-legacy-apis
+principle-minimize-reader-load	pstack	principle-minimize-reader-load
+principle-model-the-domain	pstack	principle-model-the-domain
+principle-never-block-on-the-human	pstack	principle-never-block-on-the-human
+principle-outcome-oriented-execution	pstack	principle-outcome-oriented-execution
+principle-prove-it-works	pstack	principle-prove-it-works
+principle-redesign-from-first-principles	pstack	principle-redesign-from-first-principles
+principle-separate-before-serializing-shared-state	pstack	principle-separate-before-serializing-shared-state
+principle-sequence-verifiable-units	pstack	principle-sequence-verifiable-units
+principle-subtract-before-you-add	pstack	principle-subtract-before-you-add
+principle-test-behavior-not-implementation	pstack	principle-test-behavior-not-implementation
+principle-type-system-discipline	pstack	principle-type-system-discipline
+recall	pstack	recall
+reflect	pstack	reflect
+setup-pstack	pstack	setup-pstack
+show-me-your-work	pstack	show-me-your-work
+swarm	pstack	swarm
+tdd	pstack	tdd
+technical-writing	pstack	technical-writing
+typescript-best-practices	pstack	typescript-best-practices
+unslop	pstack	unslop
+why	pstack	why
