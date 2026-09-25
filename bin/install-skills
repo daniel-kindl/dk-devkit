@@ -423,3 +423,8 @@ printf '\n%d installed, %d updated, %d failed\n' "$INSTALLED" "$UPDATED" "$FAILE
 if [ "$DRY_RUN" != 1 ]; then
     printf '\n-- sync-agent-skills --\n'
     sync=$HOME/.local/bin/sync-agent-skills
+    [ -x "$sync" ] || sync=$REPO_ROOT/bin/sync-agent-skills
+    "$sync"
+fi
+
+[ "$FAILED" -eq 0 ]
