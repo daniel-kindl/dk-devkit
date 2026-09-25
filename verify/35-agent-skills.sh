@@ -58,4 +58,11 @@ while IFS=$'\t' read -r name _source _ref _path _pack; do
     fi
 done < "$RESOLVED"
 if [ -z "$broken" ]; then
-    pass 'S5 Codex has a per-skill symlišÈ›Üˆ]™\žHÙ[XÝYÚÚ[	Â™[ÙBˆ˜Z[	ÔÍHÛÙ^\ÈH\‹\ÚÚ[Þ[[[šÈ›Üˆ]™\žHÙ[XÝYÚÚ[	Èˆ˜œ›ÚÙ[Ž‰œ›ÚÙ[ˆˆ	Ü[ˆÞ[˜ËXYÙ[\ÚÚ[ÉÂ™šB‚œ›HYˆKH‰‘TÓÓ‘Q‚[œÙ]ÕÔ‘HÓÑVÔÒÒSÈ‘TÓÓ‘QZ\ÜÚ[™Èœ›ÚÙ[ˆÛÝ[\XØ]H˜[YHÜÛÝ\˜ÙHÜ™YˆÜ]ÜXÚÂ
+    pass 'S5 Codex has a per-skill symlink for every selected skill'
+else
+    fail 'S5 Codex has a per-skill symlink for every selected skill' \
+        "broken:$broken" 'run sync-agent-skills'
+fi
+
+rm -f -- "$RESOLVED"
+unset STORE CODEX_SKILLS RESOLVED missing broken count duplicate name _source _ref _path _pack
