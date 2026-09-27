@@ -33,6 +33,7 @@ godot_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/godot-dev-packages.txt" 
 for pkg in $godot_packages; do
     check "godot-dev package: $pkg" -- godot_box_sh "rpm -q '$pkg' >/dev/null"
 done
+check 'godot-dev xdg-open command is available' -- godot_box_sh 'command -v xdg-open >/dev/null'
 ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/godot-dev.ini" |
     tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')
 check_eq 'distrobox/godot-dev.ini repeats the package manifest' \

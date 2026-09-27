@@ -10,8 +10,8 @@
 #     EXISTING container, created before a package was added here, converges
 #     without being recreated.
 #
-# One package per line. The package name must also be the command name: the
-# verification checks both "rpm -q <name>" and "command -v <name>".
+# One package per line. Verification checks installed packages and the
+# commands that the environment needs. Some package and command names differ.
 
 git
 bubblewrap
@@ -29,3 +29,4 @@ gh
 #
 # See docs/sandcastle.md, "Podman connection design".
 podman-remote
+xdg-utils

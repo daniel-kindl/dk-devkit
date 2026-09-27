@@ -28,6 +28,7 @@ go_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/golang-dev-packages.txt" | 
 for pkg in $go_packages; do
     check "golang-dev package: $pkg" -- go_box_sh "rpm -q '$pkg' >/dev/null"
 done
+check 'golang-dev xdg-open command is available' -- go_box_sh 'command -v xdg-open >/dev/null'
 ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/golang-dev.ini" |
     tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')
 check_eq 'distrobox/golang-dev.ini repeats the package manifest' \

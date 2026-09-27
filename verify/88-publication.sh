@@ -151,7 +151,7 @@ check_contains 'P16 the gate removes this machine XDG state from the run' \
 
 # --- the source list that G10 reads ---------------------------------------
 
-PUB_SKILLS=$REPO_ROOT/manifests/skills.tsv
+PUB_SKILLS=$REPO_ROOT/manifests/skill-packs.tsv
 
 pub_sources=$(awk -F'\t' '$0 !~ /^#/ && NF > 1 { print $2 }' "$PUB_SKILLS" 2>/dev/null \
               | sort -u)

@@ -347,11 +347,11 @@ fi
 # under another name: the installation works here and fails for everyone else,
 # and the failure appears after publication.
 #
-# manifests/skills.tsv names every repository this toolkit clones, and
+# manifests/skill-packs.tsv names every repository this toolkit clones, and
 # bin/install-skills is the only command that clones one. verify.sh check P18
 # keeps that scope true.
 
-SKILLS_MANIFEST=manifests/skills.tsv
+SKILLS_MANIFEST=manifests/skill-packs.tsv
 
 src_detail=''
 src_count=0

@@ -57,3 +57,4 @@ freetype
 
 # distrobox-export reads and writes desktop entries.
 desktop-file-utils
+xdg-utils

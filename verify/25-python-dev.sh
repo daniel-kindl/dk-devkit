@@ -35,6 +35,7 @@ python_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/python-dev-packages.txt
 for pkg in $python_packages; do
     check "python-dev package: $pkg" -- python_box_sh "rpm -q '$pkg' >/dev/null"
 done
+check 'python-dev xdg-open command is available' -- python_box_sh 'command -v xdg-open >/dev/null'
 
 ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/python-dev.ini" |
     tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')

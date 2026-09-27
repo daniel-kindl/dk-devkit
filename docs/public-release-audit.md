@@ -337,7 +337,7 @@ bin/publication-gate --quick  # rehearse; skips the two slow gates
 | G7 | This file records a GO, and the audited commit is an ancestor of the commit to publish. |
 | G8 | `origin` holds only the branches and the tags that `manifests/published-refs.txt` declares, and no release and no Actions artifact. |
 | G9 | A `git archive` of the tracked tree runs `--list`, `--doctor`, `--state` and `--dry-run --profile daniel` against an empty home directory, so no machine-local state and no untracked file is what makes the installer work. |
-| G10 | Every repository an installation clones is public. `manifests/skills.tsv` names them, and `bin/install-skills` is the only command that clones one. |
+| G10 | Every repository an installation clones is public. `manifests/skill-packs.tsv` names them, and `bin/install-skills` is the only command that clones one. |
 
 G7 is the reason the command exists. The decision above names the commit it was
 recorded against. Publication exposes a later commit, and a decision that names

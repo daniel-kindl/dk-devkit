@@ -48,17 +48,18 @@ check_contains 'node comes from the isolated HOME (nvm), not the host' \
 # Podman client inside this box, nothing declared one, and module 8 reported
 # the missing client as a SKIP because a machine without Podman is allowed.
 #
-# Both halves are checked. "rpm -q" is what bootstrap/web-dev.sh converges on,
-# and "command -v" is what every caller actually needs.
+# Package presence and command access are checked separately. Some packages
+# provide a command with a different name, such as xdg-utils and xdg-open.
 web_dev_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/web-dev-packages.txt" | awk 'NF')
 
 for pkg in $web_dev_packages; do
     check "web-dev package: $pkg (rpm)" -- box_sh "rpm -q $pkg >/dev/null"
-    if [ "$pkg" != bubblewrap ]; then
+    if [ "$pkg" != bubblewrap ] && [ "$pkg" != xdg-utils ]; then
         check "web-dev package: $pkg (PATH)" -- box_sh "command -v $pkg >/dev/null"
     fi
 done
 check 'web-dev bubblewrap command is available' -- box_sh 'command -v bwrap >/dev/null'
+check 'web-dev xdg-open command is available' -- box_sh 'command -v xdg-open >/dev/null'
 check_codex_sandbox web-dev box_sh
 
 # distrobox/web-dev.ini repeats the list, because the INI format cannot read a

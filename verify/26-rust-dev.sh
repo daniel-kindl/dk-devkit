@@ -35,6 +35,7 @@ rust_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/rust-dev-packages.txt" | 
 for pkg in $rust_packages; do
     check "rust-dev package: $pkg" -- rust_box_sh "rpm -q '$pkg' >/dev/null"
 done
+check 'rust-dev xdg-open command is available' -- rust_box_sh 'command -v xdg-open >/dev/null'
 
 ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/rust-dev.ini" |
     tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')

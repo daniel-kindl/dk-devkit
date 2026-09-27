@@ -28,6 +28,7 @@ dotnet_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/dotnet-dev-packages.txt
 for pkg in $dotnet_packages; do
     check "dotnet-dev package: $pkg" -- dotnet_box_sh "rpm -q '$pkg' >/dev/null"
 done
+check 'dotnet-dev xdg-open command is available' -- dotnet_box_sh 'command -v xdg-open >/dev/null'
 ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/dotnet-dev.ini" |
     tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')
 check_eq 'distrobox/dotnet-dev.ini repeats the package manifest' \

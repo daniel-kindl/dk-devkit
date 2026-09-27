@@ -29,6 +29,7 @@ android_packages=$(sed -e 's/#.*//' "$REPO_ROOT/manifests/android-dev-packages.t
 for pkg in $android_packages; do
     check "android-dev package: $pkg" -- android_box_sh "rpm -q '$pkg' >/dev/null"
 done
+check 'android-dev xdg-open command is available' -- android_box_sh 'command -v xdg-open >/dev/null'
 ini_packages=$(sed -n 's/^additional_packages=//p' "$REPO_ROOT/distrobox/android-dev.ini" |
     tr -d '"' | tr ' ' '\n' | awk 'NF' | sort | tr '\n' ' ')
 check_eq 'distrobox/android-dev.ini repeats the package manifest' \
