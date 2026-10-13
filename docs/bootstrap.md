@@ -217,7 +217,7 @@ Each script runs inside its matching container and accepts `--dry-run` and
 | --- | --- | --- |
 | `golang-dev.sh` | Go from the distribution package; dependencies stay in `go.mod` and `go.sum` | `./verify.sh --only 28` |
 | `dotnet-dev.sh` | The .NET SDK pinned in `dotnet-sdk.env`; target frameworks stay in project files and `global.json` | `./verify.sh --only 29` |
-| `android-dev.sh` | JDK 25, Android command-line tools and the SDK packages in `android-dev.env` | `./verify.sh --only 27` |
+| `android-dev.sh` | JDK 25, Android command-line tools, Android Emulator and the SDK packages in `android-dev.env` | `./verify.sh --only 27` |
 | `godot-dev.sh` | The Godot engine .NET build pinned in `godot-dev.env`, plus the .NET SDK pinned in `dotnet-sdk.env`; project settings stay in `project.godot` and the project files | `./verify.sh --only 21` |
 
 All four also install the agent CLIs, shared agent configuration, third-party

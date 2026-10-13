@@ -53,6 +53,7 @@ export JAVA_HOME="$JAVA_HOME_REL"
 export ANDROID_SDK_ROOT="$SDK_ROOT"
 export ANDROID_HOME="$SDK_ROOT"
 export PATH="$TOOLS_DIR/bin:$SDK_ROOT/platform-tools:$SDK_ROOT/emulator:$PATH"
+install_user_command "$REPO_ROOT" android-emulator-controls
 
 section 'Android command-line tools'
 if [ -x "$TOOLS_DIR/bin/sdkmanager" ] && [ -f "$TOOLS_DIR/.version" ] &&
@@ -93,6 +94,24 @@ if [ -x "$TOOLS_DIR/bin/sdkmanager" ]; then
     fi
 else
     warn 'Android SDK packages skipped because sdkmanager is not installed'
+fi
+
+section 'Android virtual device'
+if [ -f "$HOME/.android/avd/$ANDROID_AVD_NAME.avd/config.ini" ]; then
+    ok "Android virtual device $ANDROID_AVD_NAME"
+elif [ "$DRY_RUN" = 1 ]; then
+    info "would create Android virtual device $ANDROID_AVD_NAME"
+elif [ -x "$TOOLS_DIR/bin/avdmanager" ] &&
+     [ -d "$SDK_ROOT/${ANDROID_AVD_IMAGE//;/\/}" ]; then
+    printf 'no\n' | "$TOOLS_DIR/bin/avdmanager" create avd \
+        --name "$ANDROID_AVD_NAME" --package "$ANDROID_AVD_IMAGE"
+    sed -i \
+        -e 's/^hw.gpu.enabled = .*/hw.gpu.enabled = yes/' \
+        -e 's/^hw.gpu.mode = .*/hw.gpu.mode = host/' \
+        "$HOME/.android/avd/$ANDROID_AVD_NAME.avd/config.ini"
+    change "created Android virtual device $ANDROID_AVD_NAME"
+else
+    warn 'Android virtual device skipped because its tools or system image are missing'
 fi
 
 section 'Shared agent configuration'
@@ -157,5 +176,6 @@ manual 'Authenticate Claude Code in android-dev: claude (then /login)'
 manual 'Authenticate Codex in android-dev: codex login'
 manual 'Authenticate Grok in android-dev: grok (the first start opens a browser)'
 manual 'Run the Ocho checks from its checkout: ./gradlew check'
-manual 'Use a host emulator or a connected device for connected Android tests'
+manual "Start the Android emulator in android-dev: emulator -avd $ANDROID_AVD_NAME -gpu host"
+manual 'Open the working controls: android-emulator-controls'
 summary

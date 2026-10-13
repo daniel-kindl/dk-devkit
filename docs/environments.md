@@ -22,8 +22,17 @@ module.
 | `golang-dev` | supported | Go and the Go module toolchain |
 | `rust-dev` | supported | Rust and cargo, through rustup |
 | `dotnet-dev` | supported | .NET SDK for C# |
-| `android-dev` | supported | Android SDK, JDK 25 and Gradle wrapper |
+| `android-dev` | supported | Android SDK, JDK 25, Gradle wrapper and Android Emulator |
 | `godot-dev` | supported | Godot engine .NET build, plus the C# SDK |
+
+In `android-dev`, run `emulator -avd android-dev-36 -gpu host` from a desktop
+session to start the Android 16 virtual device. The session must provide
+`DISPLAY` and `XAUTHORITY`. Emulator 37.2.12.0 crashed during a headless boot
+with software graphics on the verified Bazzite workstation.
+
+Run `android-emulator-controls` for Back, Home, Overview, Power, volume,
+rotation and screenshots. Its buttons use ADB. The emulator's own side toolbar
+does not respond to clicks in the verified KDE session.
 
 A **planned** module is a boundary without an installation. It declares the
 container name and the router markers, and nothing else. The installer refuses

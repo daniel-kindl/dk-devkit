@@ -13,3 +13,5 @@ gcc-c++
 make
 pkgconf-pkg-config
 xdg-utils
+libxkbfile
+yad

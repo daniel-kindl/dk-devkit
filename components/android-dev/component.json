@@ -5,16 +5,18 @@
   "kind": "environment",
   "group": "Development environments",
   "status": "supported",
-  "summary": "Fedora Distrobox with JDK 25, the Android SDK and Gradle wrapper toolchain.",
+  "summary": "Fedora Distrobox with JDK 25, the Android SDK, an Android emulator and the Gradle wrapper toolchain.",
   "requires": ["distrobox", "devbox"],
   "capabilities": ["linux", "host", "distrobox", "container-runtime"],
   "unattended": true,
+  "commands": ["android-emulator-controls"],
   "install": ["components/android-dev/install.sh"],
-  "doctor": null,
+  "doctor": ["components/android-dev/doctor.sh"],
   "verify": ["./verify.sh", "--only", "27"],
   "manual": [
     "Authenticate Claude Code, Codex and Grok inside android-dev if you use them.",
-    "Create an Android emulator on the host or connect a device for connected tests."
+    "Start the Android emulator in android-dev: emulator -avd android-dev-36 -gpu host.",
+    "Open the Android Emulator controls: android-emulator-controls."
   ],
   "environment": {
     "container": "android-dev",
@@ -27,7 +29,7 @@
     "home": "~/.local/share/distrobox-homes/android-dev/"
   },
   "state": {
-    "public": ["distrobox/android-dev.ini", "manifests/android-dev-packages.txt", "manifests/android-dev.env"],
-    "local": ["~/.local/share/distrobox-homes/android-dev/"]
+    "public": ["bin/android-emulator-controls", "components/android-dev/doctor.sh", "distrobox/android-dev.ini", "manifests/android-dev-packages.txt", "manifests/android-dev.env"],
+    "local": ["~/.local/bin/android-emulator-controls", "~/.local/share/distrobox-homes/android-dev/"]
   }
 }

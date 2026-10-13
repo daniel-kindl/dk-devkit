@@ -17,6 +17,9 @@ component_args "$@"
 section 'android-dev container'
 create_development_environment "$REPO_ROOT" android-dev
 
+section 'Android Emulator controls'
+install_user_command "$REPO_ROOT" android-emulator-controls
+
 section 'android-dev toolchain'
 box_bootstrap=(./bootstrap/android-dev.sh)
 [ "$DRY_RUN" = 1 ] && box_bootstrap+=(--dry-run)
