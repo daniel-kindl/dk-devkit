@@ -13,18 +13,9 @@
 # Colors use basic ANSI codes so that they stay readable on a dark theme and on
 # a light theme. Set NO_COLOR to disable them.
 #
-# The script also forwards the payload to the Orca status line hook, if that
-# hook is installed, so that the Orca integration keeps working. The forward
-# runs in the background and cannot delay the render.
 
 payload=$(cat)
 [ -n "$payload" ] || exit 0
-
-# --- forward to Orca (non-blocking, best effort) -----------------------------
-orca_hook="${HOME:-}/.orca/agent-hooks/claude-statusline.sh"
-if [ -n "${HOME:-}" ] && [ -r "$orca_hook" ] && [ -x "$orca_hook" ]; then
-  printf '%s' "$payload" | /bin/sh "$orca_hook" >/dev/null 2>&1 &
-fi
 
 # --- render ------------------------------------------------------------------
 command -v jq >/dev/null 2>&1 || exit 0

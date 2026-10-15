@@ -127,5 +127,3 @@ check_not_contains 'the dotnet-dev markers stay general' 'specific' \
 
 check_eq 'default (management) environment is web-dev' 'web-dev' \
     "$(sed -n 's/^ *default_environment *= *//p' "$REPO_ROOT/config/devbox-router/settings.env" | tr -d ' ')"
-check_eq 'Orca settings mirroring is enabled' '1' \
-    "$(sed -n 's/^ *orca_integration *= *//p' "$REPO_ROOT/config/devbox-router/settings.env" | tr -d ' ')"

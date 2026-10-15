@@ -1,4 +1,4 @@
-# Agent CLIs, shared configuration wiring and the Orca bridge.
+# Agent CLIs and shared configuration wiring.
 #
 # The third-party skills live in module 3e, because they are the
 # agent-skills component's own verification.
@@ -63,22 +63,10 @@ else
          "$CODEX_SKILLS/.system is missing or is a symlink"
 fi
 
-section '3d. Orca bridge'
-
-if on_host test -x "$HOST_HOME/.local/bin/orca-ide"; then
-    pass 'host: ~/.local/bin/orca-ide is present'
-else
-    fail 'host: ~/.local/bin/orca-ide is present' \
-        'Orca registers this on Linux; the name avoids the GNOME Orca screen reader'
-fi
-
-for name in orca orca-ide; do
-    check_link "box: ~/.local/bin/$name -> the tracked bridge wrapper" \
-        "$BOX_HOME/.local/bin/$name" "$REPO_ROOT/config/web-dev/bin/orca-ide"
-done
-
-check 'box: the Orca bridge reaches the host' \
-    -- box_sh 'command -v distrobox-host-exec >/dev/null'
-
-check 'Orca worktree root exists (~/projects/.worktrees)' \
-    -- on_host test -d "$HOST_HOME/projects/.worktrees"
+section '3d. Retired Orca integration'
+check 'host: Orca launcher is removed' -- \
+    on_host sh -c 'test ! -e "$HOME/.local/bin/orca-ide" && test ! -L "$HOME/.local/bin/orca-ide"'
+check 'box: Orca bridge commands are removed' -- \
+    box_sh 'test ! -e "$HOME/.local/bin/orca" && test ! -e "$HOME/.local/bin/orca-ide" && test ! -L "$HOME/.local/bin/orca" && test ! -L "$HOME/.local/bin/orca-ide"'
+check 'box: Orca hooks are absent from Claude settings' -- \
+    box_sh '! jq -e "(.hooks|tojson|ascii_downcase|contains(\"orca\")) or (.statusLine|tojson|ascii_downcase|contains(\"orca\"))" "$HOME/.claude/settings.json" >/dev/null'

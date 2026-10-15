@@ -137,7 +137,7 @@ install_agent_clis
 
 section 'Third-party skills'
 if [ "$DRY_RUN" = 1 ]; then
-    info 'would install skills from manifests/skills.tsv'
+    info 'would install skills from manifests/skill-profiles/default.tsv'
 else
     "$REPO_ROOT/bin/install-skills"
 fi
@@ -155,7 +155,7 @@ section 'Third-party skills'
 if [ "$SKIP_SKILLS" = 1 ]; then
     info 'skipped (--skip-skills)'
 elif [ "$DRY_RUN" = 1 ]; then
-    info 'would run bin/install-skills against manifests/skills.tsv'
+    info 'would run bin/install-skills against manifests/skill-profiles/default.tsv'
 else
     "$REPO_ROOT/bin/install-skills"
 fi

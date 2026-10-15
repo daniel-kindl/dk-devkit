@@ -19,8 +19,7 @@
   "verify": null,
   "manual": [
     "Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519.",
-    "Authenticate GitHub on the host: gh auth login --git-protocol ssh.",
-    "Install the Orca desktop app and open it once so it registers ~/.local/bin/orca-ide."
+    "Authenticate GitHub on the host: gh auth login --git-protocol ssh."
   ],
   "state": { "public": ["components/daniel/component.json"], "local": [] }
 }

@@ -130,9 +130,9 @@ paths is this machine's home directory.
 Classification: **intentionally public**. No action.
 
 `manifests/flatpaks.txt` and `manifests/homebrew.txt` record which applications
-this workstation installs, and `manifests/skills.tsv` records 61 third-party
-agent skills with their source repository and ref. These reveal preferences: a
-password manager, a browser, a mail client, an editor.
+this workstation installs. `manifests/skill-profiles/default.tsv` selects 68
+third-party agent skills with their source repository and ref. These reveal
+preferences: a password manager, a browser, a mail client, an editor.
 
 That is the point of the `daniel` profile, and #24 states it: the profile may be
 opinionated and public. `components/daniel/component.json` holds no credential

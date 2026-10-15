@@ -4,7 +4,7 @@
 # See docs/secrets.md and docs/not-tracked.md.
 #
 # Patterns are deliberately narrow enough to keep the repository's own files
-# (docs/secrets.md, bin/scan-secrets, manifests/skills.tsv) tracked.
+# (docs/secrets.md, bin/scan-secrets, manifests/skill-profiles/default.tsv) tracked.
 # ---------------------------------------------------------------------------
 
 # --- private keys and certificates ---
@@ -47,7 +47,6 @@ keyring*
 .codex/
 .grok/
 .copilot/
-.orca/
 .pi/
 trust.json
 session-env/
@@ -62,7 +61,6 @@ installation_id
 models_cache.json
 .skill-lock.json
 known_marketplaces.json
-.devbox-orca-managed.json
 
 # --- generated and machine-specific state ---
 backups/

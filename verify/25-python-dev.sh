@@ -92,10 +92,8 @@ check 'python-dev shared skill store exists' -- \
 check_codex_sandbox python-dev python_box_sh
 
 # Both files are run directly, so a lost executable bit breaks the documented
-# bootstrap command and the Orca bridge.
+# bootstrap command.
 check 'bootstrap/python-dev.sh is executable' -- test -x "$REPO_ROOT/bootstrap/python-dev.sh"
-check 'python-dev Orca bridge is executable' -- \
-    python_box_sh 'test -x "$HOME/.local/bin/orca"'
 
 section '2g. python-dev SSH agent forwarding'
 

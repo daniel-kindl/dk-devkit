@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# devbox-verify - deterministic verification of the Orca -> agent -> Distrobox
+# devbox-verify - deterministic verification of the agent -> Distrobox
 # routing setup. Safe to re-run: it only ever writes inside a scratch directory
 # and a throwaway copy of the router configuration.
 #
@@ -117,9 +117,9 @@ else
     t_skip 'A primary checkout' "$PRIMARY_REPO is not a Git repository"
 fi
 
-# ------------------------------------------------ B/L: Orca worktree -------
+# ------------------------------------------------ B/L: generic worktree ----
 
-section 'B/L. Orca worktree inherits its primary checkout (git-common-dir)'
+section 'B/L. Worktree inherits its primary checkout (git-common-dir)'
 WT=""
 if [[ -d $PROJECTS/.worktrees/dkkb ]]; then
     while IFS= read -r d; do [[ -e $d/.git ]] && { WT=$d; break; }; done \
@@ -133,10 +133,10 @@ if [[ -n $WT ]]; then
     expect_contains 'L2 git_common_dir is the primary .git' $'git_common_dir\t'"$(canon "$PRIMARY_REPO")/.git" "$out"
     expect_contains 'B3 no separate mapping needed (source=global)' $'source\tglobal' "$out"
 else
-    t_skip 'B/L Orca worktree' 'no Orca worktree of dkkb present'
+    t_skip 'B/L worktree' 'no worktree of dkkb present'
 fi
 
-# synthetic worktree: proves inheritance without depending on Orca
+# synthetic worktree: proves inheritance without depending on an editor
 mkrepo "$SCRATCH/owner" package.json
 git -C "$SCRATCH/owner" worktree add -q -b verify-wt "$SCRATCH/wt" >/dev/null 2>&1
 dbx_cfg assign verify-alt "$SCRATCH/owner" >/dev/null 2>&1

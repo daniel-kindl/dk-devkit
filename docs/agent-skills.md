@@ -27,8 +27,8 @@ The profile keeps Matt's `teach` and pstack's `tdd`. It does not select the
 other provider's version of those skills. pstack principle skills stay in the
 profile because `poteto-mode` can refer to them during execution.
 
-The profile also keeps the independent skills from ASD-STE100, Orca, Vercel
-Skills and Humanizer.
+The profile also keeps the independent skills from ASD-STE100, Vercel Skills
+and Humanizer.
 
 ## Commands
 

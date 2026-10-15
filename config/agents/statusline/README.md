@@ -22,10 +22,6 @@ does the rendering. The script reads the JSON payload on stdin. It takes every
 value from that payload, except the git branch, which comes from a local `git`
 call. There is no network call.
 
-The script also forwards the payload to `~/.orca/agent-hooks/claude-statusline.sh`
-when that hook exists. The forward keeps the Orca integration working. It runs in
-the background, so it cannot delay the render.
-
 Colors come from ANSI escape codes. Set `NO_COLOR` to remove them.
 
 ## Codex

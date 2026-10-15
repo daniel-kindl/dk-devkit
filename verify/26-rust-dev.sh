@@ -96,10 +96,8 @@ check 'rust-dev shared skill store exists' -- \
     rust_box_sh 'test -d "$HOME/.agents/skills"'
 
 # Both files are run directly, so a lost executable bit breaks the documented
-# bootstrap command and the Orca bridge.
+# bootstrap command.
 check 'bootstrap/rust-dev.sh is executable' -- test -x "$REPO_ROOT/bootstrap/rust-dev.sh"
-check 'rust-dev Orca bridge is executable' -- \
-    rust_box_sh 'test -x "$HOME/.local/bin/orca"'
 
 section '2k. rust-dev SSH agent forwarding'
 

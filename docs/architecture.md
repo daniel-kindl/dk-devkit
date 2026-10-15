@@ -21,7 +21,6 @@ system, so this repository adds as little to it as possible:
 - Homebrew, for a small set of host CLI tools
 - Flatpak, for desktop applications
 - Git, and GitHub authentication over SSH
-- Orca, the agent IDE, installed as an AppImage
 - `~/projects`, the one root for source checkouts
 - `~/.local/bin/devbox`, the environment router
 - `~/.local/bin/claude`, `~/.local/bin/codex` and `~/.local/bin/grok`, shims that call the router
@@ -65,7 +64,7 @@ Resolution order, first match wins:
 
 A repository is identified by
 `git rev-parse --path-format=absolute --git-common-dir`. Every Git worktree
-therefore inherits its primary checkout. The worktrees that Orca creates under
+therefore inherits its primary checkout. Worktrees under
 `~/projects/.worktrees` need no configuration of their own.
 
 If the markers of a repository point at more than one environment, the router
@@ -81,8 +80,8 @@ every clone routes the same way.
 
 ### Why the agent shims exist
 
-Orca launches a bare `claude` or `codex` from the host. A person launches `grok`
-the same way. Each name resolves to a shim in `~/.local/bin`. The shim calls
+An interactive agent launched on the host resolves to a shim in
+`~/.local/bin`. The shim calls
 `devbox agent <tool>`, which resolves the environment from the worktree and runs
 the real binary inside the container. The agent, and everything the agent
 spawns, stays in that environment.
@@ -164,9 +163,9 @@ shared policy and the routing.
 ## Shared agent configuration
 
 `~/.agents` is the canonical cross-agent configuration area in each devbox HOME.
-Each devbox installs skills from `manifests/skills.tsv` and updates its own
-Claude Code, Codex and Grok CLI. The isolated homes keep credentials and sessions
-separate.
+Each devbox installs skills from `manifests/skill-profiles/default.tsv` and
+updates its own Claude Code, Codex and Grok CLI. The isolated homes keep
+credentials and sessions separate.
 
     ~/.agents/AGENTS.md      -> config/agents/AGENTS.md   (this repository)
     ~/.agents/statusline     -> config/agents/statusline  (this repository)
@@ -198,8 +197,8 @@ Grok also reads Claude Code plugins through its compatibility support. Codex and
 Claude Code manage their own plugin marketplaces and account connections.
 
 Codex uses `approval_policy = "never"` with
-`sandbox_mode = "danger-full-access"` in the host Codex home used by Orca and in
-each devbox home. These settings enable YOLO mode. Bootstrap adds them when
+`sandbox_mode = "danger-full-access"` in the host and devbox homes. These
+settings enable YOLO mode. Bootstrap adds them when
 they are absent. It migrates the previous defaults only when both old values
 are present, and it preserves other values. Claude Code and Grok use
 `bypassPermissions`. The unattended `agentbox` sandbox uses a separate
@@ -230,38 +229,16 @@ Claude Code runs an arbitrary command, so `claude-render.sh` does the render. It
 takes every value from the JSON payload on stdin, except the Git branch, which
 comes from a local `git` call. It makes no network call.
 
-The renderer also forwards the payload to `~/.orca/agent-hooks/claude-statusline.sh`
-when that hook exists. The forward runs in the background, so it cannot delay
-the render. That is how the Orca status integration keeps working.
-
 Codex does not run a script. It renders a fixed item list, set under `[tui]` in
 `config.toml`. `install.sh` writes both, and it is idempotent.
 
 ### Two Codex homes
 
-Codex has a home inside the container, and Orca points `CODEX_HOME` at a host
-path that is already mounted into the container. Both homes are therefore real.
+Codex has a home inside the container. The host also has a Codex home. Both
+homes are therefore real.
 `bootstrap/host.sh` and `bootstrap/web-dev.sh` install the shared policy file and
 the status line item list into both, so the result is the same whichever home is
 active.
-
-## Orca
-
-Orca runs on the host. On Linux the executable is `~/.local/bin/orca-ide`,
-because the name `orca` already belongs to the GNOME Orca screen reader. Inside
-`web-dev`, both `orca` and `orca-ide` are wrappers that call
-`distrobox-host-exec` and hand the call back to the host.
-
-Orca writes its Claude Code hooks and its status line into the **host**
-`~/.claude/settings.json`. Claude runs with the container HOME, so those hooks
-would be inert. When `orca_integration = 1` and the Orca environment variables
-are present, the router mirrors only the `hooks` and `statusLine` keys into the
-container settings, and links the container `~/.orca` to the host copy. It
-records what it wrote in `.devbox-orca-managed.json`, and it never overwrites a
-value that was changed by hand.
-
-Orca worktrees live under `~/projects/.worktrees`. They resolve through the
-git-common-dir rule, so they need no entry in `repos.tsv`.
 
 ## Unattended agents
 

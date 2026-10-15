@@ -90,7 +90,6 @@ check 'godot-dev shared agent policy is wired' -- \
     godot_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'godot-dev shared skill store exists' -- godot_box_sh 'test -d "$HOME/.agents/skills"'
 check 'bootstrap/godot-dev.sh is executable' -- test -x "$REPO_ROOT/bootstrap/godot-dev.sh"
-check 'godot-dev Orca bridge is executable' -- godot_box_sh 'test -x "$HOME/.local/bin/orca"'
 check 'the editor has a desktop entry inside the box' -- \
     godot_box_sh 'test -f "$HOME/.local/share/applications/godot.desktop"'
 GODOT_HOST_DESKTOP=$HOST_HOME/.local/share/applications/godot-dev-godot.desktop

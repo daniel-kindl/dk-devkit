@@ -238,7 +238,6 @@ keeps the run directory for inspection.
 
 | Layer | What it is | What owns it |
 | --- | --- | --- |
-| Orca | the interactive agent and worktree UI | the host |
 | devbox + purpose-specific Distroboxes | the interactive development runtime | this repository |
 | Sandcastle behind `agentbox` | unattended and parallel agent orchestration | this repository |
 | Podman | the local sandbox provider | the host |

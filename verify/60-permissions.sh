@@ -19,8 +19,7 @@ fi
 for f in bootstrap/host.sh bootstrap/web-dev.sh verify.sh \
          bin/devbox bin/devbox-verify bin/devbox-run bin/web-dev-run \
          bin/sync-agent-skills bin/install-skills bin/scan-secrets \
-         config/agents/statusline/install.sh config/agents/statusline/claude-render.sh \
-         config/web-dev/bin/orca-ide; do
+         config/agents/statusline/install.sh config/agents/statusline/claude-render.sh; do
     if [ -x "$REPO_ROOT/$f" ]; then
         pass "executable: $f"
     else

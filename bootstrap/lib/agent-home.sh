@@ -1,9 +1,8 @@
 # Host-side agent home preferences.
 # Source this file; do not execute it. It needs bootstrap/lib/common.sh.
 #
-# Orca points CODEX_HOME at a HOST path that is bind-mounted into the box, so
-# the host ~/.codex is a real Codex home. It needs the shared policy file, the
-# shared status line and the non-secret preference defaults. None of them is a
+# The host ~/.codex is a real Codex home. It needs the shared policy file, the
+# shared status line and the non-secret preference defaults. None is a
 # credential.
 
 # install_host_agent_home <repo-root> [home]

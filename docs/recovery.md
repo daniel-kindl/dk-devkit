@@ -94,8 +94,8 @@ This step:
 - installs nvm, Node, Corepack and pnpm at the versions in `manifests/toolchain.env`
 - installs the Claude Code, Codex and Grok native CLIs
 - wires `~/.agents`, `~/.claude` and `~/.codex` to the shared policy and skills
-- installs the Orca bridge wrappers and `sync-agent-skills`
-- installs the 43 skills in `manifests/skills.tsv`, then runs `sync-agent-skills`
+- installs `sync-agent-skills`
+- installs the selected skills from `manifests/skill-profiles/default.tsv`
 - installs the real `agentq` coordinator runtime
 - applies the shared status line to both clients
 
@@ -236,20 +236,7 @@ repository you stand in. The policy filename is retained as a durable format
 identifier; the supported command is `agentq`.
 Read `docs/agentq.md` before turning `autoMerge` on.
 
-## 9. MANUAL: install and register Orca
-
-1. Download the Orca AppImage and put it in `~/AppImages/`.
-2. Make it executable and start it once. Gear Lever, which
-   `manifests/flatpaks.txt` installs, handles the desktop entry.
-3. Let Orca register its CLI. On Linux it installs
-   `~/.local/bin/orca-ide`, because the name `orca` belongs to the GNOME Orca
-   screen reader.
-4. Confirm it: `orca-ide --version`.
-
-The container-side wrappers need no separate step. `bootstrap/web-dev.sh`
-already links `orca` and `orca-ide` inside the box to the tracked bridge script.
-
-## 10. Restore the repository assignment, if you want it
+## 9. Restore the repository assignment, if you want it
 
 The router resolves `dkkb` from its `package.json` with no configuration. The
 existing `devbox-verify` suite expects an explicit assignment, so add it if you
@@ -260,7 +247,7 @@ git clone git@github.com:<owner>/dkkb.git ~/projects/dkkb
 devbox assign web-dev ~/projects/dkkb
 ```
 
-## 11. Verify
+## 10. Verify
 
 ```bash
 ~/projects/dk-devkit/verify.sh

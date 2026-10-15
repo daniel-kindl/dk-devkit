@@ -50,12 +50,6 @@ if [ -f "$CLAUDE_SETTINGS" ]; then
         fail 'the configured renderer path is executable' \
              "configured: [$renderer]" "resolved:   [$resolved]"
     fi
-    # Orca's hooks must still be there: the router mirrors them into the box.
-    if jq -e '.hooks | length > 0' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
-        pass 'Orca Claude hooks are present in the box settings'
-    else
-        skip 'Orca Claude hooks are present in the box settings' 'no hooks configured yet'
-    fi
 else
     fail 'Claude settings.json exists' "$CLAUDE_SETTINGS not found"
 fi

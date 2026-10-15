@@ -118,15 +118,13 @@ link_into "$HOME/.agents/skills"    "$HOME/.claude/skills"
 section 'Local commands (~/.local/bin)'
 ensure_dir "$HOME/.local/bin"
 link_into "$LINK_ROOT/bin/sync-agent-skills"          "$HOME/.local/bin/sync-agent-skills"
-link_into "$LINK_ROOT/config/python-dev/bin/orca-ide" "$HOME/.local/bin/orca-ide"
-link_into "$LINK_ROOT/config/python-dev/bin/orca-ide" "$HOME/.local/bin/orca"
 
 # ------------------------------------------------------- third-party skills --
 section 'Third-party skills'
 if [ "$SKIP_SKILLS" = 1 ]; then
     info 'skipped (--skip-skills)'
 elif [ "$DRY_RUN" = 1 ]; then
-    info "would run bin/install-skills against manifests/skills.tsv"
+    info "would run bin/install-skills against manifests/skill-profiles/default.tsv"
 else
     "$REPO_ROOT/bin/install-skills"
 fi

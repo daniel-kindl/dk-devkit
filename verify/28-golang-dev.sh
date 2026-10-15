@@ -60,7 +60,6 @@ check 'golang-dev shared agent policy is wired' -- \
     go_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'golang-dev shared skill store exists' -- go_box_sh 'test -d "$HOME/.agents/skills"'
 check 'bootstrap/golang-dev.sh is executable' -- test -x "$REPO_ROOT/bootstrap/golang-dev.sh"
-check 'golang-dev Orca bridge is executable' -- go_box_sh 'test -x "$HOME/.local/bin/orca"'
 
 section '2q. golang-dev SSH agent forwarding'
 sock=$(go_box_sh 'printf %s "${SSH_AUTH_SOCK:-}"' 2>/dev/null)

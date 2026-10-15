@@ -13,7 +13,7 @@ The container provides the development capability:
 - the C toolchain that `rustc` needs to link;
 - `rustup`, with a pinned baseline toolchain, `rustfmt` and `clippy`;
 - Claude Code, Codex and Grok for interactive development;
-- the shared agent policy, skills, status line, and Orca bridge.
+- the shared agent policy, skills, and status line.
 
 A project provides its own toolchain and application state:
 

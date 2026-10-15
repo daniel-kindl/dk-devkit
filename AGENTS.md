@@ -40,8 +40,8 @@ Edit it only through this repository.
    Preserve configuration that this repository does not own.
 
 4. **Respect the host/container boundary.**
-   - The Bazzite host gets Homebrew CLI tools, Flatpak applications, Orca, the
-     `devbox` router and the agent shims.
+   - The Bazzite host gets Homebrew CLI tools, Flatpak applications,
+     the `devbox` router and the agent shims.
    - A Distrobox container gets the language toolchain and the agent CLIs.
    - Never add a Node or npm toolchain to the host.
    - Never copy a private SSH key into a container or into this repository.

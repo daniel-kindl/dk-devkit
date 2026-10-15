@@ -21,16 +21,6 @@ to attempt it. See [secrets.md](secrets.md).
 This is per-session state. It has no value on another machine, and some of it
 holds conversation content.
 
-## Orca runtime state
-
-`~/.orca/agent-hooks/`, `~/orca/workspaces/`, `~/.cache/orca/`,
-`~/AppImages/orca.appimage`, and the `hooks` block that Orca writes into
-`~/.claude/settings.json`.
-
-Orca generates all of it, and the hook commands embed absolute machine paths.
-Orca rewrites them when it starts. `bootstrap/*.sh` never touches the `hooks`
-key, and `verify.sh` checks that the key survived.
-
 ## Isolated container homes
 
 `~/.local/share/distrobox-homes/web-dev/`,
@@ -85,12 +75,11 @@ to the tracked shared policy and holds nothing of its own.
 
 ## Third-party skill content
 
-`~/.agents/skills/*`, 43 skills from four upstream repositories.
+`~/.agents/skills/*`, 68 skills from five upstream repositories.
 
-`manifests/skills.tsv` records the source repository, the ref and the path for
-each one. `bin/install-skills` fetches them and copies only the skill directory.
-A dry run against the live store reproduces all 43 skills byte for byte, so
-vendoring them would add weight and no fidelity.
+`manifests/skill-packs.tsv` records each source repository.
+`manifests/skill-profiles/default.tsv` selects the skill directories.
+`bin/install-skills` fetches them and copies only the selected skill directories.
 
 `~/.agents/third-party-skills.tsv` is the generated provenance record that
 `bin/install-skills` writes, including the resolved commit of each source. It is
@@ -171,5 +160,5 @@ by itself.
 
 `~/projects/.worktrees/`.
 
-Orca creates and removes these. They resolve through the git-common-dir rule,
+The editor creates and removes these. They resolve through the git-common-dir rule,
 so they need no configuration at all.

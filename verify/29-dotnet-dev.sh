@@ -69,7 +69,6 @@ check 'dotnet-dev shared agent policy is wired' -- \
     dotnet_box_sh 'test -L "$HOME/.agents/AGENTS.md" && test -e "$HOME/.agents/AGENTS.md"'
 check 'dotnet-dev shared skill store exists' -- dotnet_box_sh 'test -d "$HOME/.agents/skills"'
 check 'bootstrap/dotnet-dev.sh is executable' -- test -x "$REPO_ROOT/bootstrap/dotnet-dev.sh"
-check 'dotnet-dev Orca bridge is executable' -- dotnet_box_sh 'test -x "$HOME/.local/bin/orca"'
 
 section '2u. dotnet-dev SSH agent forwarding'
 sock=$(dotnet_box_sh 'printf %s "${SSH_AUTH_SOCK:-}"' 2>/dev/null)

@@ -4,8 +4,7 @@
     merge-json-defaults.py <target.json> <defaults.json>
 
 Only keys that the target does not have yet are added. Existing values are
-never changed, so hooks and a statusLine written by Orca or by the status line
-installer survive untouched.
+never changed, so user-owned hooks and statusLine settings survive untouched.
 """
 import json
 import os

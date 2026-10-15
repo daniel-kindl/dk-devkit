@@ -10,15 +10,15 @@
 #   * installs nvm, Node, Corepack and pnpm at the versions in manifests/toolchain.env
 #   * installs or updates the Claude Code, Codex and Grok native CLIs
 #   * wires the shared agent configuration into ~/.agents, ~/.claude and ~/.codex
-#   * installs the Orca bridge wrappers and sync-agent-skills
-#   * installs the third-party skills in manifests/skills.tsv
+#   * installs sync-agent-skills
+#   * installs the selected third-party skills
 #   * installs the agentq backlog coordinator runtime, which needs gh
 #   * applies the shared status line specification
 #
 # What it never does:
 #   * write any credential: authentication stays a manual step
 #   * remove a Codex native skill from ~/.codex/skills/.system
-#   * overwrite Orca's hooks in ~/.claude/settings.json
+#   * overwrite user-owned keys in ~/.claude/settings.json
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=lib/common.sh
@@ -155,8 +155,6 @@ link_into "$HOME/.agents/skills"    "$HOME/.claude/skills"
 section 'Local commands (~/.local/bin)'
 ensure_dir "$HOME/.local/bin"
 link_into "$LINK_ROOT/bin/sync-agent-skills"       "$HOME/.local/bin/sync-agent-skills"
-link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca-ide"
-link_into "$LINK_ROOT/config/web-dev/bin/orca-ide" "$HOME/.local/bin/orca"
 
 # --------------------------------------------- the GitHub backlog coordinator --
 section 'GitHub backlog coordinator (agentq)'
@@ -170,7 +168,7 @@ section 'Third-party skills'
 if [ "$SKIP_SKILLS" = 1 ]; then
     info 'skipped (--skip-skills)'
 elif [ "$DRY_RUN" = 1 ]; then
-    info "would run bin/install-skills against manifests/skills.tsv"
+    info "would run bin/install-skills against manifests/skill-profiles/default.tsv"
 else
     "$REPO_ROOT/bin/install-skills"
 fi

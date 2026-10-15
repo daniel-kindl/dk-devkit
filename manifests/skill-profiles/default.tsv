@@ -12,11 +12,8 @@
 #
 # name	pack	path
 asd-ste100	asd-ste100	.
-computer-use	orca	computer-use
 find-skills	vercel-skills	find-skills
 humanizer	humanizer	.
-orca-cli	orca	orca-cli
-orchestration	orca	orchestration
 
 # Matt: planning, design, issue shaping and human handoff.
 codebase-design	matt	skills/engineering/codebase-design

@@ -2,7 +2,7 @@
 
 Routes host commands — in particular the `claude`, `codex` and `grok` agent CLIs —
 into the Distrobox development environment that owns the current Git repository.
-Orca launches `claude` and `codex`. A person launches `grok` the same way.
+Run `claude`, `codex`, and `grok` through the host shims.
 
 Everything here is workstation configuration. It deliberately lives outside any
 project repository. The only per-project artefact this system understands is an
@@ -37,7 +37,7 @@ optional `.devbox` file, and using one is a project's own decision.
 
 Repositories are identified by
 `git rev-parse --path-format=absolute --git-common-dir`, so every Git worktree —
-including the ones Orca creates under `~/projects/.worktrees` — inherits its
+including ones under `~/projects/.worktrees` — inherits its
 primary checkout automatically. Worktrees must never be listed in `repos.tsv`.
 
 Inference never overrides an explicit declaration or assignment, and
@@ -143,21 +143,3 @@ newline survives. The option is repeatable and needs `--env`.
 
 Both kinds refuse to run inside a container and exit 8, and the router strips
 this directory from the container `PATH`, so a shim can never call itself.
-
-## Orca
-
-Orca finds bare `claude` and `codex` on `PATH` because the shims keep those
-names in `~/.local/bin`. The `grok` shim keeps that name there too. Each shim
-hands off to `devbox agent`, which resolves
-the environment from the worktree, translates the working directory, and execs
-the agent inside the container — so the agent and everything it spawns stay in
-that environment.
-
-Orca writes its Claude Code hooks and statusline into the *host*
-`~/.claude/settings.json`, but Claude runs with the container's HOME. When
-`orca_integration = 1` and Orca environment variables are present, the router
-mirrors just the `hooks` and `statusLine` keys into the container's settings and
-links the container's `~/.orca` to the host's. It records what it wrote in
-`.devbox-orca-managed.json` and never overwrites a value that was changed by
-hand. Codex needs none of this: Orca points `CODEX_HOME` at a host path that is
-already bind-mounted into the box.

@@ -77,7 +77,7 @@
     "claude": {
       "mechanism": "settings.json statusLine command",
       "renderer": "~/.agents/statusline/claude-render.sh",
-      "notes": "The renderer also forwards the payload to the Orca status line hook so that the Orca integration keeps working."
+      "notes": "The renderer uses the payload and local Git data."
     },
     "codex": {
       "mechanism": "config.toml [tui] status_line item list",

@@ -145,15 +145,6 @@ section 'GitHub backlog coordinator host entry point (agentq)'
 # no credential of its own. See docs/agentq.md.
 install_agentq_host_shim "$REPO_ROOT"
 
-# ---------------------------------------------------------------------- Orca --
-section 'Orca'
-if [ -x "$HOME/.local/bin/orca-ide" ]; then
-    ok "$HOME/.local/bin/orca-ide"
-else
-    warn 'orca-ide is not registered on the host'
-    manual 'Install the Orca desktop app, open it once, and let it register its CLI as ~/.local/bin/orca-ide (named orca-ide on Linux so it does not collide with the GNOME Orca screen reader)'
-fi
-
 # ------------------------------------------------------------ manual reminders --
 manual 'Restore the SSH key (see docs/secrets.md), then: ssh-add ~/.ssh/id_ed25519'
 manual 'Authenticate GitHub on the host: gh auth login --git-protocol ssh'

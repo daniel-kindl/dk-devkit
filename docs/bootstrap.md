@@ -48,7 +48,7 @@ guarantees:
 - **Additive for configuration this repository does not own.** Claude and
   Codex defaults add missing keys and preserve existing values. Codex also
   migrates the previous toolkit policy when both old values are present.
-  Orca's hooks and state a client wrote for itself survive.
+  user hooks and state that a client wrote for itself survive.
 - **`--dry-run`.** Prints what a run would change, and writes nothing.
 
 Both scripts print a summary at the end: how many steps changed something, how

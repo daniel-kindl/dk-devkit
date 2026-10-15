@@ -114,12 +114,10 @@ guard_not_in_container() {
 # ------------------------------------------------------------------ settings --
 
 SET_DEFAULT_ENV=""
-SET_ORCA=1
 
 load_settings() {
     local line key value
     SET_DEFAULT_ENV=""
-    SET_ORCA=1
     [[ -f $SETTINGS_FILE ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
         line=${line%$'\r'}
@@ -130,7 +128,6 @@ load_settings() {
         value=$(unquote "$(trim "${line#*=}")")
         case $key in
             default_environment) SET_DEFAULT_ENV=$value ;;
-            orca_integration) SET_ORCA=$value ;;
             *) fail 5 "unknown key '$key' in $(pretty "$SETTINGS_FILE")" ;;
         esac
     done < "$SETTINGS_FILE"
@@ -707,58 +704,6 @@ run_in_env() {
         "$git_name" "$git_email" "$@"
 }
 
-# --------------------------------------------------------- Orca integration --
-
-# Orca installs its Claude Code hooks into the *host* ~/.claude/settings.json,
-# but Claude runs with the container HOME, so those hooks would be inert.
-# Mirror the Orca-managed keys into the container config, without clobbering
-# hooks the user configured inside the box themselves.
-orca_sync_claude() {
-    local host_claude=$HOME/.claude/settings.json
-    local bhome bsettings marker tmp
-
-    is_true "$SET_ORCA" || return 0
-    is_true "${DEVBOX_NO_ORCA_SYNC:-0}" && return 0
-    [[ -n ${ORCA_PANE_KEY:-}${ORCA_AGENT_HOOK_ENDPOINT:-}${ORCA_USER_DATA_PATH:-} ]] || return 0
-    [[ -f $host_claude ]] || return 0
-    command -v jq >/dev/null 2>&1 || return 0
-
-    bhome=$(box_home) || return 0
-    [[ -d $bhome ]] || return 0
-
-    # Orca hook commands reference "$HOME/.orca/agent-hooks/..."; inside the box
-    # $HOME is the isolated Distrobox home, so link it to the host's copy.
-    if [[ -d $HOME/.orca && ! -e $bhome/.orca ]]; then
-        ln -s -- "$(canon "$HOME/.orca")" "$bhome/.orca" 2>/dev/null || true
-    fi
-
-    bsettings=$bhome/.claude/settings.json
-    marker=$bhome/.claude/.devbox-orca-managed.json
-    mkdir -p -- "$bhome/.claude" 2>/dev/null || return 0
-    [[ -f $bsettings ]] || printf '{}\n' > "$bsettings"
-    [[ -f $marker ]] || printf '{}\n' > "$marker"
-
-    tmp=$(mktemp -- "$bsettings.devbox.XXXXXX") || return 0
-    if jq -n \
-        --slurpfile host "$host_claude" \
-        --slurpfile box "$bsettings" \
-        --slurpfile managed "$marker" '
-        ($host[0] // {}) as $h | ($box[0] // {}) as $b | ($managed[0] // {}) as $m |
-        reduce ["hooks", "statusLine"][] as $k
-            ({ box: $b, managed: {} };
-             if ($h | has($k)) then
-                 if ((.box | has($k)) | not) or (.box[$k] == ($m[$k] // null))
-                 then .box[$k] = $h[$k] | .managed[$k] = $h[$k]
-                 else .managed[$k] = ($m[$k] // null) end
-             else . end)
-        ' > "$tmp" 2>/dev/null
-    then
-        jq -e '.box' < "$tmp" > "$bsettings.new" 2>/dev/null && mv -f -- "$bsettings.new" "$bsettings"
-        jq -e '.managed' < "$tmp" > "$marker.new" 2>/dev/null && mv -f -- "$marker.new" "$marker"
-    fi
-    rm -f -- "$tmp" "$bsettings.new" "$marker.new"
-}
-
 # ------------------------------------------------------------- config writes --
 
 write_atomic() {
@@ -983,8 +928,6 @@ cmd_doctor() {
     printf 'distrobox        %s\n' "$(command -v distrobox || printf 'MISSING')"
     printf 'container cli    %s\n' "$(container_cli || printf 'MISSING')"
     printf 'default env      %s\n' "${SET_DEFAULT_ENV:-(unset)}"
-    printf 'orca integration %s\n' "$( is_true "$SET_ORCA" && printf enabled || printf disabled )"
-    printf 'orca session     %s\n' "$( [[ -n ${ORCA_PANE_KEY:-} ]] && printf 'yes (pane %s)' "${ORCA_PANE_KEY}" || printf no )"
     printf '\n'
     cmd_check || true
     printf '\n-- resolution for %s --\n' "$dir"
@@ -1071,9 +1014,6 @@ cmd_agent() {
     guard_not_in_container
     load_settings
     require_resolution "$(canon "$PWD")" 1
-    if [[ $tool == claude ]] && ! is_true "${DEVBOX_DRY_RUN:-0}"; then
-        orca_sync_claude
-    fi
     run_in_env "$PWD" "$tool" "$@"
 }
 
@@ -1280,7 +1220,6 @@ Environment variables:
   DEVBOX_DRY_RUN=1    print the routing plan instead of executing
   DEVBOX_CONFIG_HOME  alternate configuration directory (testing)
   DEVBOX_SHIM_DIR     alternate destination for 'new-shim' (testing)
-  DEVBOX_NO_ORCA_SYNC=1  skip the Orca settings mirror
 USAGE
 }
 
